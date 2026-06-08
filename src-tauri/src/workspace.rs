@@ -17,7 +17,6 @@ pub struct WorkspaceRegistry {
 }
 
 impl Workspace {
-    #[allow(dead_code)]
     pub fn from_path(path: PathBuf) -> Self {
         let name = path
             .file_name()
@@ -75,7 +74,6 @@ impl WorkspaceRegistry {
         true
     }
 
-    #[allow(dead_code)]
     pub fn remove_workspace(&mut self, id: &str) -> bool {
         let previous_active = self.active_workspace_id.clone();
         let before = self.workspaces.len();
@@ -95,7 +93,6 @@ impl WorkspaceRegistry {
         true
     }
 
-    #[allow(dead_code)]
     pub fn set_workspace_pinned(&mut self, id: &str, pinned: bool) -> bool {
         let Some(workspace) = self
             .workspaces
