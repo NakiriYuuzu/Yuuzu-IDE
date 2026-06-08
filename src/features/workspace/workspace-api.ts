@@ -12,6 +12,12 @@ export type WorkspaceRegistry = {
   workspaces: Workspace[];
 };
 
+export type FileTreeEntry = {
+  name: string;
+  path: string;
+  is_dir: boolean;
+};
+
 export function listWorkspaces(): Promise<WorkspaceRegistry> {
   return call<WorkspaceRegistry>("list_workspaces");
 }
@@ -24,4 +30,8 @@ export function addWorkspace(
 
 export function switchWorkspace(id: string): Promise<WorkspaceRegistry> {
   return call<WorkspaceRegistry>("switch_workspace", { id });
+}
+
+export function scanWorkspace(path: string): Promise<FileTreeEntry[]> {
+  return call<FileTreeEntry[]>("scan_workspace", { path });
 }

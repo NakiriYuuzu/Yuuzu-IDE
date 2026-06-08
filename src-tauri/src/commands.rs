@@ -3,6 +3,7 @@ use std::sync::Mutex;
 use tauri::State;
 
 use crate::workspace::{Workspace, WorkspaceRegistry};
+use crate::workspace_scan::{self, FileTreeEntry};
 
 pub struct AppState {
     registry: Mutex<WorkspaceRegistry>,
@@ -44,4 +45,9 @@ pub fn switch_workspace(
     } else {
         Err(format!("workspace not found: {id}"))
     }
+}
+
+#[tauri::command]
+pub fn scan_workspace(path: String) -> Result<Vec<FileTreeEntry>, String> {
+    workspace_scan::scan_top_level(std::path::Path::new(&path))
 }

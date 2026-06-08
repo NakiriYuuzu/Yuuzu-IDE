@@ -1,7 +1,6 @@
 import {
   Bell,
   ChevronDown,
-  Code2,
   FileCode2,
   GitBranch,
   PanelLeft,
@@ -14,6 +13,7 @@ import {
 import { useMemo, useState } from "react";
 
 import { ActivityRail, type ActivityId } from "./activity-rail";
+import { FileTreePanel } from "../features/workspace/FileTreePanel";
 import { useWorkspaceStore } from "./workspace-store";
 import { WorkspaceSwitcher } from "./workspace-switcher";
 
@@ -26,18 +26,13 @@ const panelTitles: Record<ActivityId, string> = {
   settings: "Settings",
 };
 
-const explorerRows = [
-  { name: "src", kind: "folder", depth: 0 },
-  { name: "app", kind: "folder", depth: 1 },
-  { name: "AppShell.tsx", kind: "tsx", depth: 2, selected: true },
-  { name: "workspace-switcher.tsx", kind: "tsx", depth: 2 },
-  { name: "features", kind: "folder", depth: 1 },
-  { name: "workspace-api.ts", kind: "ts", depth: 2 },
-  { name: "src-tauri", kind: "folder", depth: 0 },
-  { name: "workspace.rs", kind: "rs", depth: 1 },
-];
-
-function PanelBody({ active }: { active: ActivityId }) {
+function PanelBody({
+  active,
+  refreshKey,
+}: {
+  active: ActivityId;
+  refreshKey: number;
+}) {
   if (active !== "explorer") {
     return (
       <div className="panel-empty">
@@ -46,41 +41,14 @@ function PanelBody({ active }: { active: ActivityId }) {
     );
   }
 
-  return (
-    <div className="panel-body">
-      <div className="section-label">
-        <span>Yuuzu IDE</span>
-        <ChevronDown aria-hidden="true" />
-      </div>
-      {explorerRows.map((row) => (
-        <div
-          className={`row${row.selected ? " sel" : ""}`}
-          key={`${row.name}-${row.depth}`}
-          style={{ paddingLeft: 8 + row.depth * 13 }}
-        >
-          <span className="tw">{row.kind === "folder" ? "▾" : ""}</span>
-          <FileCode2 className={`ico-${row.kind}`} aria-hidden="true" />
-          <span className="nm mono">{row.name}</span>
-          {row.selected ? <span className="meta">open</span> : null}
-        </div>
-      ))}
-      <div className="section-label">
-        <span>Outline</span>
-      </div>
-      {["WorkspaceSwitcher", "ActivityRail", "AppShell"].map((name) => (
-        <div className="row" key={name} style={{ paddingLeft: 12 }}>
-          <Code2 aria-hidden="true" />
-          <span className="nm mono">{name}</span>
-        </div>
-      ))}
-    </div>
-  );
+  return <FileTreePanel refreshKey={refreshKey} />;
 }
 
 export function AppShell() {
   const [activeActivity, setActiveActivity] =
     useState<ActivityId>("explorer");
   const [panelOpen, setPanelOpen] = useState(true);
+  const [fileTreeRefreshKey, setFileTreeRefreshKey] = useState(0);
   const registry = useWorkspaceStore((state) => state.registry);
 
   const activeWorkspace = useMemo(
@@ -139,12 +107,20 @@ export function AppShell() {
                 <button type="button" className="iconbtn" title="New item">
                   <Plus aria-hidden="true" />
                 </button>
-                <button type="button" className="iconbtn" title="Refresh">
+                <button
+                  type="button"
+                  className="iconbtn"
+                  title="Refresh"
+                  onClick={() => setFileTreeRefreshKey((value) => value + 1)}
+                >
                   <RotateCw aria-hidden="true" />
                 </button>
               </div>
             </div>
-            <PanelBody active={activeActivity} />
+            <PanelBody
+              active={activeActivity}
+              refreshKey={fileTreeRefreshKey}
+            />
           </aside>
         ) : null}
 
