@@ -269,6 +269,9 @@ large implementation starts.
 
 ### Node 1: Native App Shell And Multi-Workspace Core
 
+**Status:** completed and passed; measured core results are recorded in
+`docs/architecture/node-1-core-results.md`.
+
 **Goal:** create the first usable desktop workbench with multiple projects in one
 window.
 
@@ -682,10 +685,12 @@ stable.
 
 ## Current Priority
 
-Start with Node 0 and Node 1. The important early proof is not full IDE breadth;
-it is proving that one Tauri/Rust desktop app can keep multiple projects open,
-switch them quickly, avoid creating one WebView per workspace, and stay
-meaningfully lighter than the JetBrains workflow it is meant to replace.
+Node 0 and Node 1 are complete. The next active priority is Node 2: make the
+workbench useful for reading and editing project files while preserving the
+single-WebView, Rust-owned workspace core proven in the first two nodes.
 
 - Node 0 measurements keep Tauri 2 as the main route; Rust-native fallback
   research remains deferred.
+- Node 1 measurements keep the multi-workspace shell inside the physical
+  footprint and single-main-WebContent targets; process-tree RSS remains a
+  diagnostic metric to watch in future nodes.
