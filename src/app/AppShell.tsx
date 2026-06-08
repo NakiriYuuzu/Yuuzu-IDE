@@ -52,6 +52,7 @@ import {
   surfaceAfterEditorRemoval,
 } from "../features/workspace/file-tree-model";
 import { FileTreePanel } from "../features/workspace/FileTreePanel";
+import { SearchPanel } from "../features/workspace/SearchPanel";
 import {
   useWorkspaceViewStore,
   workspaceViewStore,
@@ -164,6 +165,10 @@ function PanelBody({
   onRenamePath: (path: string, newName: string) => Promise<void>;
   onDeletePath: (path: string) => Promise<void>;
 }) {
+  if (active === "search") {
+    return <SearchPanel onOpenFile={onOpenFile} />;
+  }
+
   if (active !== "explorer") {
     return (
       <div className="panel-empty">

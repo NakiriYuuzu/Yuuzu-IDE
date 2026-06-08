@@ -614,6 +614,63 @@ button {
   overflow-wrap: anywhere;
 }
 
+.search-panel {
+  padding: 8px;
+}
+
+.search-box {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--editor);
+}
+
+.search-box svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  color: var(--txt-faint);
+}
+
+.search-box input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--txt);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.search-box input::placeholder {
+  color: var(--txt-faint);
+}
+
+.search-summary {
+  padding: 8px 2px;
+  color: var(--txt-faint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.search-panel .tree-row {
+  padding-right: 8px;
+}
+
+.search-panel .nm {
+  min-width: 0;
+  flex: 1;
+}
+
+.search-hit {
+  color: var(--txt-dim);
+}
+
 .ico-folder {
   color: #6b97c9;
 }

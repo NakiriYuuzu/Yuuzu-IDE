@@ -1,5 +1,6 @@
 import { call } from "../../lib/tauri";
 import type { FileVersion } from "./file-model";
+import type { WorkspaceSearchResult } from "./search-model";
 
 export type TextFileRead = {
   path: string;
@@ -61,4 +62,14 @@ export function deletePath(
   path: string,
 ): Promise<void> {
   return call<void>("delete_path", { workspaceRoot, path });
+}
+
+export function searchWorkspace(
+  workspaceRoot: string,
+  query: string,
+): Promise<WorkspaceSearchResult> {
+  return call<WorkspaceSearchResult>("search_workspace", {
+    workspaceRoot,
+    query,
+  });
 }
