@@ -184,6 +184,16 @@ pub fn scan_workspace(path: String) -> Result<Vec<FileTreeEntry>, String> {
 }
 
 #[tauri::command]
+pub fn scan_directory(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    path: String,
+) -> Result<Vec<FileTreeEntry>, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    workspace_scan::scan_directory(&workspace_root, Path::new(&path))
+}
+
+#[tauri::command]
 pub fn search_workspace(
     state: State<'_, AppState>,
     workspace_root: String,

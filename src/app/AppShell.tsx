@@ -15,6 +15,17 @@ import { lazy, Suspense, useMemo, useState } from "react";
 
 import { ActivityRail, type ActivityId } from "./activity-rail";
 import { CommandPalette } from "./CommandPalette";
+import {
+  createTextFile,
+  deletePath,
+  renamePath,
+} from "../features/files/file-api";
+import {
+  closeFileTab,
+  openFileTab,
+  type EditorFileState,
+  type FileVersion,
+} from "../features/files/file-model";
 import { FileTreePanel } from "../features/workspace/FileTreePanel";
 import { useWorkspaceViewStore, type Surface } from "./workspace-view-state";
 import { useWorkspaceStore } from "./workspace-store";
@@ -41,12 +52,137 @@ const panelTitles: Record<ActivityId, string> = {
   settings: "Settings",
 };
 
+function fileNameFromPath(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  return normalized.split("/").pop() || path;
+}
+
+function parentNameFromPath(path: string): string {
+  const segments = path.replace(/\\/g, "/").split("/");
+  return segments.length > 1 ? segments[segments.length - 2] : "workspace";
+}
+
+function fileIconClassFromName(name: string): string {
+  const lowerName = name.toLowerCase();
+  if (lowerName.endsWith(".rs")) {
+    return "ico-rs";
+  }
+
+  if (lowerName.endsWith(".md") || lowerName.endsWith(".mdx")) {
+    return "ico-md";
+  }
+
+  return lowerName.endsWith(".ts") || lowerName.endsWith(".tsx")
+    ? "ico-ts"
+    : "";
+}
+
+function normalizePathForCompare(path: string): string {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  return (trimmed || path).replace(/\\/g, "/");
+}
+
+function isSameOrDescendant(path: string, parent: string): boolean {
+  const normalizedPath = normalizePathForCompare(path);
+  const normalizedParent = normalizePathForCompare(parent);
+
+  return (
+    normalizedPath === normalizedParent ||
+    normalizedPath.startsWith(`${normalizedParent}/`)
+  );
+}
+
+function replacePathPrefix(path: string, oldPath: string, newPath: string) {
+  const normalizedPath = normalizePathForCompare(path);
+  const normalizedOldPath = normalizePathForCompare(oldPath);
+  const normalizedNewPath = normalizePathForCompare(newPath);
+
+  if (normalizedPath === normalizedOldPath) {
+    return newPath;
+  }
+
+  if (normalizedPath.startsWith(`${normalizedOldPath}/`)) {
+    return `${normalizedNewPath}${normalizedPath.slice(normalizedOldPath.length)}`;
+  }
+
+  return path;
+}
+
+function editorTabForPath(path: string, version: FileVersion | null) {
+  return {
+    path,
+    name: fileNameFromPath(path),
+    dirty: false,
+    tooLarge: false,
+    version,
+    externalChange: false,
+  };
+}
+
+function renameEditorPath(
+  editor: EditorFileState,
+  oldPath: string,
+  newPath: string,
+  version: FileVersion | null,
+): EditorFileState {
+  return {
+    tabs: editor.tabs.map((tab) => {
+      if (!isSameOrDescendant(tab.path, oldPath)) {
+        return tab;
+      }
+
+      const nextPath = replacePathPrefix(tab.path, oldPath, newPath);
+      return {
+        ...tab,
+        path: nextPath,
+        name: fileNameFromPath(nextPath),
+        version: tab.path === oldPath ? version : tab.version,
+      };
+    }),
+    activePath: editor.activePath
+      ? replacePathPrefix(editor.activePath, oldPath, newPath)
+      : null,
+  };
+}
+
+function removeEditorPath(
+  editor: EditorFileState,
+  deletedPath: string,
+): EditorFileState {
+  const removedIndex = editor.tabs.findIndex((tab) =>
+    isSameOrDescendant(tab.path, deletedPath),
+  );
+  if (removedIndex < 0) {
+    return editor;
+  }
+
+  const tabs = editor.tabs.filter(
+    (tab) => !isSameOrDescendant(tab.path, deletedPath),
+  );
+  const activePath =
+    editor.activePath && isSameOrDescendant(editor.activePath, deletedPath)
+      ? (tabs[Math.max(0, removedIndex - 1)]?.path ?? null)
+      : editor.activePath;
+
+  return { tabs, activePath };
+}
+
 function PanelBody({
   active,
   refreshKey,
+  activeFilePath,
+  onOpenFile,
+  onCreateFile,
+  onRenamePath,
+  onDeletePath,
 }: {
   active: ActivityId;
   refreshKey: number;
+  activeFilePath: string | null;
+  onOpenFile: (path: string) => void;
+  onCreateFile: (relativePath: string) => Promise<void>;
+  onRenamePath: (path: string, newName: string) => Promise<void>;
+  onDeletePath: (path: string) => Promise<void>;
 }) {
   if (active !== "explorer") {
     return (
@@ -56,7 +192,16 @@ function PanelBody({
     );
   }
 
-  return <FileTreePanel refreshKey={refreshKey} />;
+  return (
+    <FileTreePanel
+      refreshKey={refreshKey}
+      activeFilePath={activeFilePath}
+      onOpenFile={onOpenFile}
+      onCreateFile={onCreateFile}
+      onRenamePath={onRenamePath}
+      onDeletePath={onDeletePath}
+    />
+  );
 }
 
 export function AppShell() {
@@ -66,6 +211,7 @@ export function AppShell() {
   const activeWorkspaceId = registry.active_workspace_id;
   const view = useWorkspaceViewStore((state) => state.viewFor(activeWorkspaceId));
   const updateView = useWorkspaceViewStore((state) => state.updateView);
+  const updateEditor = useWorkspaceViewStore((state) => state.updateEditor);
   const activeActivity = view.activeActivity;
   const panelOpen = view.panelOpen;
   const surface = view.surface;
@@ -89,6 +235,83 @@ export function AppShell() {
       ),
     [activeWorkspaceId, registry.workspaces],
   );
+  const activeEditorTab =
+    view.editor.tabs.find((tab) => tab.path === view.editor.activePath) ?? null;
+  const activeEditorName = activeEditorTab?.name ?? "server.ts";
+  const activeEditorParent = activeEditorTab
+    ? parentNameFromPath(activeEditorTab.path)
+    : "features";
+  const activeEditorIconClass = fileIconClassFromName(activeEditorName);
+
+  function openFile(path: string, version: FileVersion | null = null) {
+    updateEditor(activeWorkspaceId, (editor) =>
+      openFileTab(editor, editorTabForPath(path, version)),
+    );
+    setSurface("editor");
+  }
+
+  async function createFileFromExplorer(relativePath: string) {
+    if (!activeWorkspace) {
+      return;
+    }
+
+    const result = await createTextFile(activeWorkspace.path, relativePath);
+    openFile(result.path, result.version);
+    setFileTreeRefreshKey((value) => value + 1);
+  }
+
+  async function promptCreateFileAtWorkspaceRoot() {
+    if (!activeWorkspace) {
+      return;
+    }
+
+    const relativePath = window.prompt(`New file in ${activeWorkspace.name}`, "");
+    const trimmed = relativePath?.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    await createFileFromExplorer(trimmed);
+  }
+
+  async function renamePathFromExplorer(path: string, newName: string) {
+    if (!activeWorkspace) {
+      return;
+    }
+
+    const result = await renamePath(activeWorkspace.path, path, newName);
+    updateEditor(activeWorkspaceId, (editor) =>
+      renameEditorPath(editor, path, result.path, result.version),
+    );
+    setFileTreeRefreshKey((value) => value + 1);
+  }
+
+  async function deletePathFromExplorer(path: string) {
+    if (!activeWorkspace) {
+      return;
+    }
+
+    await deletePath(activeWorkspace.path, path);
+    const nextEditor = removeEditorPath(view.editor, path);
+    updateEditor(activeWorkspaceId, () => nextEditor);
+    if (!nextEditor.activePath && surface === "editor") {
+      setSurface("empty");
+    }
+    setFileTreeRefreshKey((value) => value + 1);
+  }
+
+  function closeActiveEditor() {
+    if (!activeEditorTab) {
+      setSurface("empty");
+      return;
+    }
+
+    const nextEditor = closeFileTab(view.editor, activeEditorTab.path);
+    updateEditor(activeWorkspaceId, () => nextEditor);
+    if (!nextEditor.activePath) {
+      setSurface("empty");
+    }
+  }
 
   function runCommand(id: string) {
     switch (id) {
@@ -163,22 +386,48 @@ export function AppShell() {
             <div className="panel-head">
               <span className="panel-title">{panelTitles[activeActivity]}</span>
               <div className="panel-acts">
-                <button type="button" className="iconbtn" title="New item">
-                  <Plus aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  className="iconbtn"
-                  title="Refresh"
-                  onClick={() => setFileTreeRefreshKey((value) => value + 1)}
-                >
-                  <RotateCw aria-hidden="true" />
-                </button>
+                {activeActivity === "explorer" ? (
+                  <>
+                    <button
+                      type="button"
+                      className="iconbtn"
+                      title={`New file in ${activeWorkspace?.name ?? "workspace"}`}
+                      aria-label={`New file in ${
+                        activeWorkspace?.name ?? "workspace"
+                      }`}
+                      disabled={!activeWorkspace}
+                      onClick={() => void promptCreateFileAtWorkspaceRoot()}
+                    >
+                      <Plus aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="iconbtn"
+                      title={`Refresh ${
+                        activeWorkspace?.name ?? "workspace"
+                      } explorer`}
+                      aria-label={`Refresh ${
+                        activeWorkspace?.name ?? "workspace"
+                      } explorer`}
+                      disabled={!activeWorkspace}
+                      onClick={() =>
+                        setFileTreeRefreshKey((value) => value + 1)
+                      }
+                    >
+                      <RotateCw aria-hidden="true" />
+                    </button>
+                  </>
+                ) : null}
               </div>
             </div>
             <PanelBody
               active={activeActivity}
               refreshKey={fileTreeRefreshKey}
+              activeFilePath={view.editor.activePath}
+              onOpenFile={openFile}
+              onCreateFile={createFileFromExplorer}
+              onRenamePath={renamePathFromExplorer}
+              onDeletePath={deletePathFromExplorer}
             />
           </aside>
         ) : null}
@@ -188,14 +437,17 @@ export function AppShell() {
             <div className="tabstrip">
               {surface === "editor" ? (
                 <div className="tab active">
-                  <FileCode2 className="ftype ico-ts" aria-hidden="true" />
-                  <span className="tlabel mono">server.ts</span>
+                  <FileCode2
+                    className={`ftype ${activeEditorIconClass}`}
+                    aria-hidden="true"
+                  />
+                  <span className="tlabel mono">{activeEditorName}</span>
                   <button
                     type="button"
                     className="close"
                     title="Close editor"
                     aria-label="Close editor"
-                    onClick={() => setSurface("empty")}
+                    onClick={closeActiveEditor}
                   >
                     <X aria-hidden="true" />
                   </button>
@@ -243,7 +495,7 @@ export function AppShell() {
               <ChevronDown aria-hidden="true" />
               <span className="crumb">
                 {surface === "editor"
-                  ? "features"
+                  ? activeEditorParent
                   : surface === "terminal"
                     ? "terminal"
                     : "app"}
@@ -251,7 +503,7 @@ export function AppShell() {
               <ChevronDown aria-hidden="true" />
               <span className="crumb">
                 {surface === "editor"
-                  ? "server.ts"
+                  ? activeEditorName
                   : surface === "terminal"
                     ? "shell"
                     : "AppShell.tsx"}

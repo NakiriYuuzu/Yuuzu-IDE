@@ -29,6 +29,7 @@ pub fn run() {
             commands::remove_workspace,
             commands::pin_workspace,
             commands::scan_workspace,
+            commands::scan_directory,
             commands::search_workspace,
             commands::terminal_probe,
             commands::metric_snapshot,

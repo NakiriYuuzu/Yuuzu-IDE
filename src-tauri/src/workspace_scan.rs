@@ -35,6 +35,17 @@ pub fn scan_top_level(path: &Path) -> Result<Vec<FileTreeEntry>, String> {
     Ok(entries)
 }
 
+pub fn scan_directory(workspace_root: &Path, path: &Path) -> Result<Vec<FileTreeEntry>, String> {
+    let root = workspace_root
+        .canonicalize()
+        .map_err(|err| err.to_string())?;
+    let path = path.canonicalize().map_err(|err| err.to_string())?;
+    if !path.starts_with(&root) {
+        return Err(format!("path outside workspace: {}", path.display()));
+    }
+    scan_top_level(&path)
+}
+
 fn sort_entries(entries: &mut [FileTreeEntry]) {
     entries.sort_by(|left, right| {
         right
@@ -121,5 +132,27 @@ mod tests {
             .map(|entry| entry.name.as_str())
             .collect::<Vec<_>>();
         assert_eq!(names, vec!["Ω", "Ω"]);
+    }
+
+    #[test]
+    fn scan_directory_accepts_nested_workspace_child() {
+        let root = tempdir().expect("tempdir");
+        fs::create_dir(root.path().join("src")).expect("src dir");
+        File::create(root.path().join("src/main.ts")).expect("main file");
+
+        let entries = super::scan_directory(root.path(), &root.path().join("src")).expect("scan");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "main.ts");
+    }
+
+    #[test]
+    fn scan_directory_rejects_outside_workspace() {
+        let root = tempdir().expect("tempdir");
+        let outside = tempdir().expect("outside");
+
+        let result = super::scan_directory(root.path(), outside.path());
+
+        assert!(result.unwrap_err().contains("outside workspace"));
     }
 }

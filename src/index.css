@@ -148,6 +148,7 @@ button {
 }
 
 .yz {
+  --font-mono: "SFMono-Regular", "SF Mono", Consolas, monospace;
   --chrome: #0c1018;
   --chrome-2: #10151f;
   --rail: #090c12;
@@ -164,6 +165,8 @@ button {
   --yuzu-bright: #bdf04f;
   --yuzu-wash: #1b2410;
   --yuzu-edge: #45611a;
+  --c-tag: #f07178;
+  --c-attr: #ffcb6b;
 
   position: fixed;
   inset: 0;
@@ -302,6 +305,16 @@ button {
 .iconbtn:hover {
   color: var(--txt);
   background: var(--hover);
+}
+
+.iconbtn:disabled {
+  color: var(--txt-faint);
+  cursor: default;
+  opacity: 0.55;
+}
+
+.iconbtn:disabled:hover {
+  background: transparent;
 }
 
 .iconbtn.on {
@@ -550,6 +563,57 @@ button {
   font-size: 11px;
 }
 
+.tree-item {
+  position: relative;
+}
+
+.tree-row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding-right: 72px;
+}
+
+.tree-row.external {
+  color: var(--c-attr);
+}
+
+.tree-row-actions {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  display: flex;
+  gap: 1px;
+  opacity: 0;
+}
+
+.tree-item:hover .tree-row-actions,
+.tree-item:focus-within .tree-row-actions {
+  opacity: 1;
+}
+
+.tree-action {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+}
+
+.tree-action svg {
+  width: 12px;
+  height: 12px;
+}
+
+.panel-error-inline {
+  padding: 7px 10px;
+  color: var(--c-tag);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 .ico-folder {
   color: #6b97c9;
 }
@@ -561,6 +625,10 @@ button {
 
 .ico-rs {
   color: #e8804b;
+}
+
+.ico-md {
+  color: #8b97a7;
 }
 
 .editor-region {

@@ -58,3 +58,10 @@ export function pinWorkspace(
 export function scanWorkspace(path: string): Promise<FileTreeEntry[]> {
   return call<FileTreeEntry[]>("scan_workspace", { path });
 }
+
+export function scanDirectory(
+  workspaceRoot: string,
+  path: string,
+): Promise<FileTreeEntry[]> {
+  return call<FileTreeEntry[]>("scan_directory", { workspaceRoot, path });
+}
