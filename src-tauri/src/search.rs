@@ -1,9 +1,16 @@
 use ignore::WalkBuilder;
 use serde::Serialize;
 use std::{
-    fs,
+    fs::{self, File},
+    io::Read,
     path::{Path, PathBuf},
 };
+
+const DEFAULT_MAX_SCANNED_FILES: usize = 1024;
+const DEFAULT_MAX_SCANNED_BYTES: u64 = 16 * 1024 * 1024;
+const DEFAULT_MAX_LINE_PREVIEW_CHARS: usize = 240;
+const MAX_TEXT_HITS_PER_FILE: usize = 5;
+const TRUNCATION_MARKER: &str = "...";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct FilenameMatch {
@@ -30,18 +37,53 @@ pub struct WorkspaceSearchResult {
     pub truncated: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SearchLimits {
+    max_results: usize,
+    max_file_bytes: u64,
+    max_scanned_files: usize,
+    max_scanned_bytes: u64,
+    max_line_preview_chars: usize,
+}
+
+impl SearchLimits {
+    fn default_for(max_results: usize, max_file_bytes: u64) -> Self {
+        Self {
+            max_results,
+            max_file_bytes,
+            max_scanned_files: DEFAULT_MAX_SCANNED_FILES,
+            max_scanned_bytes: DEFAULT_MAX_SCANNED_BYTES,
+            max_line_preview_chars: DEFAULT_MAX_LINE_PREVIEW_CHARS,
+        }
+    }
+}
+
 pub fn search_workspace(
     workspace_root: &Path,
     query: &str,
     max_results: usize,
     max_file_bytes: u64,
 ) -> Result<WorkspaceSearchResult, String> {
+    search_workspace_with_limits(
+        workspace_root,
+        query,
+        SearchLimits::default_for(max_results, max_file_bytes),
+    )
+}
+
+fn search_workspace_with_limits(
+    workspace_root: &Path,
+    query: &str,
+    limits: SearchLimits,
+) -> Result<WorkspaceSearchResult, String> {
     let query = query.trim().to_lowercase();
-    if query.is_empty() || max_results == 0 {
+    if query.is_empty() || limits.max_results == 0 {
         return Ok(WorkspaceSearchResult::default());
     }
 
     let mut result = WorkspaceSearchResult::default();
+    let mut scanned_files = 0usize;
+    let mut scanned_bytes = 0u64;
     let mut builder = WalkBuilder::new(workspace_root);
     builder
         .hidden(false)
@@ -59,10 +101,23 @@ pub fn search_workspace(
         if !file_type.is_file() {
             continue;
         }
-        if result.filename_matches.len() + result.text_matches.len() >= max_results {
+        if result_count(&result) >= limits.max_results || scanned_files >= limits.max_scanned_files
+        {
             result.truncated = true;
             break;
         }
+
+        let metadata = fs::symlink_metadata(path).map_err(|err| err.to_string())?;
+        if !metadata.file_type().is_file() {
+            continue;
+        }
+        let scanned_file_bytes = metadata.len().min(limits.max_file_bytes.saturating_add(1));
+        if scanned_bytes.saturating_add(scanned_file_bytes) > limits.max_scanned_bytes {
+            result.truncated = true;
+            break;
+        }
+        scanned_files += 1;
+        scanned_bytes = scanned_bytes.saturating_add(scanned_file_bytes);
 
         let name = path
             .file_name()
@@ -74,17 +129,16 @@ pub fn search_workspace(
                 path: path.to_path_buf(),
                 name,
             });
-            if result_count(&result) >= max_results {
+            if result_count(&result) >= limits.max_results {
                 result.truncated = true;
                 break;
             }
         }
 
-        let metadata = fs::metadata(path).map_err(|err| err.to_string())?;
-        if metadata.len() > max_file_bytes {
+        if metadata.len() > limits.max_file_bytes {
             continue;
         }
-        let Ok(content) = fs::read_to_string(path) else {
+        let Some(content) = read_text_file_bounded(path, limits.max_file_bytes)? else {
             continue;
         };
         let hits = content
@@ -94,20 +148,20 @@ pub fn search_workspace(
                 if line.to_lowercase().contains(&query) {
                     Some(TextHit {
                         line_number: index + 1,
-                        line: line.to_string(),
+                        line: line_preview(line, limits.max_line_preview_chars),
                     })
                 } else {
                     None
                 }
             })
-            .take(5)
+            .take(MAX_TEXT_HITS_PER_FILE)
             .collect::<Vec<_>>();
         if !hits.is_empty() {
             result.text_matches.push(TextFileMatch {
                 path: path.to_path_buf(),
                 hits,
             });
-            if result_count(&result) >= max_results {
+            if result_count(&result) >= limits.max_results {
                 result.truncated = true;
                 break;
             }
@@ -115,6 +169,41 @@ pub fn search_workspace(
     }
 
     Ok(result)
+}
+
+fn read_text_file_bounded(path: &Path, max_file_bytes: u64) -> Result<Option<String>, String> {
+    let file = File::open(path).map_err(|err| err.to_string())?;
+    let mut reader = file.take(max_file_bytes.saturating_add(1));
+    let mut buffer = Vec::new();
+    reader
+        .read_to_end(&mut buffer)
+        .map_err(|err| err.to_string())?;
+
+    if buffer.len() as u64 > max_file_bytes {
+        return Ok(None);
+    }
+
+    match String::from_utf8(buffer) {
+        Ok(content) => Ok(Some(content)),
+        Err(_) => Ok(None),
+    }
+}
+
+fn line_preview(line: &str, max_chars: usize) -> String {
+    if line.chars().count() <= max_chars {
+        return line.to_string();
+    }
+    if max_chars == 0 {
+        return String::new();
+    }
+    if max_chars <= TRUNCATION_MARKER.len() {
+        return TRUNCATION_MARKER[..max_chars].to_string();
+    }
+
+    let preview_chars = max_chars - TRUNCATION_MARKER.len();
+    let mut preview = line.chars().take(preview_chars).collect::<String>();
+    preview.push_str(TRUNCATION_MARKER);
+    preview
 }
 
 fn result_count(result: &WorkspaceSearchResult) -> usize {
@@ -180,5 +269,43 @@ mod tests {
             1
         );
         assert!(results.truncated);
+    }
+
+    #[test]
+    fn search_truncates_long_line_previews() {
+        let root = tempdir().expect("tempdir");
+        let line = format!("needle {}", "x".repeat(400));
+        fs::write(root.path().join("long.txt"), line).expect("write");
+
+        let results = super::search_workspace(root.path(), "needle", 10, 1024).expect("search");
+        let preview = &results.text_matches[0].hits[0].line;
+
+        assert!(preview.len() <= 240);
+        assert!(preview.ends_with("..."));
+    }
+
+    #[test]
+    fn search_stops_after_scanned_file_limit() {
+        let root = tempdir().expect("tempdir");
+        for index in 0..1100 {
+            fs::write(root.path().join(format!("file-{index}.txt")), "hay").expect("write");
+        }
+
+        let results = super::search_workspace(root.path(), "needle", 10, 1024).expect("search");
+
+        assert!(results.filename_matches.is_empty());
+        assert!(results.text_matches.is_empty());
+        assert!(results.truncated);
+    }
+
+    #[test]
+    fn bounded_reader_skips_files_that_exceed_byte_limit() {
+        let root = tempdir().expect("tempdir");
+        let path = root.path().join("growing.txt");
+        fs::write(&path, "needle plus extra").expect("write");
+
+        let content = super::read_text_file_bounded(&path, 6).expect("bounded read");
+
+        assert!(content.is_none());
     }
 }
