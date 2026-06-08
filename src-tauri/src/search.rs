@@ -76,6 +76,27 @@ fn search_workspace_with_limits(
     query: &str,
     limits: SearchLimits,
 ) -> Result<WorkspaceSearchResult, String> {
+    let mut builder = WalkBuilder::new(workspace_root);
+    builder
+        .hidden(false)
+        .parents(true)
+        .ignore(true)
+        .git_ignore(true);
+
+    let entries = builder.build().map(|entry| {
+        entry
+            .map(|entry| entry.path().to_path_buf())
+            .map_err(|err| err.to_string())
+    });
+
+    search_entry_paths_with_limits(entries, query, limits)
+}
+
+fn search_entry_paths_with_limits(
+    entries: impl IntoIterator<Item = Result<PathBuf, String>>,
+    query: &str,
+    limits: SearchLimits,
+) -> Result<WorkspaceSearchResult, String> {
     let query = query.trim().to_lowercase();
     if query.is_empty() || limits.max_results == 0 {
         return Ok(WorkspaceSearchResult::default());
@@ -84,30 +105,19 @@ fn search_workspace_with_limits(
     let mut result = WorkspaceSearchResult::default();
     let mut scanned_files = 0usize;
     let mut scanned_bytes = 0u64;
-    let mut builder = WalkBuilder::new(workspace_root);
-    builder
-        .hidden(false)
-        .parents(true)
-        .ignore(true)
-        .git_ignore(true)
-        .sort_by_file_path(|left, right| left.cmp(right));
-
-    for entry in builder.build() {
-        let entry = entry.map_err(|err| err.to_string())?;
-        let path = entry.path();
-        let Some(file_type) = entry.file_type() else {
+    for entry in entries {
+        let Ok(path) = entry else {
             continue;
         };
-        if !file_type.is_file() {
-            continue;
-        }
         if result_count(&result) >= limits.max_results || scanned_files >= limits.max_scanned_files
         {
             result.truncated = true;
             break;
         }
 
-        let metadata = fs::symlink_metadata(path).map_err(|err| err.to_string())?;
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
         if !metadata.file_type().is_file() {
             continue;
         }
@@ -126,7 +136,7 @@ fn search_workspace_with_limits(
             .to_string();
         if name.to_lowercase().contains(&query) {
             result.filename_matches.push(FilenameMatch {
-                path: path.to_path_buf(),
+                path: path.clone(),
                 name,
             });
             if result_count(&result) >= limits.max_results {
@@ -138,7 +148,7 @@ fn search_workspace_with_limits(
         if metadata.len() > limits.max_file_bytes {
             continue;
         }
-        let Some(content) = read_text_file_bounded(path, limits.max_file_bytes)? else {
+        let Some(content) = read_text_file_bounded(&path, limits.max_file_bytes)? else {
             continue;
         };
         let hits = content
@@ -157,10 +167,7 @@ fn search_workspace_with_limits(
             .take(MAX_TEXT_HITS_PER_FILE)
             .collect::<Vec<_>>();
         if !hits.is_empty() {
-            result.text_matches.push(TextFileMatch {
-                path: path.to_path_buf(),
-                hits,
-            });
+            result.text_matches.push(TextFileMatch { path, hits });
             if result_count(&result) >= limits.max_results {
                 result.truncated = true;
                 break;
@@ -168,7 +175,17 @@ fn search_workspace_with_limits(
         }
     }
 
+    sort_result_vectors(&mut result);
     Ok(result)
+}
+
+fn sort_result_vectors(result: &mut WorkspaceSearchResult) {
+    result
+        .filename_matches
+        .sort_by(|left, right| left.path.cmp(&right.path));
+    result
+        .text_matches
+        .sort_by(|left, right| left.path.cmp(&right.path));
 }
 
 fn read_text_file_bounded(path: &Path, max_file_bytes: u64) -> Result<Option<String>, String> {
@@ -336,5 +353,75 @@ mod tests {
             .expect("bounded read");
 
         assert!(content.is_none());
+    }
+
+    #[test]
+    fn search_skips_entry_errors() {
+        let root = tempdir().expect("tempdir");
+        let path = root.path().join("needle.txt");
+        fs::write(&path, "needle").expect("write");
+
+        let results = super::search_entry_paths_with_limits(
+            [Err("walk failed".to_string()), Ok(path)],
+            "needle",
+            super::SearchLimits::default_for(10, 1024),
+        )
+        .expect("search");
+
+        assert_eq!(results.filename_matches.len(), 1);
+    }
+
+    #[test]
+    fn search_skips_metadata_failures() {
+        let root = tempdir().expect("tempdir");
+        let missing = root.path().join("missing.txt");
+        let readable = root.path().join("readable.txt");
+        fs::write(&readable, "needle").expect("write");
+
+        let results = super::search_entry_paths_with_limits(
+            [Ok(missing), Ok(readable)],
+            "needle",
+            super::SearchLimits::default_for(10, 1024),
+        )
+        .expect("search");
+
+        assert_eq!(results.text_matches.len(), 1);
+        assert!(results.text_matches[0].path.ends_with("readable.txt"));
+    }
+
+    #[test]
+    fn search_sorts_bounded_result_vectors() {
+        let root = tempdir().expect("tempdir");
+        let a = root.path().join("a-needle.txt");
+        let b = root.path().join("b-needle.txt");
+        fs::write(&a, "needle").expect("write a");
+        fs::write(&b, "needle").expect("write b");
+
+        let results = super::search_entry_paths_with_limits(
+            [Ok(b), Ok(a)],
+            "needle",
+            super::SearchLimits::default_for(10, 1024),
+        )
+        .expect("search");
+
+        let filename_names = results
+            .filename_matches
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>();
+        let text_names = results
+            .text_matches
+            .iter()
+            .map(|entry| {
+                entry
+                    .path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(filename_names, ["a-needle.txt", "b-needle.txt"]);
+        assert_eq!(text_names, ["a-needle.txt", "b-needle.txt"]);
     }
 }
