@@ -5,6 +5,7 @@ use std::{
 
 use tauri::State;
 
+use crate::file_system::{self, FileOperationResult, FileVersion, TextFileRead};
 use crate::metrics::{snapshot, AppMetricSnapshot};
 use crate::settings::{AppSettings, SettingsStore};
 use crate::workspace::{Workspace, WorkspaceRegistry};
@@ -171,6 +172,52 @@ pub fn terminal_probe() -> Result<String, String> {
 #[tauri::command]
 pub fn metric_snapshot() -> Result<AppMetricSnapshot, String> {
     Ok(snapshot())
+}
+
+#[tauri::command]
+pub fn read_text_file(workspace_root: String, path: String) -> Result<TextFileRead, String> {
+    file_system::read_text_file(
+        Path::new(&workspace_root),
+        Path::new(&path),
+        file_system::EDITABLE_TEXT_LIMIT_BYTES,
+    )
+}
+
+#[tauri::command]
+pub fn write_text_file(
+    workspace_root: String,
+    path: String,
+    content: String,
+    expected_version: Option<FileVersion>,
+) -> Result<FileOperationResult, String> {
+    file_system::write_text_file(
+        Path::new(&workspace_root),
+        Path::new(&path),
+        &content,
+        expected_version,
+    )
+}
+
+#[tauri::command]
+pub fn create_text_file(
+    workspace_root: String,
+    relative_path: String,
+) -> Result<FileOperationResult, String> {
+    file_system::create_text_file(Path::new(&workspace_root), &relative_path)
+}
+
+#[tauri::command]
+pub fn rename_path(
+    workspace_root: String,
+    path: String,
+    new_name: String,
+) -> Result<FileOperationResult, String> {
+    file_system::rename_path(Path::new(&workspace_root), Path::new(&path), &new_name)
+}
+
+#[tauri::command]
+pub fn delete_path(workspace_root: String, path: String) -> Result<(), String> {
+    file_system::delete_path(Path::new(&workspace_root), Path::new(&path))
 }
 
 #[cfg(test)]

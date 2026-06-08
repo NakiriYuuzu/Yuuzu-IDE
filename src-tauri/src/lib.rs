@@ -1,4 +1,5 @@
 mod commands;
+mod file_system;
 mod metrics;
 mod pty;
 mod settings;
@@ -28,7 +29,12 @@ pub fn run() {
             commands::pin_workspace,
             commands::scan_workspace,
             commands::terminal_probe,
-            commands::metric_snapshot
+            commands::metric_snapshot,
+            commands::read_text_file,
+            commands::write_text_file,
+            commands::create_text_file,
+            commands::rename_path,
+            commands::delete_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
