@@ -51,3 +51,8 @@ pub fn switch_workspace(
 pub fn scan_workspace(path: String) -> Result<Vec<FileTreeEntry>, String> {
     workspace_scan::scan_top_level(std::path::Path::new(&path))
 }
+
+#[tauri::command]
+pub fn terminal_probe() -> Result<String, String> {
+    crate::pty::spawn_shell_probe()
+}

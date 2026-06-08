@@ -8,6 +8,7 @@ import {
   Plus,
   RotateCw,
   SplitSquareHorizontal,
+  SquareTerminal,
   X,
 } from "lucide-react";
 import { lazy, Suspense, useMemo, useState } from "react";
@@ -23,7 +24,13 @@ const EditorTab = lazy(() =>
   })),
 );
 
-type Surface = "empty" | "editor";
+const TerminalTab = lazy(() =>
+  import("../features/terminal/TerminalTab").then((module) => ({
+    default: module.TerminalTab,
+  })),
+);
+
+type Surface = "empty" | "editor" | "terminal";
 
 const panelTitles: Record<ActivityId, string> = {
   explorer: "Explorer",
@@ -151,6 +158,21 @@ export function AppShell() {
                   </button>
                 </div>
               ) : null}
+              {surface === "terminal" ? (
+                <div className="tab active">
+                  <SquareTerminal className="ftype" aria-hidden="true" />
+                  <span className="tlabel mono">terminal</span>
+                  <button
+                    type="button"
+                    className="close"
+                    title="Close terminal"
+                    aria-label="Close terminal"
+                    onClick={() => setSurface("empty")}
+                  >
+                    <X aria-hidden="true" />
+                  </button>
+                </div>
+              ) : null}
               <div className="tabstrip-tail">
                 <button
                   type="button"
@@ -161,6 +183,15 @@ export function AppShell() {
                 >
                   <Plus aria-hidden="true" />
                 </button>
+                <button
+                  type="button"
+                  className="iconbtn"
+                  title="Open terminal"
+                  aria-label="Open terminal"
+                  onClick={() => setSurface("terminal")}
+                >
+                  <SquareTerminal aria-hidden="true" />
+                </button>
               </div>
             </div>
 
@@ -168,17 +199,27 @@ export function AppShell() {
               <span className="crumb">src</span>
               <ChevronDown aria-hidden="true" />
               <span className="crumb">
-                {surface === "editor" ? "features" : "app"}
+                {surface === "editor"
+                  ? "features"
+                  : surface === "terminal"
+                    ? "terminal"
+                    : "app"}
               </span>
               <ChevronDown aria-hidden="true" />
               <span className="crumb">
-                {surface === "editor" ? "server.ts" : "AppShell.tsx"}
+                {surface === "editor"
+                  ? "server.ts"
+                  : surface === "terminal"
+                    ? "shell"
+                    : "AppShell.tsx"}
               </span>
             </div>
 
             <div
               className={`group-content${
-                surface === "editor" ? " editor-content" : ""
+                surface === "editor" || surface === "terminal"
+                  ? " editor-content"
+                  : ""
               }`}
             >
               {surface === "editor" ? (
@@ -186,6 +227,14 @@ export function AppShell() {
                   fallback={<div className="editor-loading">Loading editor</div>}
                 >
                   <EditorTab />
+                </Suspense>
+              ) : surface === "terminal" ? (
+                <Suspense
+                  fallback={
+                    <div className="editor-loading">Loading terminal</div>
+                  }
+                >
+                  <TerminalTab />
                 </Suspense>
               ) : (
                 <>
@@ -198,14 +247,24 @@ export function AppShell() {
                           "Waiting for the Tauri workspace registry"}
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      className="btn primary"
-                      onClick={() => setSurface("editor")}
-                    >
-                      <Play aria-hidden="true" />
-                      Open editor
-                    </button>
+                    <div className="hero-actions">
+                      <button
+                        type="button"
+                        className="btn primary"
+                        onClick={() => setSurface("editor")}
+                      >
+                        <Play aria-hidden="true" />
+                        Open editor
+                      </button>
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => setSurface("terminal")}
+                      >
+                        <SquareTerminal aria-hidden="true" />
+                        Open terminal
+                      </button>
+                    </div>
                   </div>
 
                   <div className="control-grid">
