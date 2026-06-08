@@ -1,5 +1,6 @@
 import { create, type StoreApi, useStore } from "zustand";
 
+import type { EditorFileState } from "../features/files/file-model";
 import type { ActivityId } from "./activity-rail";
 
 export type Surface = "empty" | "editor" | "terminal";
@@ -8,6 +9,7 @@ export type WorkspaceViewState = {
   activeActivity: ActivityId;
   panelOpen: boolean;
   surface: Surface;
+  editor: EditorFileState;
 };
 
 type WorkspaceViewStore = {
@@ -17,6 +19,10 @@ type WorkspaceViewStore = {
     workspaceId: string | null,
     patch: Partial<WorkspaceViewState>,
   ) => void;
+  updateEditor: (
+    workspaceId: string | null,
+    update: (editor: EditorFileState) => EditorFileState,
+  ) => void;
 };
 
 function defaultWorkspaceView(): WorkspaceViewState {
@@ -24,6 +30,7 @@ function defaultWorkspaceView(): WorkspaceViewState {
     activeActivity: "explorer",
     panelOpen: true,
     surface: "empty",
+    editor: { tabs: [], activePath: null },
   };
 }
 
@@ -44,6 +51,18 @@ export function createWorkspaceViewStore() {
           views: {
             ...state.views,
             [key]: { ...current, ...patch },
+          },
+        };
+      }),
+    updateEditor: (workspaceId, update) =>
+      set((state) => {
+        const key = workspaceId ?? shellKey;
+        const current = state.views[key] ?? defaultView;
+
+        return {
+          views: {
+            ...state.views,
+            [key]: { ...current, editor: update(current.editor) },
           },
         };
       }),

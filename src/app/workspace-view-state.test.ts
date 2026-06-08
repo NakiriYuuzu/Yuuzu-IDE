@@ -71,6 +71,29 @@ describe("createWorkspaceViewStore", () => {
     });
   });
 
+  test("editor tabs are restored per workspace", () => {
+    const store = createWorkspaceViewStore();
+
+    store.getState().updateEditor("a", () => ({
+      tabs: [
+        {
+          path: "/a/src/main.ts",
+          name: "main.ts",
+          dirty: false,
+          tooLarge: false,
+          version: { modified_ms: 1, len: 1 },
+          externalChange: false,
+        },
+      ],
+      activePath: "/a/src/main.ts",
+    }));
+
+    expect(store.getState().viewFor("a").editor.activePath).toBe(
+      "/a/src/main.ts",
+    );
+    expect(store.getState().viewFor("b").editor.activePath).toBeNull();
+  });
+
   test("unknown workspace defaults use a stable reference", () => {
     const store = createWorkspaceViewStore();
 
