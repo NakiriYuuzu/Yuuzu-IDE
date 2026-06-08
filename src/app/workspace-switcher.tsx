@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { switchWorkspace } from "../features/workspace/workspace-api";
 import {
-  loadSeededWorkspaceRegistry,
+  loadWorkspaceRegistry,
   workspacePathLabel,
 } from "./workspace-bootstrap";
 import { useWorkspaceStore } from "./workspace-store";
@@ -16,9 +16,9 @@ export function WorkspaceSwitcher() {
   useEffect(() => {
     let cancelled = false;
 
-    async function seedRegistry() {
+    async function loadRegistry() {
       try {
-        const next = await loadSeededWorkspaceRegistry();
+        const next = await loadWorkspaceRegistry();
 
         if (!cancelled) {
           setRegistry(next);
@@ -31,7 +31,7 @@ export function WorkspaceSwitcher() {
       }
     }
 
-    void seedRegistry();
+    void loadRegistry();
 
     return () => {
       cancelled = true;

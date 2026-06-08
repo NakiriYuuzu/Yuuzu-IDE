@@ -2,33 +2,58 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { useWorkspaceStore } from "./workspace-store";
+import { createWorkspaceStore, useWorkspaceStore } from "./workspace-store";
 
-describe("useWorkspaceStore", () => {
+describe("createWorkspaceStore", () => {
   test("starts empty and accepts a workspace registry", () => {
-    expect(useWorkspaceStore.getState().registry).toEqual({
-      active_workspace_id: null,
-      workspaces: [],
-    });
+    const store = createWorkspaceStore();
 
-    useWorkspaceStore.getState().setRegistry({
-      active_workspace_id: "api",
+    expect(store.getState().registry.workspaces).toHaveLength(0);
+
+    store.getState().setRegistry({
+      active_workspace_id: "one",
       workspaces: [
         {
-          id: "api",
-          name: "API",
-          path: "./workspaces/api",
-          pinned: true,
+          id: "one",
+          name: "One",
+          path: "/tmp/one",
+          pinned: false,
         },
       ],
     });
 
-    expect(useWorkspaceStore.getState().registry.active_workspace_id).toBe(
-      "api",
-    );
-    expect(useWorkspaceStore.getState().registry.workspaces).toHaveLength(1);
-    expect(useWorkspaceStore.getState().registry.workspaces[0]?.name).toBe(
-      "API",
-    );
+    expect(store.getState().activeWorkspace()?.id).toBe("one");
+  });
+
+  test("reports missing active workspace as null", () => {
+    const store = createWorkspaceStore();
+
+    store.getState().setRegistry({
+      active_workspace_id: "missing",
+      workspaces: [],
+    });
+
+    expect(store.getState().activeWorkspace()).toBeNull();
+  });
+
+  test("keeps the initial registry isolated between store instances", () => {
+    const first = createWorkspaceStore();
+
+    first.getState().registry.workspaces.push({
+      id: "leaked",
+      name: "Leaked",
+      path: "/tmp/leaked",
+      pinned: false,
+    });
+
+    const second = createWorkspaceStore();
+
+    expect(second.getState().registry.workspaces).toHaveLength(0);
+  });
+
+  test("preserves the exported bound store api", () => {
+    expect(typeof useWorkspaceStore.getState).toBe("function");
+
+    expect(useWorkspaceStore.getState().registry.workspaces).toHaveLength(0);
   });
 });

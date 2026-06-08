@@ -1,3 +1,5 @@
+import { open } from "@tauri-apps/plugin-dialog";
+
 import { call } from "../../lib/tauri";
 
 export type Workspace = {
@@ -30,6 +32,27 @@ export function addWorkspace(
 
 export function switchWorkspace(id: string): Promise<WorkspaceRegistry> {
   return call<WorkspaceRegistry>("switch_workspace", { id });
+}
+
+export function openWorkspacePath(path: string): Promise<WorkspaceRegistry> {
+  return call<WorkspaceRegistry>("open_workspace_path", { path });
+}
+
+export async function pickWorkspaceFolder(): Promise<string | null> {
+  const picked = await open({ directory: true, multiple: false });
+
+  return typeof picked === "string" ? picked : null;
+}
+
+export function removeWorkspace(id: string): Promise<WorkspaceRegistry> {
+  return call<WorkspaceRegistry>("remove_workspace", { id });
+}
+
+export function pinWorkspace(
+  id: string,
+  pinned: boolean,
+): Promise<WorkspaceRegistry> {
+  return call<WorkspaceRegistry>("pin_workspace", { id, pinned });
 }
 
 export function scanWorkspace(path: string): Promise<FileTreeEntry[]> {

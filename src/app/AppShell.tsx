@@ -273,8 +273,8 @@ export function AppShell() {
                         <span>Open controls</span>
                       </div>
                       {[
-                        "Explorer seeded",
-                        "Registry transient",
+                        "Explorer persisted",
+                        "Registry persisted",
                         "Rust invoke ready",
                       ].map((item) => (
                         <div className="row" key={item}>
