@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { createEditorIdentity } from "./EditorTab";
+import { createEditorIdentity, shouldFocusFindInput } from "./EditorTab";
 
 describe("createEditorIdentity", () => {
   test("ignores live content so Monaco is not recreated on every edit", () => {
@@ -41,5 +41,13 @@ describe("createEditorIdentity", () => {
     });
 
     expect(next).not.toBe(first);
+  });
+});
+
+describe("shouldFocusFindInput", () => {
+  test("focuses again for repeated requests while find is already open", () => {
+    expect(shouldFocusFindInput(true, 2, true, 1)).toBe(true);
+    expect(shouldFocusFindInput(true, 2, true, 2)).toBe(false);
+    expect(shouldFocusFindInput(true, 1, false, 1)).toBe(true);
   });
 });

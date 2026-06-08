@@ -190,6 +190,7 @@ export function AppShell() {
   const [loadedFile, setLoadedFile] = useState<LoadedFile | null>(null);
   const [editorError, setEditorError] = useState<string | null>(null);
   const [findOpen, setFindOpen] = useState(false);
+  const [findFocusRequest, setFindFocusRequest] = useState(0);
   const [findQuery, setFindQuery] = useState("");
   const savedContentByPathRef = useRef<Record<string, string>>({});
   const openRequestRef = useRef(0);
@@ -237,6 +238,7 @@ export function AppShell() {
 
   useEffect(() => {
     setFindOpen(false);
+    setFindFocusRequest(0);
     setFindQuery("");
   }, [activeWorkspaceId]);
 
@@ -525,6 +527,7 @@ export function AppShell() {
       case "find-in-file":
         setSurface("editor");
         setFindOpen(true);
+        setFindFocusRequest((value) => value + 1);
         break;
       case "search-workspace":
         setActiveActivity("search");
@@ -813,6 +816,7 @@ export function AppShell() {
                         language={loadedFile!.language}
                         readOnly={loadedFile!.readOnly}
                         findOpen={findOpen}
+                        findFocusRequest={findFocusRequest}
                         findQuery={findQuery}
                         onFindQueryChange={setFindQuery}
                         onContentChange={handleEditorContentChange}

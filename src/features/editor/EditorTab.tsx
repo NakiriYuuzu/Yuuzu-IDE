@@ -11,6 +11,7 @@ type EditorTabProps = {
   language: string;
   readOnly: boolean;
   findOpen: boolean;
+  findFocusRequest: number;
   findQuery: string;
   onFindQueryChange: (query: string) => void;
   onDirtyChange: (dirty: boolean) => void;
@@ -31,6 +32,18 @@ export function createEditorIdentity({
   return `${workspaceId}:${filePath}:${language}:${readOnly}`;
 }
 
+export function shouldFocusFindInput(
+  findOpen: boolean,
+  findFocusRequest: number,
+  previousFindOpen: boolean,
+  previousFindFocusRequest: number,
+): boolean {
+  return (
+    findOpen &&
+    (!previousFindOpen || findFocusRequest !== previousFindFocusRequest)
+  );
+}
+
 export function EditorTab({
   workspaceId,
   filePath,
@@ -38,6 +51,7 @@ export function EditorTab({
   language,
   readOnly,
   findOpen,
+  findFocusRequest,
   findQuery,
   onFindQueryChange,
   onDirtyChange,
@@ -46,6 +60,10 @@ export function EditorTab({
   const hostRef = useRef<HTMLDivElement | null>(null);
   const findInputRef = useRef<HTMLInputElement | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const previousFindFocusRef = useRef({
+    findOpen: false,
+    findFocusRequest,
+  });
   const findQueryRef = useRef(findQuery);
   const onFindQueryChangeRef = useRef(onFindQueryChange);
   const onDirtyChangeRef = useRef(onDirtyChange);
@@ -121,11 +139,20 @@ export function EditorTab({
   }, [findQuery]);
 
   useEffect(() => {
-    if (findOpen) {
+    const previous = previousFindFocusRef.current;
+    if (
+      shouldFocusFindInput(
+        findOpen,
+        findFocusRequest,
+        previous.findOpen,
+        previous.findFocusRequest,
+      )
+    ) {
       findInputRef.current?.focus();
       findInputRef.current?.select();
     }
-  }, [findOpen]);
+    previousFindFocusRef.current = { findOpen, findFocusRequest };
+  }, [findOpen, findFocusRequest]);
 
   return (
     <div className="editor-tab-surface">
