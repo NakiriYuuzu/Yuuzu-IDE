@@ -85,6 +85,15 @@ export function FileTreePanel({ refreshKey = 0 }: FileTreePanelProps) {
     );
   }
 
+  if (error) {
+    return (
+      <div className="panel-empty">
+        <span>Workspace path unavailable</span>
+        <small>{error}</small>
+      </div>
+    );
+  }
+
   return (
     <div className="panel-body">
       <div className="section-label">
@@ -96,14 +105,6 @@ export function FileTreePanel({ refreshKey = 0 }: FileTreePanelProps) {
         <div className="row">
           <span className="tw" />
           <span className="nm mono">Scanning...</span>
-        </div>
-      ) : null}
-
-      {!loading && error ? (
-        <div className="row" title={error}>
-          <span className="tw" />
-          <span className="nm mono">Scan failed</span>
-          <span className="meta">error</span>
         </div>
       ) : null}
 

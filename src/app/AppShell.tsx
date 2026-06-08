@@ -14,6 +14,7 @@ import {
 import { lazy, Suspense, useMemo, useState } from "react";
 
 import { ActivityRail, type ActivityId } from "./activity-rail";
+import { CommandPalette } from "./CommandPalette";
 import { FileTreePanel } from "../features/workspace/FileTreePanel";
 import { useWorkspaceViewStore, type Surface } from "./workspace-view-state";
 import { useWorkspaceStore } from "./workspace-store";
@@ -60,6 +61,7 @@ function PanelBody({
 
 export function AppShell() {
   const [fileTreeRefreshKey, setFileTreeRefreshKey] = useState(0);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const registry = useWorkspaceStore((state) => state.registry);
   const activeWorkspaceId = registry.active_workspace_id;
   const view = useWorkspaceViewStore((state) => state.viewFor(activeWorkspaceId));
@@ -88,6 +90,28 @@ export function AppShell() {
     [activeWorkspaceId, registry.workspaces],
   );
 
+  function runCommand(id: string) {
+    switch (id) {
+      case "open-editor":
+        setSurface("editor");
+        break;
+      case "open-terminal":
+        setSurface("terminal");
+        break;
+      case "toggle-sidebar":
+        setPanelOpen(!panelOpen);
+        break;
+      case "open-settings":
+        setActiveActivity("settings");
+        break;
+      case "open-workspace":
+      case "switch-workspace":
+        break;
+    }
+
+    setPaletteOpen(false);
+  }
+
   return (
     <div className="yz" data-theme="dark">
       <header className="titlebar">
@@ -102,7 +126,13 @@ export function AppShell() {
           <span className="d" />
           dev :1420
         </span>
-        <button type="button" className="kbd">
+        <button
+          type="button"
+          className="kbd"
+          aria-haspopup="dialog"
+          aria-expanded={paletteOpen}
+          onClick={() => setPaletteOpen(true)}
+        >
           Search or run a command <kbd>⌘K</kbd>
         </button>
         <div className="tb-actions">
@@ -337,6 +367,11 @@ export function AppShell() {
           <Bell aria-hidden="true" />
         </div>
       </footer>
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onRun={runCommand}
+      />
     </div>
   );
 }
