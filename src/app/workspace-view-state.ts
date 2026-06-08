@@ -34,7 +34,15 @@ function defaultWorkspaceView(): WorkspaceViewState {
   };
 }
 
-const defaultView: WorkspaceViewState = Object.freeze(defaultWorkspaceView());
+function freezeWorkspaceView(view: WorkspaceViewState): WorkspaceViewState {
+  Object.freeze(view.editor.tabs);
+  Object.freeze(view.editor);
+  return Object.freeze(view);
+}
+
+const defaultView: WorkspaceViewState = freezeWorkspaceView(
+  defaultWorkspaceView(),
+);
 const shellKey = "__shell__";
 
 export function createWorkspaceViewStore() {

@@ -111,10 +111,22 @@ describe("createWorkspaceViewStore", () => {
       unknownView.surface = "terminal";
     }).toThrow(TypeError);
 
+    expect(() => {
+      unknownView.editor.tabs.push({
+        path: "/unknown/src/main.ts",
+        name: "main.ts",
+        dirty: false,
+        tooLarge: false,
+        version: null,
+        externalChange: false,
+      });
+    }).toThrow(TypeError);
+
     expect(store.getState().viewFor("other-unknown")).toMatchObject({
       surface: "empty",
       activeActivity: "explorer",
       panelOpen: true,
+      editor: { tabs: [], activePath: null },
     });
   });
 });

@@ -40,6 +40,7 @@ describe("file model", () => {
       len: 12,
     });
 
+    expect(dirty.tabs[0].dirty).toBe(true);
     expect(saved.tabs[0].dirty).toBe(false);
     expect(saved.tabs[0].version).toEqual({ modified_ms: 2, len: 12 });
   });
