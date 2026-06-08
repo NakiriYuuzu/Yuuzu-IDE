@@ -90,6 +90,11 @@ fn workspace_child(
     let root = workspace_root
         .canonicalize()
         .map_err(|err| err.to_string())?;
+    let lexical_root = if workspace_root.is_absolute() {
+        normalize_path(workspace_root)?
+    } else {
+        root.clone()
+    };
     let candidate = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -103,11 +108,24 @@ fn workspace_child(
         }
         return Ok(match resolution {
             PathResolution::CanonicalExisting => canonical,
-            PathResolution::LexicalContained => normalize_path(&candidate)?,
+            PathResolution::LexicalContained => {
+                let normalized = normalize_path(&candidate)?;
+                if !normalized.starts_with(&root) && !normalized.starts_with(&lexical_root) {
+                    return Err(format!("path outside workspace: {}", candidate.display()));
+                }
+                normalized
+            }
         });
     }
 
     let normalized = normalize_path(&candidate)?;
+    if matches!(resolution, PathResolution::LexicalContained)
+        && !normalized.starts_with(&root)
+        && !normalized.starts_with(&lexical_root)
+    {
+        return Err(format!("path outside workspace: {}", candidate.display()));
+    }
+
     let existing_parent = nearest_existing_parent(&normalized)?
         .canonicalize()
         .map_err(|err| err.to_string())?;
@@ -405,6 +423,39 @@ mod tests {
         };
         assert!(err.contains("outside workspace"));
         assert!(!outside.exists(), "outside file should not be created");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_text_file_rejects_outside_lexical_symlink_to_workspace() {
+        let root = tempdir().expect("tempdir");
+        let outside = tempdir().expect("outside");
+        let link = outside.path().join("workspace-link");
+        let outside_lexical_file = link.join("note.txt");
+        let workspace_file = root.path().join("note.txt");
+        symlink(root.path(), &link).expect("symlink");
+
+        let result = super::create_text_file(
+            root.path(),
+            outside_lexical_file.to_str().expect("outside lexical path"),
+        );
+
+        let err = match result {
+            Ok(value) => {
+                let _ = fs::remove_file(&workspace_file);
+                panic!("expected outside workspace error, got {value:?}");
+            }
+            Err(err) => err,
+        };
+        assert!(err.contains("outside workspace"));
+        assert!(
+            !outside_lexical_file.exists(),
+            "outside lexical path should not be created"
+        );
+        assert!(
+            !workspace_file.exists(),
+            "workspace target should not be created through outside symlink"
+        );
     }
 
     #[cfg(unix)]
