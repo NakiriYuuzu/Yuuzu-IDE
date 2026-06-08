@@ -1,83 +1,57 @@
 # Yuuzu-IDE Progress
 
-## 2026-06-08
+## 2026-06-09
 
 ### Node 0: Product And Architecture Foundation
 
-Status: blocked during Task 4.
+Status: completed and passed.
+
+Node 0 finished Tasks 1-10 and records the final spike measurements in
+`docs/architecture/node-0-spike-results.md`. The measured Tauri 2 + React route
+stays inside the launch, memory, PTY, scan, and single-main-WebView targets, so
+Rust-native fallback research remains deferred.
 
 Completed progress:
 
-- Task 1 repository baseline completed.
-  - `git init` created the repository.
-  - `.gitignore` was created with generated-file rules.
-  - Required docs remained visible.
-  - Commit step was skipped because autonomous commits are not authorized.
-  - Spec-compliance and repo-hygiene reviews approved the task.
-- Task 2 Tauri React scaffold completed with an environment concern.
-  - Tauri 2 + Vite + React + TypeScript scaffold exists.
-  - `src/App.tsx` renders the Node 0 architecture spike marker.
-  - `bun run build` passed.
-  - `bun run tauri build --debug` failed before Rust compilation because
-    `cargo` is not installed or not on `PATH`.
-  - Commit step was skipped because autonomous commits are not authorized.
-  - Spec-compliance and code-quality reviews approved the task.
-- Task 3 shadcn UI foundation completed.
-  - `components.json`, `src/lib/utils.ts`, and required UI components exist.
-  - `src/index.css` keeps shadcn/Tailwind theme content and app sizing rules.
-  - `bun run build` passed.
-  - Commit step was skipped because autonomous commits are not authorized.
-  - Spec-compliance and code-quality reviews approved the task.
+- Tasks 1-3 established the repository baseline, Tauri 2 + Vite + React +
+  TypeScript scaffold, and shadcn/ui + Tailwind CSS foundation.
+- Task 4 resumed after the Rust/Cargo toolchain gap was cleared and added
+  Rust-owned workspace registry commands through Tauri IPC.
+- Tasks 5-8 added the React workspace shell, Rust file tree scan command, lazy
+  Monaco editor surface, and lazy xterm terminal surface with Rust PTY
+  ownership.
+- Task 9 added Node 0 measurement support and manual process guidance.
+- Task 10 recorded the final measurements and next stack decision.
 
-Current blocker:
+High-level commit milestones:
 
-- Node 0 Task 4 requires Rust TDD for the workspace registry command.
-- `cargo`, `rustc`, and `rustup` are not available on `PATH`.
-- Because TDD requires observing the failing Rust test before production Rust
-  implementation, Task 4 cannot proceed in this environment yet.
+- `ff6e189` verified the initial Node 0 scaffold milestone.
+- `6796e79` updated toolchains and scaffold assets after Rust/Cargo became
+  available.
+- `d1c6018` through `b726778` added workspace registry, workspace shell, file
+  scan, lazy editor, lazy terminal, and measurement support.
 
-Next decision needed:
+Final verification evidence:
 
-- Install Rust/Cargo or expose an existing Rust toolchain on `PATH`, then resume
-  from Node 0 Task 4 in
-  `docs/superpowers/plans/2026-06-08-node-0-architecture-spike.md`.
+- Tauri debug launch measurement: visible shell in 391 ms, passing the under
+  2000 ms target.
+- Stabilized Tauri debug RSS: 125 MB for shell, one workspace, and three seeded
+  portable workspaces, passing the under 180 MB and under 300 MB targets.
+- Tauri WebContent process count while switching workspaces: 1, passing the
+  exactly-one-main-WebView target.
+- Playwright Chromium production preview RSS deltas: lazy Monaco added 57 MB;
+  lazy xterm.js added 20 MB. Both heavy surfaces stay outside initial shell
+  startup.
+- Temporary Rust probes: `portable-pty 0.9.0` terminal startup median was 61 ms,
+  passing the under 300 ms target; top-level file tree scan rounded to 1 ms,
+  passing the under 100 ms small-project target.
+- Documentation verification for Task 10:
+  `rg -n "T[B]D|T[O]DO|F[I]XME|place[ ]holder|\| 0 (ms|MB) \|" docs/architecture/node-0-spike-results.md roadmap.md`
+  has no matches, `test -f docs/architecture/node-0-spike-results.md` passes,
+  and `git diff --check` passes.
 
-Verification evidence:
+Next decision:
 
-- `bun run build`: passed after Task 2.
-- `bun run build`: passed after Task 3.
-- `bun run tauri build --debug`: failed with
-  `failed to run command cargo metadata --no-deps --format-version 1: No such file or directory (os error 2)`.
-- Continuation check on 2026-06-08:
-  - `command -v cargo`, `command -v rustc`, and `command -v rustup` returned
-    no path.
-  - `cargo test --manifest-path src-tauri/Cargo.toml workspace` failed with
-    `zsh:1: command not found: cargo`.
-  - `bun run build` still passed.
-- Second continuation check on 2026-06-08:
-  - `command -v cargo`, `command -v rustc`, and `command -v rustup` still
-    returned no path.
-  - Common install paths checked with `ls -la ~/.cargo/bin/cargo
-    ~/.cargo/bin/rustc ~/.cargo/bin/rustup /opt/homebrew/bin/cargo
-    /usr/local/bin/cargo`; no toolchain files were found.
-  - `cargo test --manifest-path src-tauri/Cargo.toml workspace` still failed
-    with `zsh:1: command not found: cargo`.
-  - `bun run build` still passed.
-- Third continuation check on 2026-06-09:
-  - `command -v cargo`, `command -v rustc`, and `command -v rustup` still
-    returned no path.
-  - `cargo test --manifest-path src-tauri/Cargo.toml workspace` still failed
-    with `zsh:1: command not found: cargo`.
-  - `bun run build` still passed.
-- Fourth continuation check on 2026-06-09:
-  - `command -v cargo`, `command -v rustc`, and `command -v rustup` still
-    returned no path.
-  - Common install paths checked with `ls -la ~/.cargo/bin/cargo
-    ~/.cargo/bin/rustc ~/.cargo/bin/rustup /opt/homebrew/bin/cargo
-    /usr/local/bin/cargo`; no toolchain files were found.
-  - `cargo test --manifest-path src-tauri/Cargo.toml workspace` still failed
-    with `zsh:1: command not found: cargo`.
-  - `bun run build` still passed.
-  - Current Goal run explicitly authorizes git commits inside this repository,
-    so the verified Task 1-3 Node 0 milestone is eligible for commit even though
-    Task 4 remains blocked.
+- Continue from Node 1 using Tauri 2 + Vite + React + TypeScript as the primary
+  app route, with Monaco and xterm remaining lazy-loaded and Rust owning
+  workspace state, PTY, search, git, and LSP lifecycle.

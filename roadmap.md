@@ -235,8 +235,8 @@ real measurements exist.
 
 ### Node 0: Product And Architecture Foundation
 
-**Status:** blocked during Task 4 until Rust/Cargo is installed or exposed on
-`PATH`; see `docs/architecture/progress.md` for verification evidence.
+**Status:** completed and passed; measured spike results are recorded in
+`docs/architecture/node-0-spike-results.md`.
 
 **Goal:** turn the product direction into buildable technical constraints before
 large implementation starts.
@@ -686,3 +686,6 @@ Start with Node 0 and Node 1. The important early proof is not full IDE breadth;
 it is proving that one Tauri/Rust desktop app can keep multiple projects open,
 switch them quickly, avoid creating one WebView per workspace, and stay
 meaningfully lighter than the JetBrains workflow it is meant to replace.
+
+- Node 0 measurements keep Tauri 2 as the main route; Rust-native fallback
+  research remains deferred.
