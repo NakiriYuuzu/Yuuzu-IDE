@@ -172,13 +172,24 @@ fn search_workspace_with_limits(
 }
 
 fn read_text_file_bounded(path: &Path, max_file_bytes: u64) -> Result<Option<String>, String> {
-    let file = File::open(path).map_err(|err| err.to_string())?;
-    let mut reader = file.take(max_file_bytes.saturating_add(1));
-    let mut buffer = Vec::new();
-    reader
-        .read_to_end(&mut buffer)
-        .map_err(|err| err.to_string())?;
+    read_text_file_bounded_with(max_file_bytes, |read_limit| {
+        let file = File::open(path).map_err(|err| err.to_string())?;
+        let mut reader = file.take(read_limit);
+        let mut buffer = Vec::new();
+        reader
+            .read_to_end(&mut buffer)
+            .map_err(|err| err.to_string())?;
+        Ok(buffer)
+    })
+}
 
+fn read_text_file_bounded_with(
+    max_file_bytes: u64,
+    read_file: impl FnOnce(u64) -> Result<Vec<u8>, String>,
+) -> Result<Option<String>, String> {
+    let Ok(buffer) = read_file(max_file_bytes.saturating_add(1)) else {
+        return Ok(None);
+    };
     if buffer.len() as u64 > max_file_bytes {
         return Ok(None);
     }
@@ -305,6 +316,24 @@ mod tests {
         fs::write(&path, "needle plus extra").expect("write");
 
         let content = super::read_text_file_bounded(&path, 6).expect("bounded read");
+
+        assert!(content.is_none());
+    }
+
+    #[test]
+    fn bounded_reader_skips_files_that_cannot_be_opened() {
+        let root = tempdir().expect("tempdir");
+        let missing = root.path().join("missing.txt");
+
+        let content = super::read_text_file_bounded(&missing, 1024).expect("bounded read");
+
+        assert!(content.is_none());
+    }
+
+    #[test]
+    fn bounded_reader_skips_read_failures() {
+        let content = super::read_text_file_bounded_with(1024, |_| Err("read failed".to_string()))
+            .expect("bounded read");
 
         assert!(content.is_none());
     }
