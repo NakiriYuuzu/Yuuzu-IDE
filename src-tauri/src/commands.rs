@@ -179,8 +179,16 @@ pub fn pin_workspace(
 }
 
 #[tauri::command]
-pub fn scan_workspace(path: String) -> Result<Vec<FileTreeEntry>, String> {
-    workspace_scan::scan_top_level(std::path::Path::new(&path))
+pub fn scan_workspace(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<Vec<FileTreeEntry>, String> {
+    scan_workspace_root(state.inner(), &path)
+}
+
+fn scan_workspace_root(state: &AppState, path: &str) -> Result<Vec<FileTreeEntry>, String> {
+    let workspace_root = state.trusted_workspace_root(path)?;
+    workspace_scan::scan_top_level(&workspace_root)
 }
 
 #[tauri::command]
@@ -408,6 +416,46 @@ mod tests {
         let state = AppState::new(config.path()).expect("state");
 
         let result = state.trusted_workspace_root(unregistered.path().to_str().expect("path"));
+
+        assert!(result.unwrap_err().contains("workspace not registered"));
+    }
+
+    #[test]
+    fn scan_workspace_root_uses_trusted_canonical_root() {
+        let config = tempdir().expect("config dir");
+        let state = AppState::new(config.path()).expect("state");
+        let workspace_path = config.path().join("project-a");
+        let src_path = workspace_path.join("src");
+        std::fs::create_dir(&workspace_path).expect("workspace dir");
+        std::fs::create_dir(&src_path).expect("src dir");
+        std::fs::File::create(src_path.join("main.ts")).expect("main file");
+        state
+            .open_workspace_path(workspace_path.clone())
+            .expect("open workspace");
+
+        let lexical_workspace = workspace_path.join(".");
+        let entries =
+            super::scan_workspace_root(&state, lexical_workspace.to_str().expect("workspace path"))
+                .expect("scan workspace");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].path,
+            workspace_path
+                .canonicalize()
+                .expect("canonical")
+                .join("src"),
+        );
+    }
+
+    #[test]
+    fn scan_workspace_root_rejects_unregistered_workspace() {
+        let config = tempdir().expect("config dir");
+        let unregistered = tempdir().expect("unregistered workspace");
+        let state = AppState::new(config.path()).expect("state");
+
+        let result =
+            super::scan_workspace_root(&state, unregistered.path().to_str().expect("path"));
 
         assert!(result.unwrap_err().contains("workspace not registered"));
     }

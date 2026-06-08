@@ -8,9 +8,22 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useWorkspaceStore } from "../../app/workspace-store";
+import {
+  createRevealState,
+  fileIconClassFromName,
+  forgetManualCollapse,
+  isExpanded,
+  joinRelativePath,
+  nextAutoRevealPaths,
+  relativePathFromWorkspace,
+  rememberManualCollapse,
+  removePathAndDescendantsFromRecord,
+  shouldApplyDirectoryLoadResult,
+  type ExpandedPaths,
+} from "./file-tree-model";
 import {
   scanDirectory,
   scanWorkspace,
@@ -26,27 +39,12 @@ type FileTreePanelProps = {
   onDeletePath: (path: string) => Promise<void>;
 };
 
-type ExpandedPaths = Record<string, FileTreeEntry[]>;
-
 function iconClass(entry: FileTreeEntry): string {
   if (entry.is_dir) {
     return "ico-folder";
   }
 
-  const lowerName = entry.name.toLowerCase();
-  if (lowerName.endsWith(".rs")) {
-    return "ico-rs";
-  }
-
-  if (lowerName.endsWith(".md") || lowerName.endsWith(".mdx")) {
-    return "ico-md";
-  }
-
-  if (lowerName.endsWith(".ts") || lowerName.endsWith(".tsx")) {
-    return "ico-ts";
-  }
-
-  return "";
+  return fileIconClassFromName(entry.name);
 }
 
 function iconForEntry(entry: FileTreeEntry) {
@@ -60,59 +58,6 @@ function iconForEntry(entry: FileTreeEntry) {
     : FileCode2;
 }
 
-function normalizeForCompare(path: string): string {
-  const trimmed = path.replace(/[\\/]+$/, "");
-  return (trimmed || path).replace(/\\/g, "/");
-}
-
-function relativePathFromWorkspace(
-  workspaceRoot: string,
-  path: string,
-): string | null {
-  const root = normalizeForCompare(workspaceRoot);
-  const child = normalizeForCompare(path);
-
-  if (child === root) {
-    return "";
-  }
-
-  const prefix = `${root}/`;
-  return child.startsWith(prefix) ? child.slice(prefix.length) : null;
-}
-
-function joinRelativePath(parent: string, child: string): string {
-  return parent ? `${parent}/${child}` : child;
-}
-
-function directoryAncestors(
-  workspaceRoot: string,
-  filePath: string,
-): string[] {
-  const root = normalizeForCompare(workspaceRoot);
-  const file = normalizeForCompare(filePath);
-  const relativePath = relativePathFromWorkspace(root, file);
-
-  if (!relativePath) {
-    return [];
-  }
-
-  const parts = relativePath.split("/");
-  parts.pop();
-
-  const ancestors: string[] = [];
-  let current = root;
-  for (const part of parts) {
-    current = `${current}/${part}`;
-    ancestors.push(current);
-  }
-
-  return ancestors;
-}
-
-function isExpanded(expandedPaths: ExpandedPaths, path: string): boolean {
-  return Object.prototype.hasOwnProperty.call(expandedPaths, path);
-}
-
 export function FileTreePanel({
   refreshKey = 0,
   activeFilePath,
@@ -124,6 +69,9 @@ export function FileTreePanel({
   const registry = useWorkspaceStore((state) => state.registry);
   const [entries, setEntries] = useState<FileTreeEntry[]>([]);
   const [expandedPaths, setExpandedPaths] = useState<ExpandedPaths>({});
+  const [revealState, setRevealState] = useState(() =>
+    createRevealState("", null, refreshKey),
+  );
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>(
     {},
   );
@@ -132,6 +80,8 @@ export function FileTreePanel({
   >({});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const loadGenerationRef = useRef(0);
+  const expandedIntentRef = useRef<Record<string, number>>({});
 
   const activeWorkspace = useMemo(
     () =>
@@ -141,12 +91,23 @@ export function FileTreePanel({
     [registry],
   );
 
+  useEffect(() => {
+    setRevealState(
+      createRevealState(activeWorkspace?.path ?? "", activeFilePath, refreshKey),
+    );
+  }, [activeFilePath, activeWorkspace?.path, refreshKey]);
+
   const loadDirectory = useCallback(
     async (path: string) => {
       if (!activeWorkspace) {
         return;
       }
 
+      const requestGeneration = loadGenerationRef.current;
+      expandedIntentRef.current = {
+        ...expandedIntentRef.current,
+        [path]: requestGeneration,
+      };
       setLoadingPaths((current) => ({ ...current, [path]: true }));
       setExpandedPaths((current) =>
         isExpanded(current, path) ? current : { ...current, [path]: [] },
@@ -154,12 +115,30 @@ export function FileTreePanel({
 
       try {
         const next = await scanDirectory(activeWorkspace.path, path);
+        const shouldApply = shouldApplyDirectoryLoadResult({
+          currentGeneration: loadGenerationRef.current,
+          intendedGeneration: expandedIntentRef.current[path],
+          requestGeneration,
+        });
+        if (!shouldApply) {
+          return;
+        }
+
         setExpandedPaths((current) => ({ ...current, [path]: next }));
         setDirectoryErrors((current) => {
           const { [path]: _removed, ...rest } = current;
           return rest;
         });
       } catch (err) {
+        const shouldApply = shouldApplyDirectoryLoadResult({
+          currentGeneration: loadGenerationRef.current,
+          intendedGeneration: expandedIntentRef.current[path],
+          requestGeneration,
+        });
+        if (!shouldApply) {
+          return;
+        }
+
         setDirectoryErrors((current) => ({
           ...current,
           [path]: err instanceof Error ? err.message : String(err),
@@ -179,7 +158,10 @@ export function FileTreePanel({
 
     async function loadEntries(path: string) {
       setLoading(true);
+      loadGenerationRef.current += 1;
+      expandedIntentRef.current = {};
       setExpandedPaths({});
+      setLoadingPaths({});
       setDirectoryErrors({});
 
       try {
@@ -207,6 +189,11 @@ export function FileTreePanel({
       setEntries([]);
       setError(null);
       setLoading(false);
+      loadGenerationRef.current += 1;
+      expandedIntentRef.current = {};
+      setExpandedPaths({});
+      setLoadingPaths({});
+      setDirectoryErrors({});
     }
 
     return () => {
@@ -219,11 +206,12 @@ export function FileTreePanel({
       return;
     }
 
-    const ancestors = directoryAncestors(activeWorkspace.path, activeFilePath);
-    for (const path of ancestors) {
-      if (!isExpanded(expandedPaths, path) && !loadingPaths[path]) {
-        void loadDirectory(path);
-      }
+    for (const path of nextAutoRevealPaths(
+      revealState,
+      expandedPaths,
+      loadingPaths,
+    )) {
+      void loadDirectory(path);
     }
   }, [
     activeFilePath,
@@ -231,17 +219,29 @@ export function FileTreePanel({
     expandedPaths,
     loadingPaths,
     loadDirectory,
+    revealState,
   ]);
 
   async function toggleDirectory(entry: FileTreeEntry) {
     if (isExpanded(expandedPaths, entry.path)) {
-      setExpandedPaths((current) => {
-        const { [entry.path]: _removed, ...rest } = current;
-        return rest;
-      });
+      expandedIntentRef.current = removePathAndDescendantsFromRecord(
+        expandedIntentRef.current,
+        entry.path,
+      );
+      setExpandedPaths((current) =>
+        removePathAndDescendantsFromRecord(current, entry.path),
+      );
+      setLoadingPaths((current) =>
+        removePathAndDescendantsFromRecord(current, entry.path),
+      );
+      setDirectoryErrors((current) =>
+        removePathAndDescendantsFromRecord(current, entry.path),
+      );
+      setRevealState((current) => rememberManualCollapse(current, entry.path));
       return;
     }
 
+    setRevealState((current) => forgetManualCollapse(current, entry.path));
     await loadDirectory(entry.path);
   }
 
@@ -275,8 +275,10 @@ export function FileTreePanel({
   }
 
   async function confirmDeleteEntry(entry: FileTreeEntry) {
-    const kind = entry.is_dir ? "folder" : "file";
-    if (!window.confirm(`Delete ${kind} ${entry.name}?`)) {
+    const message = entry.is_dir
+      ? `Recursively delete folder ${entry.name}?\n\n${entry.path}`
+      : `Delete file ${entry.name}?\n\n${entry.path}`;
+    if (!window.confirm(message)) {
       return;
     }
 
@@ -300,6 +302,7 @@ export function FileTreePanel({
               className={`row tree-row${
                 entry.path === activeFilePath ? " sel" : ""
               }`}
+              aria-expanded={entry.is_dir ? isOpen : undefined}
               style={{ paddingLeft: 12 + depth * 14 }}
               title={entry.path}
               onClick={() =>

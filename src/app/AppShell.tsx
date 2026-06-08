@@ -23,9 +23,15 @@ import {
 import {
   closeFileTab,
   openFileTab,
-  type EditorFileState,
   type FileVersion,
 } from "../features/files/file-model";
+import {
+  editorTabForPath,
+  fileIconClassFromName,
+  parentNameFromPath,
+  removeEditorPath,
+  renameEditorPath,
+} from "../features/workspace/file-tree-model";
 import { FileTreePanel } from "../features/workspace/FileTreePanel";
 import { useWorkspaceViewStore, type Surface } from "./workspace-view-state";
 import { useWorkspaceStore } from "./workspace-store";
@@ -51,121 +57,6 @@ const panelTitles: Record<ActivityId, string> = {
   database: "Database",
   settings: "Settings",
 };
-
-function fileNameFromPath(path: string): string {
-  const normalized = path.replace(/\\/g, "/");
-  return normalized.split("/").pop() || path;
-}
-
-function parentNameFromPath(path: string): string {
-  const segments = path.replace(/\\/g, "/").split("/");
-  return segments.length > 1 ? segments[segments.length - 2] : "workspace";
-}
-
-function fileIconClassFromName(name: string): string {
-  const lowerName = name.toLowerCase();
-  if (lowerName.endsWith(".rs")) {
-    return "ico-rs";
-  }
-
-  if (lowerName.endsWith(".md") || lowerName.endsWith(".mdx")) {
-    return "ico-md";
-  }
-
-  return lowerName.endsWith(".ts") || lowerName.endsWith(".tsx")
-    ? "ico-ts"
-    : "";
-}
-
-function normalizePathForCompare(path: string): string {
-  const trimmed = path.replace(/[\\/]+$/, "");
-  return (trimmed || path).replace(/\\/g, "/");
-}
-
-function isSameOrDescendant(path: string, parent: string): boolean {
-  const normalizedPath = normalizePathForCompare(path);
-  const normalizedParent = normalizePathForCompare(parent);
-
-  return (
-    normalizedPath === normalizedParent ||
-    normalizedPath.startsWith(`${normalizedParent}/`)
-  );
-}
-
-function replacePathPrefix(path: string, oldPath: string, newPath: string) {
-  const normalizedPath = normalizePathForCompare(path);
-  const normalizedOldPath = normalizePathForCompare(oldPath);
-  const normalizedNewPath = normalizePathForCompare(newPath);
-
-  if (normalizedPath === normalizedOldPath) {
-    return newPath;
-  }
-
-  if (normalizedPath.startsWith(`${normalizedOldPath}/`)) {
-    return `${normalizedNewPath}${normalizedPath.slice(normalizedOldPath.length)}`;
-  }
-
-  return path;
-}
-
-function editorTabForPath(path: string, version: FileVersion | null) {
-  return {
-    path,
-    name: fileNameFromPath(path),
-    dirty: false,
-    tooLarge: false,
-    version,
-    externalChange: false,
-  };
-}
-
-function renameEditorPath(
-  editor: EditorFileState,
-  oldPath: string,
-  newPath: string,
-  version: FileVersion | null,
-): EditorFileState {
-  return {
-    tabs: editor.tabs.map((tab) => {
-      if (!isSameOrDescendant(tab.path, oldPath)) {
-        return tab;
-      }
-
-      const nextPath = replacePathPrefix(tab.path, oldPath, newPath);
-      return {
-        ...tab,
-        path: nextPath,
-        name: fileNameFromPath(nextPath),
-        version: tab.path === oldPath ? version : tab.version,
-      };
-    }),
-    activePath: editor.activePath
-      ? replacePathPrefix(editor.activePath, oldPath, newPath)
-      : null,
-  };
-}
-
-function removeEditorPath(
-  editor: EditorFileState,
-  deletedPath: string,
-): EditorFileState {
-  const removedIndex = editor.tabs.findIndex((tab) =>
-    isSameOrDescendant(tab.path, deletedPath),
-  );
-  if (removedIndex < 0) {
-    return editor;
-  }
-
-  const tabs = editor.tabs.filter(
-    (tab) => !isSameOrDescendant(tab.path, deletedPath),
-  );
-  const activePath =
-    editor.activePath && isSameOrDescendant(editor.activePath, deletedPath)
-      ? (tabs[Math.max(0, removedIndex - 1)]?.path ?? null)
-      : editor.activePath;
-
-  return { tabs, activePath };
-}
 
 function PanelBody({
   active,
@@ -292,11 +183,7 @@ export function AppShell() {
     }
 
     await deletePath(activeWorkspace.path, path);
-    const nextEditor = removeEditorPath(view.editor, path);
-    updateEditor(activeWorkspaceId, () => nextEditor);
-    if (!nextEditor.activePath && surface === "editor") {
-      setSurface("empty");
-    }
+    updateEditor(activeWorkspaceId, (editor) => removeEditorPath(editor, path));
     setFileTreeRefreshKey((value) => value + 1);
   }
 
