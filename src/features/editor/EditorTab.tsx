@@ -1,36 +1,77 @@
 import { useEffect, useRef } from "react";
 import type * as Monaco from "monaco-editor";
 
-import { initialEditorText } from "./editor-sample";
 import { loadMonaco } from "./load-monaco";
 
-export function EditorTab() {
+type EditorTabProps = {
+  workspaceId: string;
+  filePath: string;
+  content: string;
+  language: string;
+  readOnly: boolean;
+  onDirtyChange: (dirty: boolean) => void;
+  onContentChange: (content: string) => void;
+};
+
+export function EditorTab({
+  workspaceId,
+  filePath,
+  content,
+  language,
+  readOnly,
+  onDirtyChange,
+  onContentChange,
+}: EditorTabProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const onDirtyChangeRef = useRef(onDirtyChange);
+  const onContentChangeRef = useRef(onContentChange);
+
+  useEffect(() => {
+    onDirtyChangeRef.current = onDirtyChange;
+    onContentChangeRef.current = onContentChange;
+  }, [onDirtyChange, onContentChange]);
 
   useEffect(() => {
     let disposed = false;
+    let disposable: { dispose: () => void } | undefined;
 
     void loadMonaco().then((monaco) => {
-      if (disposed || !hostRef.current || editorRef.current) {
+      if (disposed || !hostRef.current) {
         return;
       }
 
       editorRef.current = monaco.editor.create(hostRef.current, {
-        value: initialEditorText(),
-        language: "typescript",
+        value: content,
+        language,
+        readOnly,
         automaticLayout: true,
         minimap: { enabled: false },
         fontSize: 13,
+      });
+
+      const model = editorRef.current.getModel();
+      disposable = model?.onDidChangeContent(() => {
+        const next = editorRef.current?.getValue() ?? "";
+        onContentChangeRef.current(next);
+        onDirtyChangeRef.current(next !== content);
       });
     });
 
     return () => {
       disposed = true;
+      disposable?.dispose();
       editorRef.current?.dispose();
       editorRef.current = null;
     };
-  }, []);
+  }, [content, filePath, language, readOnly, workspaceId]);
 
-  return <div ref={hostRef} className="monaco-host" />;
+  return (
+    <div
+      ref={hostRef}
+      className="monaco-host"
+      data-file-path={filePath}
+      data-workspace-id={workspaceId}
+    />
+  );
 }

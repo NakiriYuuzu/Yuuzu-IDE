@@ -7,11 +7,12 @@ import {
   Play,
   Plus,
   RotateCw,
+  Save,
   SplitSquareHorizontal,
   SquareTerminal,
   X,
 } from "lucide-react";
-import { lazy, Suspense, useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useRef, useState } from "react";
 
 import { ActivityRail, type ActivityId } from "./activity-rail";
 import { CommandPalette } from "./CommandPalette";
@@ -19,18 +20,28 @@ import {
   createTextFile,
   deletePath,
   renamePath,
+  readTextFile,
+  writeTextFile,
 } from "../features/files/file-api";
 import {
+  clearDraft,
+  createDraftKey,
+  loadDraft,
+  saveDraft,
+} from "../features/files/draft-store";
+import {
+  applySavedVersion,
   closeFileTab,
+  markFileDirty,
   openFileTab,
-  type FileVersion,
 } from "../features/files/file-model";
 import {
-  editorTabForPath,
   fileIconClassFromName,
+  isSameOrDescendant,
   parentNameFromPath,
   removeEditorPath,
   renameEditorPath,
+  replacePathPrefix,
   surfaceAfterEditorRemoval,
 } from "../features/workspace/file-tree-model";
 import { FileTreePanel } from "../features/workspace/FileTreePanel";
@@ -62,6 +73,79 @@ const panelTitles: Record<ActivityId, string> = {
   database: "Database",
   settings: "Settings",
 };
+
+type LoadedFile = {
+  path: string;
+  content: string;
+  language: string;
+  readOnly: boolean;
+};
+
+function languageForPath(path: string): string {
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".ts") || lower.endsWith(".tsx")) return "typescript";
+  if (lower.endsWith(".js") || lower.endsWith(".jsx")) return "javascript";
+  if (lower.endsWith(".rs")) return "rust";
+  if (lower.endsWith(".json")) return "json";
+  if (lower.endsWith(".md")) return "markdown";
+  if (lower.endsWith(".css")) return "css";
+  if (lower.endsWith(".html")) return "html";
+  if (lower.endsWith(".sql")) return "sql";
+  if (lower.endsWith(".toml")) return "toml";
+  if (lower.endsWith(".yaml") || lower.endsWith(".yml")) return "yaml";
+  return "plaintext";
+}
+
+function localStorageOrNull(): Storage | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function tryLoadDraft(workspaceId: string, path: string): string | null {
+  const storage = localStorageOrNull();
+  if (!storage) {
+    return null;
+  }
+
+  try {
+    return loadDraft(storage, createDraftKey(workspaceId, path));
+  } catch {
+    return null;
+  }
+}
+
+function trySaveDraft(workspaceId: string, path: string, content: string): void {
+  const storage = localStorageOrNull();
+  if (!storage) {
+    return;
+  }
+
+  try {
+    saveDraft(storage, createDraftKey(workspaceId, path), content);
+  } catch {
+    // Draft persistence is best-effort so browser storage failures do not break editing.
+  }
+}
+
+function tryClearDraft(workspaceId: string, path: string): void {
+  const storage = localStorageOrNull();
+  if (!storage) {
+    return;
+  }
+
+  try {
+    clearDraft(storage, createDraftKey(workspaceId, path));
+  } catch {
+    // Clearing drafts is also best-effort.
+  }
+}
 
 function PanelBody({
   active,
@@ -103,6 +187,11 @@ function PanelBody({
 export function AppShell() {
   const [fileTreeRefreshKey, setFileTreeRefreshKey] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [loadedFile, setLoadedFile] = useState<LoadedFile | null>(null);
+  const [editorContent, setEditorContent] = useState("");
+  const [editorError, setEditorError] = useState<string | null>(null);
+  const savedContentByPathRef = useRef<Record<string, string>>({});
+  const openRequestRef = useRef(0);
   const registry = useWorkspaceStore((state) => state.registry);
   const activeWorkspaceId = registry.active_workspace_id;
   const view = useWorkspaceViewStore((state) => state.viewFor(activeWorkspaceId));
@@ -137,14 +226,113 @@ export function AppShell() {
   const activeEditorParent = activeEditorTab
     ? parentNameFromPath(activeEditorTab.path)
     : "";
-  const activeEditorIconClass = fileIconClassFromName(activeEditorName);
-  const showEditor = surface === "editor" && activeEditorTab !== null;
+  const showEditor = surface === "editor";
+  const showLoadedEditor =
+    showEditor &&
+    activeEditorTab !== null &&
+    loadedFile?.path === activeEditorTab.path;
 
-  function openFile(path: string, version: FileVersion | null = null) {
+  async function openFile(path: string) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const requestId = openRequestRef.current + 1;
+    openRequestRef.current = requestId;
+    setEditorError(null);
+
+    try {
+      const read = await readTextFile(activeWorkspace.path, path);
+      if (requestId !== openRequestRef.current) {
+        return;
+      }
+
+      const name = path.split(/[\\/]/).pop() ?? path;
+      const diskContent = read.content ?? "";
+      const draft = read.too_large ? null : tryLoadDraft(activeWorkspaceId, path);
+      const content = draft ?? diskContent;
+
+      savedContentByPathRef.current[path] = diskContent;
+      updateEditor(activeWorkspaceId, (editor) =>
+        openFileTab(editor, {
+          path,
+          name,
+          dirty: draft !== null,
+          tooLarge: read.too_large,
+          version: read.version,
+          externalChange: false,
+        }),
+      );
+      setLoadedFile({
+        path,
+        content,
+        language: languageForPath(path),
+        readOnly: read.too_large,
+      });
+      setEditorContent(content);
+      setSurface("editor");
+    } catch (err) {
+      if (requestId !== openRequestRef.current) {
+        return;
+      }
+
+      setLoadedFile(null);
+      setEditorContent("");
+      setEditorError(err instanceof Error ? err.message : String(err));
+      setSurface("editor");
+    }
+  }
+
+  function handleEditorContentChange(content: string) {
+    if (!activeWorkspaceId || !loadedFile) {
+      return;
+    }
+
+    const savedContent = savedContentByPathRef.current[loadedFile.path] ?? "";
+    const dirty = content !== savedContent;
+    setEditorContent(content);
     updateEditor(activeWorkspaceId, (editor) =>
-      openFileTab(editor, editorTabForPath(path, version)),
+      markFileDirty(editor, loadedFile.path, dirty),
     );
-    setSurface("editor");
+
+    if (dirty) {
+      trySaveDraft(activeWorkspaceId, loadedFile.path, content);
+    } else {
+      tryClearDraft(activeWorkspaceId, loadedFile.path);
+    }
+  }
+
+  async function saveActiveFile(content: string) {
+    const currentView = workspaceViewStore
+      .getState()
+      .viewFor(activeWorkspaceId);
+    const activePath = currentView.editor.activePath;
+    const activeTab = currentView.editor.tabs.find(
+      (tab) => tab.path === activePath,
+    );
+    if (!activeWorkspace || !activeWorkspaceId || !activePath || !activeTab) {
+      return;
+    }
+
+    setEditorError(null);
+
+    try {
+      const result = await writeTextFile(
+        activeWorkspace.path,
+        activePath,
+        content,
+        activeTab.version,
+      );
+      if (result.version) {
+        savedContentByPathRef.current[activePath] = content;
+        updateEditor(activeWorkspaceId, (editor) =>
+          applySavedVersion(editor, activePath, result.version!),
+        );
+        tryClearDraft(activeWorkspaceId, activePath);
+      }
+    } catch (err) {
+      setEditorError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function createFileFromExplorer(relativePath: string) {
@@ -153,7 +341,7 @@ export function AppShell() {
     }
 
     const result = await createTextFile(activeWorkspace.path, relativePath);
-    openFile(result.path, result.version);
+    await openFile(result.path);
     setFileTreeRefreshKey((value) => value + 1);
   }
 
@@ -180,6 +368,24 @@ export function AppShell() {
     updateEditor(activeWorkspaceId, (editor) =>
       renameEditorPath(editor, path, result.path, result.version),
     );
+    setLoadedFile((current) => {
+      if (!current || !isSameOrDescendant(current.path, path)) {
+        return current;
+      }
+
+      const nextPath = replacePathPrefix(current.path, path, result.path);
+      const savedContent = savedContentByPathRef.current[current.path];
+      if (savedContent !== undefined) {
+        delete savedContentByPathRef.current[current.path];
+        savedContentByPathRef.current[nextPath] = savedContent;
+      }
+
+      return {
+        ...current,
+        path: nextPath,
+        language: languageForPath(nextPath),
+      };
+    });
     setFileTreeRefreshKey((value) => value + 1);
   }
 
@@ -198,24 +404,48 @@ export function AppShell() {
       currentView.editor,
       nextEditor,
     );
+    const removedLoadedFile = loadedFile
+      ? isSameOrDescendant(loadedFile.path, path)
+      : false;
     updateEditor(activeWorkspaceId, (editor) => removeEditorPath(editor, path));
     if (nextSurface !== currentView.surface) {
       updateView(activeWorkspaceId, { surface: nextSurface });
     }
+    if (removedLoadedFile) {
+      setLoadedFile(null);
+      setEditorContent("");
+      setEditorError(null);
+    }
+    if (removedLoadedFile && nextSurface === "editor" && nextEditor.activePath) {
+      void openFile(nextEditor.activePath);
+    }
     setFileTreeRefreshKey((value) => value + 1);
   }
 
-  function closeActiveEditor() {
-    if (!activeEditorTab) {
-      setSurface("empty");
+  function closeEditorTab(path: string) {
+    const nextEditor = closeFileTab(view.editor, path);
+    updateEditor(activeWorkspaceId, () => nextEditor);
+
+    if (view.editor.activePath !== path) {
       return;
     }
 
-    const nextEditor = closeFileTab(view.editor, activeEditorTab.path);
-    updateEditor(activeWorkspaceId, () => nextEditor);
-    if (!nextEditor.activePath) {
-      setSurface("empty");
+    if (loadedFile?.path === path) {
+      setLoadedFile(null);
+      setEditorContent("");
+      setEditorError(null);
     }
+
+    if (surface !== "editor") {
+      return;
+    }
+
+    if (nextEditor.activePath) {
+      void openFile(nextEditor.activePath);
+      return;
+    }
+
+    setSurface("empty");
   }
 
   function runCommand(id: string) {
@@ -340,24 +570,55 @@ export function AppShell() {
         <main className="editor-region">
           <section className="group focus">
             <div className="tabstrip">
-              {showEditor ? (
-                <div className="tab active">
-                  <FileCode2
-                    className={`ftype ${activeEditorIconClass}`}
-                    aria-hidden="true"
-                  />
-                  <span className="tlabel mono">{activeEditorName}</span>
-                  <button
-                    type="button"
-                    className="close"
-                    title="Close editor"
-                    aria-label="Close editor"
-                    onClick={closeActiveEditor}
+              {view.editor.tabs.map((tab) => {
+                const isActive =
+                  surface === "editor" && tab.path === view.editor.activePath;
+                const iconClass = fileIconClassFromName(tab.name);
+
+                return (
+                  <div
+                    className={`tab${isActive ? " active" : ""}`}
+                    key={tab.path}
+                    role="tab"
+                    aria-selected={isActive}
+                    tabIndex={0}
+                    title={tab.path}
+                    onClick={() => void openFile(tab.path)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        void openFile(tab.path);
+                      }
+                    }}
                   >
-                    <X aria-hidden="true" />
-                  </button>
-                </div>
-              ) : null}
+                    <FileCode2
+                      className={`ftype ${iconClass}`}
+                      aria-hidden="true"
+                    />
+                    <span className={`tlabel mono${tab.dirty ? " dirty" : ""}`}>
+                      {tab.name}
+                    </span>
+                    {tab.dirty ? (
+                      <span
+                        className="dirtydot"
+                        aria-label="Unsaved changes"
+                      />
+                    ) : null}
+                    <button
+                      type="button"
+                      className="close"
+                      title={`Close ${tab.name}`}
+                      aria-label={`Close ${tab.name}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        closeEditorTab(tab.path);
+                      }}
+                    >
+                      <X aria-hidden="true" />
+                    </button>
+                  </div>
+                );
+              })}
               {surface === "terminal" ? (
                 <div className="tab active">
                   <SquareTerminal className="ftype" aria-hidden="true" />
@@ -396,22 +657,28 @@ export function AppShell() {
             </div>
 
             <div className="breadcrumb">
-              <span className="crumb">src</span>
-              <ChevronDown aria-hidden="true" />
               <span className="crumb">
-                {showEditor
-                  ? activeEditorParent
-                  : surface === "terminal"
-                    ? "terminal"
-                    : "app"}
+                {activeWorkspace?.name ?? "workspace"}
               </span>
               <ChevronDown aria-hidden="true" />
               <span className="crumb">
-                {showEditor
+                {activeEditorTab
+                  ? activeEditorParent
+                  : surface === "terminal"
+                    ? "terminal"
+                    : surface === "editor"
+                      ? "editor"
+                      : "workspace"}
+              </span>
+              <ChevronDown aria-hidden="true" />
+              <span className="crumb">
+                {activeEditorTab
                   ? activeEditorName
                   : surface === "terminal"
                     ? "shell"
-                    : "AppShell.tsx"}
+                    : surface === "editor"
+                      ? "No file open"
+                      : "Start"}
               </span>
             </div>
 
@@ -423,11 +690,54 @@ export function AppShell() {
               }`}
             >
               {showEditor ? (
-                <Suspense
-                  fallback={<div className="editor-loading">Loading editor</div>}
-                >
-                  <EditorTab />
-                </Suspense>
+                <>
+                  <div className="editor-toolbar">
+                    <span className="path-label mono">
+                      {activeEditorTab?.path ?? "No file open"}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={
+                        !showLoadedEditor ||
+                        (loadedFile?.readOnly ?? true) ||
+                        !activeEditorTab?.dirty
+                      }
+                      onClick={() => void saveActiveFile(editorContent)}
+                    >
+                      <Save aria-hidden="true" />
+                      Save
+                    </button>
+                  </div>
+
+                  {editorError ? (
+                    <div className="large-file-note">{editorError}</div>
+                  ) : !activeEditorTab ? (
+                    <div className="large-file-note">No file open</div>
+                  ) : !showLoadedEditor ? (
+                    <div className="editor-loading">Loading editor</div>
+                  ) : loadedFile!.readOnly ? (
+                    <div className="large-file-note">
+                      This file is too large to edit. It was opened read-only.
+                    </div>
+                  ) : (
+                    <Suspense
+                      fallback={
+                        <div className="editor-loading">Loading editor</div>
+                      }
+                    >
+                      <EditorTab
+                        workspaceId={activeWorkspaceId ?? ""}
+                        filePath={loadedFile!.path}
+                        content={loadedFile!.content}
+                        language={loadedFile!.language}
+                        readOnly={loadedFile!.readOnly}
+                        onContentChange={handleEditorContentChange}
+                        onDirtyChange={() => undefined}
+                      />
+                    </Suspense>
+                  )}
+                </>
               ) : surface === "terminal" ? (
                 <Suspense
                   fallback={

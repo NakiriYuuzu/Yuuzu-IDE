@@ -700,6 +700,18 @@ button {
   text-overflow: ellipsis;
 }
 
+.tab .tlabel.dirty {
+  color: var(--txt);
+}
+
+.dirtydot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 999px;
+  background: var(--yuzu);
+}
+
 .tab .close {
   width: 16px;
   height: 16px;
@@ -760,12 +772,43 @@ button {
 }
 
 .group-content.editor-content {
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   padding: 0;
   background: var(--editor);
 }
 
+.editor-toolbar {
+  height: 34px;
+  flex: 0 0 34px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--chrome);
+}
+
+.editor-toolbar .path-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--txt-dim);
+}
+
+.large-file-note {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--txt-faint);
+}
+
 .monaco-host {
+  flex: 1;
+  min-height: 0;
   width: 100%;
   height: 100%;
 }
@@ -876,6 +919,12 @@ button {
 .btn svg {
   width: 15px;
   height: 15px;
+}
+
+.btn:disabled {
+  color: var(--txt-faint);
+  cursor: default;
+  opacity: 0.55;
 }
 
 .btn.primary {
