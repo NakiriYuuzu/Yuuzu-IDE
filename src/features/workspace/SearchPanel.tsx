@@ -1,15 +1,28 @@
 import { FileCode2, Search } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useWorkspaceStore } from "../../app/workspace-store";
 import { searchWorkspace } from "../files/file-api";
 import {
+  createSearchRequestIdentity,
   searchSummary,
+  shouldApplySearchResult,
+  type SearchRequestIdentity,
   type WorkspaceSearchResult,
 } from "../files/search-model";
 
 type SearchPanelProps = {
   onOpenFile: (path: string) => void;
+};
+
+type SearchResultState = {
+  identity: SearchRequestIdentity;
+  value: WorkspaceSearchResult;
+};
+
+type SearchErrorState = {
+  identity: SearchRequestIdentity;
+  message: string;
 };
 
 function fileNameFromPath(path: string): string {
@@ -22,58 +35,111 @@ export function SearchPanel({ onOpenFile }: SearchPanelProps) {
     registry.workspaces.find(
       (workspace) => workspace.id === registry.active_workspace_id,
     ) ?? null;
+  const activeWorkspaceId = activeWorkspace?.id ?? null;
+  const activeWorkspacePath = activeWorkspace?.path ?? null;
   const [query, setQuery] = useState("");
-  const [result, setResult] = useState<WorkspaceSearchResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<SearchResultState | null>(null);
+  const [error, setError] = useState<SearchErrorState | null>(null);
+  const [loadingIdentity, setLoadingIdentity] =
+    useState<SearchRequestIdentity | null>(null);
   const requestRef = useRef(0);
+  const currentIdentityRef = useRef<SearchRequestIdentity>(
+    createSearchRequestIdentity({
+      requestId: 0,
+      workspaceId: null,
+      workspacePath: null,
+      query: "",
+    }),
+  );
+
+  const currentRenderIdentity = createSearchRequestIdentity({
+    requestId: currentIdentityRef.current.requestId,
+    workspaceId: activeWorkspaceId,
+    workspacePath: activeWorkspacePath,
+    query,
+  });
+  const visibleResult =
+    result && shouldApplySearchResult(result.identity, currentRenderIdentity)
+      ? result.value
+      : null;
+  const visibleError =
+    error && shouldApplySearchResult(error.identity, currentRenderIdentity)
+      ? error.message
+      : null;
+  const isLoading =
+    loadingIdentity &&
+    shouldApplySearchResult(loadingIdentity, currentRenderIdentity);
+
+  function setCurrentIdentity(nextQuery: string): SearchRequestIdentity {
+    const identity = createSearchRequestIdentity({
+      requestId: requestRef.current + 1,
+      workspaceId: activeWorkspaceId,
+      workspacePath: activeWorkspacePath,
+      query: nextQuery,
+    });
+    requestRef.current = identity.requestId;
+    currentIdentityRef.current = identity;
+    return identity;
+  }
+
+  useEffect(() => {
+    setCurrentIdentity(query);
+    setResult(null);
+    setError(null);
+    setLoadingIdentity(null);
+  }, [activeWorkspaceId, activeWorkspacePath]);
 
   async function runSearch(nextQuery = query) {
-    const trimmedQuery = nextQuery.trim();
+    const requestIdentity = setCurrentIdentity(nextQuery);
 
-    if (!activeWorkspace || !trimmedQuery) {
-      requestRef.current += 1;
+    if (!requestIdentity.workspacePath || !requestIdentity.query) {
       setResult(null);
       setError(null);
-      setLoading(false);
+      setLoadingIdentity(null);
       return;
     }
 
-    const requestId = requestRef.current + 1;
-    requestRef.current = requestId;
-    setLoading(true);
+    setLoadingIdentity(requestIdentity);
     setError(null);
 
     try {
-      const nextResult = await searchWorkspace(activeWorkspace.path, trimmedQuery);
-      if (requestId !== requestRef.current) {
+      const nextResult = await searchWorkspace(
+        requestIdentity.workspacePath,
+        requestIdentity.query,
+      );
+      if (
+        !shouldApplySearchResult(requestIdentity, currentIdentityRef.current)
+      ) {
         return;
       }
 
-      setResult(nextResult);
+      setResult({ identity: requestIdentity, value: nextResult });
       setError(null);
     } catch (err) {
-      if (requestId !== requestRef.current) {
+      if (
+        !shouldApplySearchResult(requestIdentity, currentIdentityRef.current)
+      ) {
         return;
       }
 
       setResult(null);
-      setError(err instanceof Error ? err.message : String(err));
+      setError({
+        identity: requestIdentity,
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
-      if (requestId === requestRef.current) {
-        setLoading(false);
+      if (shouldApplySearchResult(requestIdentity, currentIdentityRef.current)) {
+        setLoadingIdentity(null);
       }
     }
   }
 
   function updateQuery(nextQuery: string) {
     setQuery(nextQuery);
-    if (!nextQuery.trim()) {
-      requestRef.current += 1;
-      setResult(null);
-      setError(null);
-      setLoading(false);
-    }
+    setCurrentIdentity(nextQuery);
+    setResult(null);
+    setError(null);
+    setLoadingIdentity(null);
   }
 
   return (
@@ -93,13 +159,15 @@ export function SearchPanel({ onOpenFile }: SearchPanelProps) {
         />
       </label>
 
-      {loading ? <div className="search-summary">Searching...</div> : null}
-      {!loading && result ? (
-        <div className="search-summary">{searchSummary(result)}</div>
+      {isLoading ? <div className="search-summary">Searching...</div> : null}
+      {!isLoading && visibleResult ? (
+        <div className="search-summary">{searchSummary(visibleResult)}</div>
       ) : null}
-      {error ? <div className="panel-error-inline">{error}</div> : null}
+      {visibleError ? (
+        <div className="panel-error-inline">{visibleError}</div>
+      ) : null}
 
-      {result?.filename_matches.map((item) => (
+      {visibleResult?.filename_matches.map((item) => (
         <button
           type="button"
           className="row tree-row"
@@ -113,7 +181,7 @@ export function SearchPanel({ onOpenFile }: SearchPanelProps) {
         </button>
       ))}
 
-      {result?.text_matches.map((file) => (
+      {visibleResult?.text_matches.map((file) => (
         <div key={`text-${file.path}`}>
           <button
             type="button"

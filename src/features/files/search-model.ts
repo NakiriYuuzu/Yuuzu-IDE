@@ -19,6 +19,39 @@ export type WorkspaceSearchResult = {
   truncated: boolean;
 };
 
+export type SearchRequestIdentity = {
+  requestId: number;
+  workspaceId: string | null;
+  workspacePath: string | null;
+  query: string;
+};
+
+export function createSearchRequestIdentity({
+  requestId,
+  workspaceId,
+  workspacePath,
+  query,
+}: SearchRequestIdentity): SearchRequestIdentity {
+  return {
+    requestId,
+    workspaceId,
+    workspacePath,
+    query: query.trim(),
+  };
+}
+
+export function shouldApplySearchResult(
+  request: SearchRequestIdentity,
+  current: SearchRequestIdentity,
+): boolean {
+  return (
+    request.requestId === current.requestId &&
+    request.workspaceId === current.workspaceId &&
+    request.workspacePath === current.workspacePath &&
+    request.query === current.query
+  );
+}
+
 export function searchSummary(result: WorkspaceSearchResult): string {
   const fileCount = new Set([
     ...result.filename_matches.map((item) => item.path),
