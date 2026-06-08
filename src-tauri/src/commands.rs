@@ -2,6 +2,7 @@ use std::sync::Mutex;
 
 use tauri::State;
 
+use crate::metrics::{snapshot, AppMetricSnapshot};
 use crate::workspace::{Workspace, WorkspaceRegistry};
 use crate::workspace_scan::{self, FileTreeEntry};
 
@@ -55,4 +56,9 @@ pub fn scan_workspace(path: String) -> Result<Vec<FileTreeEntry>, String> {
 #[tauri::command]
 pub fn terminal_probe() -> Result<String, String> {
     crate::pty::spawn_shell_probe()
+}
+
+#[tauri::command]
+pub fn metric_snapshot() -> Result<AppMetricSnapshot, String> {
+    Ok(snapshot())
 }

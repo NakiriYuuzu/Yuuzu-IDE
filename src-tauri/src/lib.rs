@@ -1,4 +1,5 @@
 mod commands;
+mod metrics;
 mod pty;
 mod workspace;
 mod workspace_scan;
@@ -12,7 +13,8 @@ pub fn run() {
             commands::add_workspace,
             commands::switch_workspace,
             commands::scan_workspace,
-            commands::terminal_probe
+            commands::terminal_probe,
+            commands::metric_snapshot
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
