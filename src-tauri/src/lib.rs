@@ -1,6 +1,7 @@
 mod commands;
 mod metrics;
 mod pty;
+mod settings;
 mod workspace;
 mod workspace_scan;
 mod workspace_store;
@@ -17,6 +18,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::load_settings,
+            commands::save_settings,
             commands::list_workspaces,
             commands::add_workspace,
             commands::switch_workspace,

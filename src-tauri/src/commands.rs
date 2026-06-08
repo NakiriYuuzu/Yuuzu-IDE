@@ -6,6 +6,7 @@ use std::{
 use tauri::State;
 
 use crate::metrics::{snapshot, AppMetricSnapshot};
+use crate::settings::{AppSettings, SettingsStore};
 use crate::workspace::{Workspace, WorkspaceRegistry};
 use crate::workspace_scan::{self, FileTreeEntry};
 use crate::workspace_store::WorkspaceRegistryStore;
@@ -13,6 +14,8 @@ use crate::workspace_store::WorkspaceRegistryStore;
 pub struct AppState {
     registry: Mutex<WorkspaceRegistry>,
     registry_store: WorkspaceRegistryStore,
+    settings: Mutex<AppSettings>,
+    settings_store: SettingsStore,
 }
 
 impl AppState {
@@ -20,10 +23,14 @@ impl AppState {
         let registry_store =
             WorkspaceRegistryStore::new(config_dir.as_ref().join("workspace-registry.json"));
         let registry = registry_store.load()?;
+        let settings_store = SettingsStore::new(config_dir.as_ref().join("settings.json"));
+        let settings = settings_store.load()?;
 
         Ok(Self {
             registry: Mutex::new(registry),
             registry_store,
+            settings: Mutex::new(settings),
+            settings_store,
         })
     }
 
@@ -44,6 +51,18 @@ impl AppState {
         Ok(registry.clone())
     }
 
+    pub fn settings_snapshot(&self) -> Result<AppSettings, String> {
+        let settings = self.settings.lock().map_err(|err| err.to_string())?;
+        Ok(settings.clone())
+    }
+
+    pub fn save_settings(&self, settings: AppSettings) -> Result<AppSettings, String> {
+        let mut current = self.settings.lock().map_err(|err| err.to_string())?;
+        self.settings_store.save(&settings)?;
+        *current = settings.clone();
+        Ok(settings)
+    }
+
     pub fn open_workspace_path(&self, path: PathBuf) -> Result<WorkspaceRegistry, String> {
         if !path.is_dir() {
             return Err(format!(
@@ -57,6 +76,19 @@ impl AppState {
             Ok(())
         })
     }
+}
+
+#[tauri::command]
+pub fn load_settings(state: State<'_, AppState>) -> Result<AppSettings, String> {
+    state.settings_snapshot()
+}
+
+#[tauri::command]
+pub fn save_settings(
+    state: State<'_, AppState>,
+    settings: AppSettings,
+) -> Result<AppSettings, String> {
+    state.save_settings(settings)
 }
 
 #[tauri::command]
@@ -181,6 +213,13 @@ mod tests {
         }
     }
 
+    fn settings(density: &str, color_theme: &str) -> AppSettings {
+        AppSettings {
+            density: density.to_string(),
+            color_theme: color_theme.to_string(),
+        }
+    }
+
     #[test]
     fn app_state_loads_registry_from_store() {
         let temp = tempdir().expect("temp dir");
@@ -189,6 +228,31 @@ mod tests {
         let registry = state.registry_snapshot().expect("registry");
 
         assert_eq!(registry.workspaces.len(), 0);
+    }
+
+    #[test]
+    fn app_state_loads_settings_from_store() {
+        let temp = tempdir().expect("temp dir");
+        let expected = settings("comfortable", "light");
+        SettingsStore::new(temp.path().join("settings.json"))
+            .save(&expected)
+            .expect("save settings");
+
+        let state = AppState::new(temp.path()).expect("state");
+
+        assert_eq!(state.settings_snapshot().expect("settings"), expected);
+    }
+
+    #[test]
+    fn app_state_persists_settings_changes() {
+        let temp = tempdir().expect("temp dir");
+        let state = AppState::new(temp.path()).expect("state");
+        let changed = settings("comfortable", "light");
+
+        state.save_settings(changed.clone()).expect("save settings");
+        let reloaded = AppState::new(temp.path()).expect("reload");
+
+        assert_eq!(reloaded.settings_snapshot().expect("settings"), changed);
     }
 
     #[test]
@@ -211,6 +275,27 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn app_state_rolls_back_settings_when_save_fails() {
+        let temp = tempdir().expect("temp dir");
+        let settings_path = temp.path().join("settings.json");
+        let original = settings("compact", "dark");
+        let changed = settings("comfortable", "light");
+        SettingsStore::new(settings_path.clone())
+            .save(&original)
+            .expect("initial save");
+        std::fs::set_permissions(&settings_path, std::fs::Permissions::from_mode(0o600))
+            .expect("settings file writable");
+        let state = AppState::new(temp.path()).expect("state");
+        let _config_permissions = PermissionGuard::set(temp.path(), 0o500);
+
+        let result = state.save_settings(changed);
+
+        assert!(result.is_err(), "save should fail without config dir write");
+        assert_eq!(state.settings_snapshot().expect("settings"), original);
     }
 
     #[cfg(unix)]
