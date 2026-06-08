@@ -13,6 +13,20 @@ type EditorTabProps = {
   onContentChange: (content: string) => void;
 };
 
+type EditorIdentityInput = Pick<
+  EditorTabProps,
+  "workspaceId" | "filePath" | "language" | "readOnly" | "content"
+>;
+
+export function createEditorIdentity({
+  workspaceId,
+  filePath,
+  language,
+  readOnly,
+}: EditorIdentityInput): string {
+  return `${workspaceId}:${filePath}:${language}:${readOnly}`;
+}
+
 export function EditorTab({
   workspaceId,
   filePath,
@@ -26,6 +40,13 @@ export function EditorTab({
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const onDirtyChangeRef = useRef(onDirtyChange);
   const onContentChangeRef = useRef(onContentChange);
+  const editorIdentity = createEditorIdentity({
+    workspaceId,
+    filePath,
+    language,
+    readOnly,
+    content,
+  });
 
   useEffect(() => {
     onDirtyChangeRef.current = onDirtyChange;
@@ -35,6 +56,7 @@ export function EditorTab({
   useEffect(() => {
     let disposed = false;
     let disposable: { dispose: () => void } | undefined;
+    const initialContent = content;
 
     void loadMonaco().then((monaco) => {
       if (disposed || !hostRef.current) {
@@ -54,7 +76,7 @@ export function EditorTab({
       disposable = model?.onDidChangeContent(() => {
         const next = editorRef.current?.getValue() ?? "";
         onContentChangeRef.current(next);
-        onDirtyChangeRef.current(next !== content);
+        onDirtyChangeRef.current(next !== initialContent);
       });
     });
 
@@ -64,7 +86,7 @@ export function EditorTab({
       editorRef.current?.dispose();
       editorRef.current = null;
     };
-  }, [content, filePath, language, readOnly, workspaceId]);
+  }, [editorIdentity]);
 
   return (
     <div

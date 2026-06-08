@@ -12,10 +12,17 @@ import {
   SquareTerminal,
   X,
 } from "lucide-react";
-import { lazy, Suspense, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import { ActivityRail, type ActivityId } from "./activity-rail";
 import { CommandPalette } from "./CommandPalette";
+import {
+  createLoadedFileKey,
+  isLoadedEditorForActiveFile,
+  shouldLoadActiveEditor,
+  updateLoadedFileContent,
+  type LoadedFile,
+} from "./editor-buffer-state";
 import {
   createTextFile,
   deletePath,
@@ -72,13 +79,6 @@ const panelTitles: Record<ActivityId, string> = {
   terminal: "Terminal",
   database: "Database",
   settings: "Settings",
-};
-
-type LoadedFile = {
-  path: string;
-  content: string;
-  language: string;
-  readOnly: boolean;
 };
 
 function languageForPath(path: string): string {
@@ -188,7 +188,6 @@ export function AppShell() {
   const [fileTreeRefreshKey, setFileTreeRefreshKey] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [loadedFile, setLoadedFile] = useState<LoadedFile | null>(null);
-  const [editorContent, setEditorContent] = useState("");
   const [editorError, setEditorError] = useState<string | null>(null);
   const savedContentByPathRef = useRef<Record<string, string>>({});
   const openRequestRef = useRef(0);
@@ -227,10 +226,12 @@ export function AppShell() {
     ? parentNameFromPath(activeEditorTab.path)
     : "";
   const showEditor = surface === "editor";
-  const showLoadedEditor =
-    showEditor &&
-    activeEditorTab !== null &&
-    loadedFile?.path === activeEditorTab.path;
+  const showLoadedEditor = isLoadedEditorForActiveFile({
+    surface,
+    activeWorkspaceId,
+    activePath: view.editor.activePath,
+    loadedFile,
+  });
 
   async function openFile(path: string) {
     if (!activeWorkspace || !activeWorkspaceId) {
@@ -251,8 +252,9 @@ export function AppShell() {
       const diskContent = read.content ?? "";
       const draft = read.too_large ? null : tryLoadDraft(activeWorkspaceId, path);
       const content = draft ?? diskContent;
+      const fileKey = createLoadedFileKey(activeWorkspaceId, path);
 
-      savedContentByPathRef.current[path] = diskContent;
+      savedContentByPathRef.current[fileKey] = diskContent;
       updateEditor(activeWorkspaceId, (editor) =>
         openFileTab(editor, {
           path,
@@ -264,12 +266,12 @@ export function AppShell() {
         }),
       );
       setLoadedFile({
+        workspaceId: activeWorkspaceId,
         path,
         content,
         language: languageForPath(path),
         readOnly: read.too_large,
       });
-      setEditorContent(content);
       setSurface("editor");
     } catch (err) {
       if (requestId !== openRequestRef.current) {
@@ -277,20 +279,59 @@ export function AppShell() {
       }
 
       setLoadedFile(null);
-      setEditorContent("");
       setEditorError(err instanceof Error ? err.message : String(err));
       setSurface("editor");
     }
   }
 
-  function handleEditorContentChange(content: string) {
-    if (!activeWorkspaceId || !loadedFile) {
+  useEffect(() => {
+    if (surface !== "editor") {
       return;
     }
 
-    const savedContent = savedContentByPathRef.current[loadedFile.path] ?? "";
+    if (!activeWorkspace || !activeWorkspaceId || !view.editor.activePath) {
+      setLoadedFile(null);
+      setEditorError(null);
+      return;
+    }
+
+    if (
+      shouldLoadActiveEditor({
+        surface,
+        activeWorkspaceId,
+        activePath: view.editor.activePath,
+        loadedFile,
+      })
+    ) {
+      void openFile(view.editor.activePath);
+    }
+  }, [activeWorkspaceId, activeWorkspace?.path, surface, view.editor.activePath]);
+
+  function handleEditorContentChange(content: string) {
+    if (
+      !activeWorkspaceId ||
+      !loadedFile ||
+      !isLoadedEditorForActiveFile({
+        surface,
+        activeWorkspaceId,
+        activePath: view.editor.activePath,
+        loadedFile,
+      })
+    ) {
+      return;
+    }
+
+    const fileKey = createLoadedFileKey(activeWorkspaceId, loadedFile.path);
+    const savedContent = savedContentByPathRef.current[fileKey] ?? "";
     const dirty = content !== savedContent;
-    setEditorContent(content);
+    setLoadedFile((current) =>
+      updateLoadedFileContent(
+        current,
+        activeWorkspaceId,
+        loadedFile.path,
+        content,
+      ),
+    );
     updateEditor(activeWorkspaceId, (editor) =>
       markFileDirty(editor, loadedFile.path, dirty),
     );
@@ -302,7 +343,7 @@ export function AppShell() {
     }
   }
 
-  async function saveActiveFile(content: string) {
+  async function saveActiveFile() {
     const currentView = workspaceViewStore
       .getState()
       .viewFor(activeWorkspaceId);
@@ -310,13 +351,23 @@ export function AppShell() {
     const activeTab = currentView.editor.tabs.find(
       (tab) => tab.path === activePath,
     );
-    if (!activeWorkspace || !activeWorkspaceId || !activePath || !activeTab) {
+    if (
+      !activeWorkspace ||
+      !activeWorkspaceId ||
+      !activePath ||
+      !activeTab ||
+      !loadedFile ||
+      loadedFile.workspaceId !== activeWorkspaceId ||
+      loadedFile.path !== activePath ||
+      loadedFile.readOnly
+    ) {
       return;
     }
 
     setEditorError(null);
 
     try {
+      const content = loadedFile.content;
       const result = await writeTextFile(
         activeWorkspace.path,
         activePath,
@@ -324,7 +375,9 @@ export function AppShell() {
         activeTab.version,
       );
       if (result.version) {
-        savedContentByPathRef.current[activePath] = content;
+        savedContentByPathRef.current[
+          createLoadedFileKey(activeWorkspaceId, activePath)
+        ] = content;
         updateEditor(activeWorkspaceId, (editor) =>
           applySavedVersion(editor, activePath, result.version!),
         );
@@ -369,15 +422,22 @@ export function AppShell() {
       renameEditorPath(editor, path, result.path, result.version),
     );
     setLoadedFile((current) => {
-      if (!current || !isSameOrDescendant(current.path, path)) {
+      if (
+        !activeWorkspaceId ||
+        !current ||
+        current.workspaceId !== activeWorkspaceId ||
+        !isSameOrDescendant(current.path, path)
+      ) {
         return current;
       }
 
       const nextPath = replacePathPrefix(current.path, path, result.path);
-      const savedContent = savedContentByPathRef.current[current.path];
+      const previousKey = createLoadedFileKey(activeWorkspaceId, current.path);
+      const nextKey = createLoadedFileKey(activeWorkspaceId, nextPath);
+      const savedContent = savedContentByPathRef.current[previousKey];
       if (savedContent !== undefined) {
-        delete savedContentByPathRef.current[current.path];
-        savedContentByPathRef.current[nextPath] = savedContent;
+        delete savedContentByPathRef.current[previousKey];
+        savedContentByPathRef.current[nextKey] = savedContent;
       }
 
       return {
@@ -405,7 +465,8 @@ export function AppShell() {
       nextEditor,
     );
     const removedLoadedFile = loadedFile
-      ? isSameOrDescendant(loadedFile.path, path)
+      ? loadedFile.workspaceId === activeWorkspaceId &&
+        isSameOrDescendant(loadedFile.path, path)
       : false;
     updateEditor(activeWorkspaceId, (editor) => removeEditorPath(editor, path));
     if (nextSurface !== currentView.surface) {
@@ -413,7 +474,6 @@ export function AppShell() {
     }
     if (removedLoadedFile) {
       setLoadedFile(null);
-      setEditorContent("");
       setEditorError(null);
     }
     if (removedLoadedFile && nextSurface === "editor" && nextEditor.activePath) {
@@ -430,9 +490,11 @@ export function AppShell() {
       return;
     }
 
-    if (loadedFile?.path === path) {
+    if (
+      loadedFile?.workspaceId === activeWorkspaceId &&
+      loadedFile.path === path
+    ) {
       setLoadedFile(null);
-      setEditorContent("");
       setEditorError(null);
     }
 
@@ -703,7 +765,7 @@ export function AppShell() {
                         (loadedFile?.readOnly ?? true) ||
                         !activeEditorTab?.dirty
                       }
-                      onClick={() => void saveActiveFile(editorContent)}
+                      onClick={() => void saveActiveFile()}
                     >
                       <Save aria-hidden="true" />
                       Save
