@@ -3,7 +3,7 @@ use std::{
     ffi::OsString,
     fs,
     fs::OpenOptions,
-    io::{ErrorKind, Write},
+    io::{ErrorKind, Read, Write},
     path::{Component, Path, PathBuf},
     time::UNIX_EPOCH,
 };
@@ -171,12 +171,23 @@ pub fn read_text_file(
     max_bytes: u64,
 ) -> Result<TextFileRead, String> {
     let path = workspace_child(workspace_root, path, PathResolution::CanonicalExisting)?;
+    let metadata = fs::metadata(&path).map_err(|err| err.to_string())?;
+    if !metadata.is_file() {
+        return Err(format!("not a regular file: {}", path.display()));
+    }
+
     let version = file_version(&path)?;
-    let too_large = version.len > max_bytes;
+    let mut file = fs::File::open(&path).map_err(|err| err.to_string())?;
+    let mut buffer = Vec::new();
+    Read::by_ref(&mut file)
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut buffer)
+        .map_err(|err| err.to_string())?;
+    let too_large = buffer.len() as u64 > max_bytes;
     let content = if too_large {
         None
     } else {
-        Some(fs::read_to_string(&path).map_err(|err| err.to_string())?)
+        Some(String::from_utf8(buffer).map_err(|err| err.to_string())?)
     };
 
     Ok(TextFileRead {
@@ -208,8 +219,16 @@ pub fn write_text_file(
         }
     }
 
+    let existing_permissions = fs::metadata(&path)
+        .ok()
+        .filter(|metadata| metadata.is_file())
+        .map(|metadata| metadata.permissions());
     let (mut temp, temp_path) = create_unique_temp_file(&path)?;
     let result = (|| {
+        if let Some(permissions) = existing_permissions {
+            temp.set_permissions(permissions)
+                .map_err(|err| err.to_string())?;
+        }
         temp.write_all(content.as_bytes())
             .map_err(|err| err.to_string())?;
         temp.sync_all().map_err(|err| err.to_string())?;
@@ -298,7 +317,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[cfg(unix)]
-    use std::os::unix::fs::symlink;
+    use std::os::unix::fs::{symlink, PermissionsExt};
 
     #[test]
     fn read_text_file_returns_content_and_version() {
@@ -324,6 +343,17 @@ mod tests {
         let result = super::read_text_file(root.path(), &file, 1024);
 
         assert!(result.unwrap_err().contains("outside workspace"));
+    }
+
+    #[test]
+    fn read_text_file_rejects_directories() {
+        let root = tempdir().expect("tempdir");
+        let dir = root.path().join("src");
+        fs::create_dir(&dir).expect("create dir");
+
+        let result = super::read_text_file(root.path(), &dir, 1024);
+
+        assert!(result.unwrap_err().contains("not a regular file"));
     }
 
     #[test]
@@ -369,7 +399,9 @@ mod tests {
     fn write_text_file_does_not_truncate_existing_temp_sibling() {
         let root = tempdir().expect("tempdir");
         let file = root.path().join("note.txt");
-        let temp_sibling = root.path().join("note.txttmp");
+        let temp_sibling = root
+            .path()
+            .join(format!(".note.txt.{}.0.tmp", std::process::id()));
         fs::write(&file, "old").expect("write");
         fs::write(&temp_sibling, "do not touch").expect("write temp sibling");
 
@@ -380,6 +412,22 @@ mod tests {
             fs::read_to_string(&temp_sibling).expect("read temp sibling"),
             "do not touch"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_text_file_preserves_existing_permissions() {
+        let root = tempdir().expect("tempdir");
+        let file = root.path().join("script.sh");
+        fs::write(&file, "#!/bin/sh\n").expect("write");
+        let mut permissions = fs::metadata(&file).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&file, permissions).expect("set permissions");
+
+        super::write_text_file(root.path(), &file, "echo updated\n", None).expect("write");
+
+        let mode = fs::metadata(&file).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755);
     }
 
     #[test]
