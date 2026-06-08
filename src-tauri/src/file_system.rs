@@ -108,7 +108,7 @@ fn workspace_child(
     }
 
     let normalized = normalize_path(&candidate)?;
-    let existing_parent = nearest_existing_parent(&candidate)?
+    let existing_parent = nearest_existing_parent(&normalized)?
         .canonicalize()
         .map_err(|err| err.to_string())?;
     if !existing_parent.starts_with(&root) {
@@ -375,6 +375,36 @@ mod tests {
 
         super::delete_path(root.path(), &renamed.path).expect("delete");
         assert!(!renamed.path.exists());
+    }
+
+    #[test]
+    fn create_text_file_rejects_normalized_path_outside_workspace() {
+        let root = tempdir().expect("tempdir");
+        let outside_name = format!(
+            "outside-{}.txt",
+            root.path()
+                .file_name()
+                .and_then(|value| value.to_str())
+                .expect("tempdir name")
+        );
+        let outside = root
+            .path()
+            .parent()
+            .expect("tempdir parent")
+            .join(&outside_name);
+        assert!(!outside.exists(), "test outside file should not preexist");
+
+        let result = super::create_text_file(root.path(), &format!("missing/../../{outside_name}"));
+
+        let err = match result {
+            Ok(value) => {
+                let _ = fs::remove_file(&outside);
+                panic!("expected outside workspace error, got {value:?}");
+            }
+            Err(err) => err,
+        };
+        assert!(err.contains("outside workspace"));
+        assert!(!outside.exists(), "outside file should not be created");
     }
 
     #[cfg(unix)]
