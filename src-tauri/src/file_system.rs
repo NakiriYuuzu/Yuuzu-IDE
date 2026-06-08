@@ -102,19 +102,18 @@ fn workspace_child(
     };
 
     if candidate.exists() {
+        let normalized = normalize_path(&candidate)?;
+        if !normalized.starts_with(&root) && !normalized.starts_with(&lexical_root) {
+            return Err(format!("path outside workspace: {}", candidate.display()));
+        }
+
         let canonical = candidate.canonicalize().map_err(|err| err.to_string())?;
         if !canonical.starts_with(&root) {
             return Err(format!("path outside workspace: {}", candidate.display()));
         }
         return Ok(match resolution {
             PathResolution::CanonicalExisting => canonical,
-            PathResolution::LexicalContained => {
-                let normalized = normalize_path(&candidate)?;
-                if !normalized.starts_with(&root) && !normalized.starts_with(&lexical_root) {
-                    return Err(format!("path outside workspace: {}", candidate.display()));
-                }
-                normalized
-            }
+            PathResolution::LexicalContained => normalized,
         });
     }
 
@@ -341,6 +340,21 @@ mod tests {
         fs::write(&file, "secret").expect("write");
 
         let result = super::read_text_file(root.path(), &file, 1024);
+
+        assert!(result.unwrap_err().contains("outside workspace"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_text_file_rejects_outside_lexical_symlink_to_workspace() {
+        let root = tempdir().expect("tempdir");
+        let outside = tempdir().expect("outside");
+        let file = root.path().join("note.txt");
+        let link = outside.path().join("workspace-link");
+        fs::write(&file, "inside").expect("write");
+        symlink(root.path(), &link).expect("symlink");
+
+        let result = super::read_text_file(root.path(), &link.join("note.txt"), 1024);
 
         assert!(result.unwrap_err().contains("outside workspace"));
     }
