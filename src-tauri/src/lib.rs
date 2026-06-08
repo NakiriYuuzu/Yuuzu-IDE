@@ -2,6 +2,7 @@ mod commands;
 mod file_system;
 mod metrics;
 mod pty;
+mod search;
 mod settings;
 mod workspace;
 mod workspace_scan;
@@ -28,6 +29,7 @@ pub fn run() {
             commands::remove_workspace,
             commands::pin_workspace,
             commands::scan_workspace,
+            commands::search_workspace,
             commands::terminal_probe,
             commands::metric_snapshot,
             commands::read_text_file,

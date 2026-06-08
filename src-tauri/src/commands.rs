@@ -7,6 +7,7 @@ use tauri::State;
 
 use crate::file_system::{self, FileOperationResult, FileVersion, TextFileRead};
 use crate::metrics::{snapshot, AppMetricSnapshot};
+use crate::search::WorkspaceSearchResult;
 use crate::settings::{AppSettings, SettingsStore};
 use crate::workspace::{Workspace, WorkspaceRegistry};
 use crate::workspace_scan::{self, FileTreeEntry};
@@ -180,6 +181,21 @@ pub fn pin_workspace(
 #[tauri::command]
 pub fn scan_workspace(path: String) -> Result<Vec<FileTreeEntry>, String> {
     workspace_scan::scan_top_level(std::path::Path::new(&path))
+}
+
+#[tauri::command]
+pub fn search_workspace(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    query: String,
+) -> Result<WorkspaceSearchResult, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::search::search_workspace(
+        &workspace_root,
+        &query,
+        100,
+        file_system::EDITABLE_TEXT_LIMIT_BYTES,
+    )
 }
 
 #[tauri::command]
