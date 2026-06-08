@@ -52,6 +52,24 @@ impl AppState {
         Ok(registry.clone())
     }
 
+    pub fn trusted_workspace_root(&self, workspace_root: &str) -> Result<PathBuf, String> {
+        let supplied = Path::new(workspace_root)
+            .canonicalize()
+            .map_err(|_| format!("workspace not registered: {workspace_root}"))?;
+        let registry = self.registry.lock().map_err(|err| err.to_string())?;
+
+        for workspace in &registry.workspaces {
+            let Ok(registered) = workspace.path.canonicalize() else {
+                continue;
+            };
+            if supplied == registered {
+                return Ok(registered);
+            }
+        }
+
+        Err(format!("workspace not registered: {workspace_root}"))
+    }
+
     pub fn settings_snapshot(&self) -> Result<AppSettings, String> {
         let settings = self.settings.lock().map_err(|err| err.to_string())?;
         Ok(settings.clone())
@@ -175,9 +193,14 @@ pub fn metric_snapshot() -> Result<AppMetricSnapshot, String> {
 }
 
 #[tauri::command]
-pub fn read_text_file(workspace_root: String, path: String) -> Result<TextFileRead, String> {
+pub fn read_text_file(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    path: String,
+) -> Result<TextFileRead, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
     file_system::read_text_file(
-        Path::new(&workspace_root),
+        &workspace_root,
         Path::new(&path),
         file_system::EDITABLE_TEXT_LIMIT_BYTES,
     )
@@ -185,13 +208,15 @@ pub fn read_text_file(workspace_root: String, path: String) -> Result<TextFileRe
 
 #[tauri::command]
 pub fn write_text_file(
+    state: State<'_, AppState>,
     workspace_root: String,
     path: String,
     content: String,
     expected_version: Option<FileVersion>,
 ) -> Result<FileOperationResult, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
     file_system::write_text_file(
-        Path::new(&workspace_root),
+        &workspace_root,
         Path::new(&path),
         &content,
         expected_version,
@@ -200,24 +225,33 @@ pub fn write_text_file(
 
 #[tauri::command]
 pub fn create_text_file(
+    state: State<'_, AppState>,
     workspace_root: String,
     relative_path: String,
 ) -> Result<FileOperationResult, String> {
-    file_system::create_text_file(Path::new(&workspace_root), &relative_path)
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    file_system::create_text_file(&workspace_root, &relative_path)
 }
 
 #[tauri::command]
 pub fn rename_path(
+    state: State<'_, AppState>,
     workspace_root: String,
     path: String,
     new_name: String,
 ) -> Result<FileOperationResult, String> {
-    file_system::rename_path(Path::new(&workspace_root), Path::new(&path), &new_name)
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    file_system::rename_path(&workspace_root, Path::new(&path), &new_name)
 }
 
 #[tauri::command]
-pub fn delete_path(workspace_root: String, path: String) -> Result<(), String> {
-    file_system::delete_path(Path::new(&workspace_root), Path::new(&path))
+pub fn delete_path(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    path: String,
+) -> Result<(), String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    file_system::delete_path(&workspace_root, Path::new(&path))
 }
 
 #[cfg(test)]
@@ -322,6 +356,34 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn trusted_workspace_root_accepts_registered_workspace() {
+        let temp = tempdir().expect("temp dir");
+        let state = AppState::new(temp.path()).expect("state");
+        let workspace_path = temp.path().join("project-a");
+        std::fs::create_dir(&workspace_path).expect("project dir");
+        state
+            .open_workspace_path(workspace_path.clone())
+            .expect("open");
+
+        let trusted = state
+            .trusted_workspace_root(workspace_path.to_str().expect("workspace path"))
+            .expect("trusted workspace");
+
+        assert_eq!(trusted, workspace_path.canonicalize().expect("canonical"));
+    }
+
+    #[test]
+    fn trusted_workspace_root_rejects_unregistered_workspace() {
+        let config = tempdir().expect("config dir");
+        let unregistered = tempdir().expect("unregistered workspace");
+        let state = AppState::new(config.path()).expect("state");
+
+        let result = state.trusted_workspace_root(unregistered.path().to_str().expect("path"));
+
+        assert!(result.unwrap_err().contains("workspace not registered"));
     }
 
     #[cfg(unix)]
