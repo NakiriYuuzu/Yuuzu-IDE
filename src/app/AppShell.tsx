@@ -15,6 +15,7 @@ import { lazy, Suspense, useMemo, useState } from "react";
 
 import { ActivityRail, type ActivityId } from "./activity-rail";
 import { FileTreePanel } from "../features/workspace/FileTreePanel";
+import { useWorkspaceViewStore, type Surface } from "./workspace-view-state";
 import { useWorkspaceStore } from "./workspace-store";
 import { WorkspaceSwitcher } from "./workspace-switcher";
 
@@ -29,8 +30,6 @@ const TerminalTab = lazy(() =>
     default: module.TerminalTab,
   })),
 );
-
-type Surface = "empty" | "editor" | "terminal";
 
 const panelTitles: Record<ActivityId, string> = {
   explorer: "Explorer",
@@ -60,19 +59,33 @@ function PanelBody({
 }
 
 export function AppShell() {
-  const [activeActivity, setActiveActivity] =
-    useState<ActivityId>("explorer");
-  const [panelOpen, setPanelOpen] = useState(true);
   const [fileTreeRefreshKey, setFileTreeRefreshKey] = useState(0);
-  const [surface, setSurface] = useState<Surface>("empty");
   const registry = useWorkspaceStore((state) => state.registry);
+  const activeWorkspaceId = registry.active_workspace_id;
+  const view = useWorkspaceViewStore((state) => state.viewFor(activeWorkspaceId));
+  const updateView = useWorkspaceViewStore((state) => state.updateView);
+  const activeActivity = view.activeActivity;
+  const panelOpen = view.panelOpen;
+  const surface = view.surface;
+
+  function setActiveActivity(activeActivity: ActivityId) {
+    updateView(activeWorkspaceId, { activeActivity });
+  }
+
+  function setPanelOpen(panelOpen: boolean) {
+    updateView(activeWorkspaceId, { panelOpen });
+  }
+
+  function setSurface(surface: Surface) {
+    updateView(activeWorkspaceId, { surface });
+  }
 
   const activeWorkspace = useMemo(
     () =>
       registry.workspaces.find(
-        (workspace) => workspace.id === registry.active_workspace_id,
+        (workspace) => workspace.id === activeWorkspaceId,
       ),
-    [registry],
+    [activeWorkspaceId, registry.workspaces],
   );
 
   return (
@@ -98,7 +111,7 @@ export function AppShell() {
             className={`iconbtn${panelOpen ? " on" : ""}`}
             title="Toggle sidebar"
             aria-label="Toggle sidebar"
-            onClick={() => setPanelOpen((value) => !value)}
+            onClick={() => setPanelOpen(!panelOpen)}
           >
             <PanelLeft aria-hidden="true" />
           </button>
