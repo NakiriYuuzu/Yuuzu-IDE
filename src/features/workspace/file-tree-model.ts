@@ -1,4 +1,5 @@
 import type { EditorFileState, FileVersion } from "../files/file-model";
+import type { Surface } from "../../app/workspace-view-state";
 import type { FileTreeEntry } from "./workspace-api";
 
 export type ExpandedPaths = Record<string, FileTreeEntry[]>;
@@ -268,4 +269,20 @@ export function removeEditorPath(
       : editor.activePath;
 
   return { tabs, activePath };
+}
+
+export function surfaceAfterEditorRemoval(
+  currentSurface: Surface,
+  previousEditor: EditorFileState,
+  nextEditor: EditorFileState,
+): Surface {
+  if (
+    currentSurface === "editor" &&
+    previousEditor.activePath !== null &&
+    nextEditor.activePath === null
+  ) {
+    return "empty";
+  }
+
+  return currentSurface;
 }

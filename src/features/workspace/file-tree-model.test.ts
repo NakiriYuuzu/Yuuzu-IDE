@@ -9,6 +9,7 @@ import {
   removeEditorPath,
   rememberManualCollapse,
   shouldApplyDirectoryLoadResult,
+  surfaceAfterEditorRemoval,
 } from "./file-tree-model";
 
 describe("workspace file tree model", () => {
@@ -86,5 +87,30 @@ describe("workspace file tree model", () => {
 
     expect(next.tabs.map((tab) => tab.path)).toEqual(["/workspace/README.md"]);
     expect(next.activePath).toBe("/workspace/README.md");
+  });
+
+  test("surfaceAfterEditorRemoval empties editor when the last active tab is removed", () => {
+    const previous: EditorFileState = {
+      activePath: "/workspace/src/main.ts",
+      tabs: [
+        {
+          dirty: false,
+          externalChange: false,
+          name: "main.ts",
+          path: "/workspace/src/main.ts",
+          tooLarge: false,
+          version: null,
+        },
+      ],
+    };
+    const next: EditorFileState = { activePath: null, tabs: [] };
+
+    expect(surfaceAfterEditorRemoval("editor", previous, next)).toBe("empty");
+    expect(surfaceAfterEditorRemoval("terminal", previous, next)).toBe(
+      "terminal",
+    );
+    expect(surfaceAfterEditorRemoval("editor", previous, previous)).toBe(
+      "editor",
+    );
   });
 });

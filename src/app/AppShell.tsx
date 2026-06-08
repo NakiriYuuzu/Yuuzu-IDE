@@ -31,9 +31,14 @@ import {
   parentNameFromPath,
   removeEditorPath,
   renameEditorPath,
+  surfaceAfterEditorRemoval,
 } from "../features/workspace/file-tree-model";
 import { FileTreePanel } from "../features/workspace/FileTreePanel";
-import { useWorkspaceViewStore, type Surface } from "./workspace-view-state";
+import {
+  useWorkspaceViewStore,
+  workspaceViewStore,
+  type Surface,
+} from "./workspace-view-state";
 import { useWorkspaceStore } from "./workspace-store";
 import { WorkspaceSwitcher } from "./workspace-switcher";
 
@@ -128,11 +133,12 @@ export function AppShell() {
   );
   const activeEditorTab =
     view.editor.tabs.find((tab) => tab.path === view.editor.activePath) ?? null;
-  const activeEditorName = activeEditorTab?.name ?? "server.ts";
+  const activeEditorName = activeEditorTab?.name ?? "";
   const activeEditorParent = activeEditorTab
     ? parentNameFromPath(activeEditorTab.path)
-    : "features";
+    : "";
   const activeEditorIconClass = fileIconClassFromName(activeEditorName);
+  const showEditor = surface === "editor" && activeEditorTab !== null;
 
   function openFile(path: string, version: FileVersion | null = null) {
     updateEditor(activeWorkspaceId, (editor) =>
@@ -183,7 +189,19 @@ export function AppShell() {
     }
 
     await deletePath(activeWorkspace.path, path);
+    const currentView = workspaceViewStore
+      .getState()
+      .viewFor(activeWorkspaceId);
+    const nextEditor = removeEditorPath(currentView.editor, path);
+    const nextSurface = surfaceAfterEditorRemoval(
+      currentView.surface,
+      currentView.editor,
+      nextEditor,
+    );
     updateEditor(activeWorkspaceId, (editor) => removeEditorPath(editor, path));
+    if (nextSurface !== currentView.surface) {
+      updateView(activeWorkspaceId, { surface: nextSurface });
+    }
     setFileTreeRefreshKey((value) => value + 1);
   }
 
@@ -322,7 +340,7 @@ export function AppShell() {
         <main className="editor-region">
           <section className="group focus">
             <div className="tabstrip">
-              {surface === "editor" ? (
+              {showEditor ? (
                 <div className="tab active">
                   <FileCode2
                     className={`ftype ${activeEditorIconClass}`}
@@ -381,7 +399,7 @@ export function AppShell() {
               <span className="crumb">src</span>
               <ChevronDown aria-hidden="true" />
               <span className="crumb">
-                {surface === "editor"
+                {showEditor
                   ? activeEditorParent
                   : surface === "terminal"
                     ? "terminal"
@@ -389,7 +407,7 @@ export function AppShell() {
               </span>
               <ChevronDown aria-hidden="true" />
               <span className="crumb">
-                {surface === "editor"
+                {showEditor
                   ? activeEditorName
                   : surface === "terminal"
                     ? "shell"
@@ -399,12 +417,12 @@ export function AppShell() {
 
             <div
               className={`group-content${
-                surface === "editor" || surface === "terminal"
+                showEditor || surface === "terminal"
                   ? " editor-content"
                   : ""
               }`}
             >
-              {surface === "editor" ? (
+              {showEditor ? (
                 <Suspense
                   fallback={<div className="editor-loading">Loading editor</div>}
                 >

@@ -284,6 +284,13 @@ pub fn rename_path(
         .ok_or_else(|| "path has no parent".to_string())?
         .join(new_name);
     let target = workspace_child(workspace_root, &target, PathResolution::LexicalContained)?;
+    match fs::symlink_metadata(&target) {
+        Ok(_) => {
+            return Err(format!("target already exists: {}", target.display()));
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        Err(err) => return Err(err.to_string()),
+    }
     fs::rename(&path, &target).map_err(|err| err.to_string())?;
 
     Ok(FileOperationResult {
@@ -455,6 +462,23 @@ mod tests {
 
         super::delete_path(root.path(), &renamed.path).expect("delete");
         assert!(!renamed.path.exists());
+    }
+
+    #[test]
+    fn rename_path_rejects_existing_target_without_overwriting() {
+        let root = tempdir().expect("tempdir");
+        let src = root.path().join("src");
+        fs::create_dir(&src).expect("src dir");
+        let source = src.join("a.ts");
+        let target = src.join("b.ts");
+        fs::write(&source, "source").expect("write source");
+        fs::write(&target, "target").expect("write target");
+
+        let result = super::rename_path(root.path(), &source, "b.ts");
+
+        assert!(result.unwrap_err().contains("target already exists"));
+        assert_eq!(fs::read_to_string(&source).expect("read source"), "source");
+        assert_eq!(fs::read_to_string(&target).expect("read target"), "target");
     }
 
     #[test]
