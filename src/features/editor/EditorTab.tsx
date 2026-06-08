@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { Search } from "lucide-react";
 import type * as Monaco from "monaco-editor";
 
 import { loadMonaco } from "./load-monaco";
@@ -9,6 +10,9 @@ type EditorTabProps = {
   content: string;
   language: string;
   readOnly: boolean;
+  findOpen: boolean;
+  findQuery: string;
+  onFindQueryChange: (query: string) => void;
   onDirtyChange: (dirty: boolean) => void;
   onContentChange: (content: string) => void;
 };
@@ -33,11 +37,17 @@ export function EditorTab({
   content,
   language,
   readOnly,
+  findOpen,
+  findQuery,
+  onFindQueryChange,
   onDirtyChange,
   onContentChange,
 }: EditorTabProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const findInputRef = useRef<HTMLInputElement | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const findQueryRef = useRef(findQuery);
+  const onFindQueryChangeRef = useRef(onFindQueryChange);
   const onDirtyChangeRef = useRef(onDirtyChange);
   const onContentChangeRef = useRef(onContentChange);
   const editorIdentity = createEditorIdentity({
@@ -49,9 +59,26 @@ export function EditorTab({
   });
 
   useEffect(() => {
+    findQueryRef.current = findQuery;
+    onFindQueryChangeRef.current = onFindQueryChange;
     onDirtyChangeRef.current = onDirtyChange;
     onContentChangeRef.current = onContentChange;
-  }, [onDirtyChange, onContentChange]);
+  }, [findQuery, onFindQueryChange, onDirtyChange, onContentChange]);
+
+  function revealFirstFindMatch(query: string) {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    const needle = query.trim();
+    if (!editor || !model || !needle) {
+      return;
+    }
+
+    const matches = model.findMatches(needle, false, false, false, null, true);
+    if (matches[0]) {
+      editor.revealRangeInCenter(matches[0].range);
+      editor.setSelection(matches[0].range);
+    }
+  }
 
   useEffect(() => {
     let disposed = false;
@@ -78,6 +105,7 @@ export function EditorTab({
         onContentChangeRef.current(next);
         onDirtyChangeRef.current(next !== initialContent);
       });
+      revealFirstFindMatch(findQueryRef.current);
     });
 
     return () => {
@@ -88,12 +116,40 @@ export function EditorTab({
     };
   }, [editorIdentity]);
 
+  useEffect(() => {
+    revealFirstFindMatch(findQuery);
+  }, [findQuery]);
+
+  useEffect(() => {
+    if (findOpen) {
+      findInputRef.current?.focus();
+      findInputRef.current?.select();
+    }
+  }, [findOpen]);
+
   return (
-    <div
-      ref={hostRef}
-      className="monaco-host"
-      data-file-path={filePath}
-      data-workspace-id={workspaceId}
-    />
+    <div className="editor-tab-surface">
+      {findOpen || findQuery.trim() ? (
+        <div className="editor-find">
+          <Search aria-hidden="true" />
+          <input
+            ref={findInputRef}
+            type="search"
+            value={findQuery}
+            aria-label="Find in file"
+            placeholder="Find in file"
+            onChange={(event) =>
+              onFindQueryChangeRef.current(event.target.value)
+            }
+          />
+        </div>
+      ) : null}
+      <div
+        ref={hostRef}
+        className="monaco-host"
+        data-file-path={filePath}
+        data-workspace-id={workspaceId}
+      />
+    </div>
   );
 }

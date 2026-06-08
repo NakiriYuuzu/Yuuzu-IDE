@@ -189,6 +189,8 @@ export function AppShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [loadedFile, setLoadedFile] = useState<LoadedFile | null>(null);
   const [editorError, setEditorError] = useState<string | null>(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
   const savedContentByPathRef = useRef<Record<string, string>>({});
   const openRequestRef = useRef(0);
   const registry = useWorkspaceStore((state) => state.registry);
@@ -232,6 +234,11 @@ export function AppShell() {
     activePath: view.editor.activePath,
     loadedFile,
   });
+
+  useEffect(() => {
+    setFindOpen(false);
+    setFindQuery("");
+  }, [activeWorkspaceId]);
 
   async function openFile(path: string) {
     if (!activeWorkspace || !activeWorkspaceId) {
@@ -512,6 +519,17 @@ export function AppShell() {
 
   function runCommand(id: string) {
     switch (id) {
+      case "save-file":
+        void saveActiveFile();
+        break;
+      case "find-in-file":
+        setSurface("editor");
+        setFindOpen(true);
+        break;
+      case "search-workspace":
+        setActiveActivity("search");
+        setPanelOpen(true);
+        break;
       case "open-editor":
         setSurface("editor");
         break;
@@ -794,6 +812,9 @@ export function AppShell() {
                         content={loadedFile!.content}
                         language={loadedFile!.language}
                         readOnly={loadedFile!.readOnly}
+                        findOpen={findOpen}
+                        findQuery={findQuery}
+                        onFindQueryChange={setFindQuery}
                         onContentChange={handleEditorContentChange}
                         onDirtyChange={() => undefined}
                       />
