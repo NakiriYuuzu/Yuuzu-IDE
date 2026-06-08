@@ -1,0 +1,40 @@
+/* shadcn component styles for preview cards — mirrors ui_kits/components */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  font-family:var(--font-sans);font-size:14px;font-weight:500;line-height:1;
+  height:40px;padding:0 16px;border-radius:var(--radius-md);border:1px solid transparent;
+  cursor:pointer;white-space:nowrap;transition:background-color .15s,opacity .15s,color .15s;user-select:none}
+.btn:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.btn-primary{background:var(--primary);color:var(--primary-foreground)}
+.btn-primary:hover{background:color-mix(in srgb,var(--primary) 90%,#fff)}
+.btn-secondary{background:var(--secondary);color:var(--secondary-foreground)}
+.btn-secondary:hover{background:color-mix(in srgb,var(--secondary) 80%,#000 4%)}
+.btn-destructive{background:var(--destructive);color:var(--destructive-foreground)}
+.btn-destructive:hover{background:color-mix(in srgb,var(--destructive) 90%,#000)}
+.btn-outline{background:var(--background);color:var(--foreground);border-color:var(--border)}
+.btn-outline:hover{background:var(--accent);color:var(--accent-foreground)}
+.btn-ghost{background:transparent;color:var(--foreground)}
+.btn-ghost:hover{background:var(--accent);color:var(--accent-foreground)}
+.btn-link{background:transparent;color:var(--primary);text-underline-offset:4px;height:auto;padding:0}
+.btn-link:hover{text-decoration:underline}
+.btn-sm{height:36px;padding:0 12px;font-size:13px;border-radius:var(--radius-md)}
+.btn-lg{height:44px;padding:0 32px;border-radius:var(--radius-md)}
+.btn-icon{height:40px;width:40px;padding:0}
+.btn:disabled,.btn[disabled]{opacity:.5;pointer-events:none}
+
+.input{display:flex;height:40px;width:100%;border-radius:var(--radius-md);
+  border:1px solid var(--input);background:var(--background);
+  padding:8px 12px;font-family:var(--font-sans);font-size:14px;color:var(--foreground);box-sizing:border-box}
+.input::placeholder{color:var(--muted-foreground)}
+.input:focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-color:var(--ring)}
+
+.badge{display:inline-flex;align-items:center;border-radius:9999px;
+  padding:2px 10px;font-family:var(--font-sans);font-size:12px;font-weight:600;line-height:16px;border:1px solid transparent}
+.badge-default{background:var(--primary);color:var(--primary-foreground)}
+.badge-secondary{background:var(--secondary);color:var(--secondary-foreground)}
+.badge-destructive{background:var(--destructive);color:var(--destructive-foreground)}
+.badge-outline{color:var(--foreground);border-color:var(--border)}
+
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-sm)}
+
+.label{font-family:var(--font-sans);font-size:14px;font-weight:500;color:var(--foreground);line-height:1}

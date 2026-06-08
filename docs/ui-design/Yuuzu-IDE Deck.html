@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Yuuzu-IDE — Product Tour</title>
+<link rel="stylesheet" href="colors_and_type.css" />
+<style>
+  :root {
+    --bg:       #080b11;
+    --bg-2:     #0c1018;
+    --panel:    #0e131d;
+    --rail:     #090c12;
+    --line:     #1c2433;
+    --line-2:   #2b3547;
+    --txt:      #e6edf3;
+    --dim:      #8b97a7;
+    --faint:    #5a6675;
+    --yuzu:     #a8e23f;
+    --yuzu-2:   #bdf04f;
+    --wash:     #18230d;
+    --edge:     #45611a;
+
+    --c-key:  #c792ea; --c-str: #9ccc65; --c-num: #f78c6c;
+    --c-fn:   #82aaff; --c-com: #5a6675; --c-attr:#ffcb6b; --c-tag:#f07178; --c-punc:#8b97a7;
+
+    --type-hero: 112px;
+    --type-title: 66px;
+    --type-subtitle: 38px;
+    --type-body: 28px;
+    --type-small: 24px;
+    --type-mono: 22px;
+    --pad-x: 110px;
+    --pad-y: 92px;
+    --gap-title: 30px;
+  }
+
+  html, body { margin: 0; padding: 0; background: #000; }
+  deck-stage:not(:defined) { visibility: hidden; }
+  deck-stage { background: #000; }
+
+  section {
+    background:
+      radial-gradient(1200px 700px at 82% -8%, rgba(168,226,63,.07), transparent 60%),
+      linear-gradient(180deg, var(--bg-2), var(--bg));
+    color: var(--txt);
+    font-family: var(--font-sans);
+    overflow: hidden;
+  }
+  .slide {
+    position: relative;
+    width: 100%; height: 100%;
+    padding: var(--pad-y) var(--pad-x);
+    display: flex; flex-direction: column;
+    box-sizing: border-box;
+  }
+  .mono { font-family: var(--font-mono); }
+
+  /* kicker / titles */
+  .kicker {
+    display: inline-flex; align-items: center; gap: 12px;
+    font-family: var(--font-mono); font-size: var(--type-small);
+    letter-spacing: .12em; text-transform: uppercase; color: var(--yuzu);
+    margin-bottom: 26px;
+  }
+  .kicker .pre { color: var(--faint); }
+  .kicker .num { color: var(--faint); }
+  .title {
+    font-size: var(--type-title); font-weight: 800; letter-spacing: -.025em;
+    line-height: 1.02; margin: 0; text-wrap: balance;
+  }
+  .title .g { color: var(--yuzu); }
+  .lead {
+    font-size: var(--type-body); color: var(--dim); line-height: 1.5;
+    max-width: 18em; margin: var(--gap-title) 0 0;
+  }
+  .grow { flex: 1; }
+
+  /* two-column body */
+  .cols { display: flex; gap: 60px; flex: 1; min-height: 0; align-items: stretch; }
+  .col-text { flex: 0 0 41%; display: flex; flex-direction: column; }
+  .col-vis { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+
+  /* feature list */
+  .flist { list-style: none; padding: 0; margin: 40px 0 0; display: flex; flex-direction: column; gap: 22px; }
+  .flist li { display: flex; gap: 16px; align-items: flex-start; font-size: var(--type-body); color: var(--txt); }
+  .flist li .b { width: 9px; height: 9px; border-radius: 50%; background: var(--yuzu); margin-top: 14px; flex: 0 0 9px; box-shadow: 0 0 0 5px var(--wash); }
+  .flist li .sub { display: block; font-size: var(--type-small); color: var(--dim); margin-top: 4px; }
+
+  /* generic UI surface card (mimics the IDE) */
+  .surface {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+    box-shadow: 0 30px 80px -30px rgba(0,0,0,.8); overflow: hidden;
+  }
+  .surface-bar {
+    height: 46px; display: flex; align-items: center; gap: 10px; padding: 0 16px;
+    border-bottom: 1px solid var(--line); background: #0b0f17; font-family: var(--font-mono); font-size: 16px; color: var(--dim);
+  }
+  .dots { display: flex; gap: 8px; }
+  .dots i { width: 13px; height: 13px; border-radius: 50%; display: block; }
+  .dots .r { background: #ff5f57; } .dots .y { background: #febc2e; } .dots .g { background: #28c840; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 9px; height: 38px; padding: 0 16px;
+    border-radius: 9999px; border: 1px solid var(--edge); background: var(--wash);
+    color: var(--yuzu); font-family: var(--font-mono); font-size: var(--type-small); font-weight: 600;
+  }
+  .chip .d { width: 9px; height: 9px; border-radius: 50%; background: var(--yuzu); }
+  .chip.neutral { border-color: var(--line-2); background: #0d1119; color: var(--dim); }
+  .chip.neutral .d { background: var(--dim); }
+
+  /* terminal block */
+  .term { padding: 26px 30px; font-family: var(--font-mono); font-size: var(--type-mono); line-height: 1.75; }
+  .term .in b { color: var(--yuzu); font-weight: 700; }
+  .term .in { color: var(--txt); }
+  .term .out { color: var(--dim); }
+  .term .ok { color: var(--yuzu); }
+  .term .cur { display: inline-block; width: 11px; height: 22px; background: var(--yuzu); vertical-align: -4px; animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* code/diff */
+  .code { font-family: var(--font-mono); font-size: var(--type-mono); line-height: 1.7; padding: 22px 26px; }
+  .code .ln { white-space: pre; }
+  .tk-key { color: var(--c-key); } .tk-str { color: var(--c-str); } .tk-num { color: var(--c-num); }
+  .tk-fn { color: var(--c-fn); } .tk-com { color: var(--c-com); font-style: italic; } .tk-attr { color: var(--c-attr); }
+  .tk-punc { color: var(--c-punc); } .tk-tag { color: var(--c-tag); }
+  .dl { white-space: pre; padding: 2px 26px; }
+  .dl.add { background: rgba(156,204,101,.13); color: var(--c-str); }
+  .dl.del { background: rgba(240,113,120,.12); color: var(--c-tag); }
+
+  /* tool rows (agent) */
+  .arow { display: flex; align-items: center; gap: 14px; font-family: var(--font-mono); font-size: var(--type-mono); padding: 6px 0; }
+  .arow .verb { font-weight: 700; }
+  .arow .verb.read { color: var(--c-fn); } .arow .verb.edit { color: var(--c-attr); } .arow .verb.run { color: var(--yuzu); }
+  .arow .arg { color: var(--dim); }
+  .arow .meta { margin-left: auto; color: var(--faint); font-size: 17px; }
+  .auser { display: flex; gap: 14px; align-items: center; background: #11161f; border: 1px solid var(--line); border-left: 3px solid var(--yuzu); border-radius: 12px; padding: 18px 22px; font-family: var(--font-mono); font-size: var(--type-mono); }
+  .auser .c { color: var(--yuzu); font-weight: 700; }
+  .athink { display: flex; gap: 14px; color: var(--dim); font-family: var(--font-mono); font-size: var(--type-mono); line-height: 1.6; padding: 4px 0; }
+  .athink .g { color: var(--yuzu); }
+
+  /* cards grid */
+  .cards { display: grid; gap: 22px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 26px 28px;
+  }
+  .card .ct { display: flex; align-items: center; gap: 12px; font-size: var(--type-subtitle); font-weight: 700; letter-spacing: -.01em; }
+  .card .cm { font-family: var(--font-mono); font-size: var(--type-small); color: var(--dim); margin-top: 10px; }
+  .card .cstat { margin-top: 18px; font-family: var(--font-mono); font-size: var(--type-small); color: var(--faint); display: flex; gap: 10px; align-items: center; }
+
+  .ic { width: 34px; height: 34px; flex: 0 0 34px; color: var(--yuzu); }
+  .ic.sm { width: 24px; height: 24px; flex-basis: 24px; }
+
+  /* db grid */
+  table.grid { border-collapse: collapse; width: 100%; font-family: var(--font-mono); font-size: 18px; }
+  table.grid th { text-align: left; color: var(--dim); font-weight: 600; padding: 11px 18px; border-bottom: 1px solid var(--line-2); background: #0b0f17; }
+  table.grid td { padding: 10px 18px; border-bottom: 1px solid var(--line); color: var(--txt); }
+  table.grid tr:last-child td { border-bottom: none; }
+  .pill { display: inline-flex; align-items: center; gap: 7px; padding: 3px 11px; border-radius: 9999px; background: var(--wash); border: 1px solid var(--edge); color: var(--yuzu); font-size: 16px; }
+
+  /* footer brand */
+  .brandline { display: flex; align-items: center; gap: 14px; }
+  .glyph { width: 44px; height: 44px; border-radius: 11px; background: linear-gradient(135deg, var(--yuzu-2), var(--yuzu)); color: #0a0e15; display: grid; place-items: center; font-family: var(--font-mono); font-weight: 800; font-size: 26px; }
+
+  .pagefoot { position: absolute; left: var(--pad-x); bottom: 44px; font-family: var(--font-mono); font-size: 24px; color: var(--faint); letter-spacing: .04em; display: flex; gap: 14px; align-items: center; }
+  .pagefoot .sep { width: 5px; height: 5px; border-radius: 50%; background: var(--faint); }
+
+  /* entrance — content is always visible (no JS-less keyframe entrance) */
+  .anim { opacity: 1; }
+
+  /* ===== Cover ===== */
+  .cover { justify-content: center; }
+  .cover .wm { font-size: var(--type-hero); font-weight: 800; letter-spacing: -.04em; line-height: .95; }
+  .cover .wm .slash { color: var(--yuzu); }
+  .cover .tagline { font-size: var(--type-subtitle); color: var(--dim); margin-top: 30px; max-width: 20em; line-height: 1.4; }
+  .cover .promptbar { margin-top: 54px; display: inline-flex; align-items: center; gap: 16px; font-family: var(--font-mono); font-size: var(--type-body); color: var(--txt); background: #0c1019; border: 1px solid var(--line-2); border-radius: 14px; padding: 18px 26px; }
+  .cover .promptbar .c { color: var(--yuzu); font-weight: 700; }
+  .cover .meta-row { position: absolute; right: var(--pad-x); top: var(--pad-y); display: flex; gap: 12px; }
+
+  /* live embed */
+  .embed-wrap { flex: 1; border-radius: 16px; overflow: hidden; border: 1px solid var(--line-2); box-shadow: 0 40px 90px -30px rgba(0,0,0,.85); background: #0a0e15; position: relative; }
+  .embed-wrap iframe { position: relative; z-index: 1; width: 1700px; height: 940px; border: 0; transform-origin: top left; display: block; }
+  .embed-fallback { position: absolute; inset: 0; z-index: 0; display: flex; align-items: center; justify-content: center; color: var(--faint); font-family: var(--font-mono); font-size: 20px; }
+</style>
+</head>
+<body>
+<deck-stage width="1920" height="1080">
+
+  <!-- 1 · COVER -->
+  <section data-label="Cover">
+    <div class="slide cover">
+      <div class="meta-row">
+        <span class="chip neutral mono">v0.4.2</span>
+        <span class="chip"><span class="d"></span>dev :3000</span>
+      </div>
+      <div class="wm anim">yuuzu<span class="slash">/</span>ide</div>
+      <div class="tagline anim">A CLI-first IDE built around Claude Code — editors, databases and remotes in one window.</div>
+      <div class="promptbar anim"><span class="c">❯</span> <span>claude code build --watch</span><span class="cur" style="height:26px"></span></div>
+      <div class="pagefoot">yuuzu-ide<span class="sep"></span>product tour</div>
+    </div>
+  </section>
+
+  <!-- 2 · CLI-FIRST -->
+  <section data-label="CLI-first">
+    <div class="slide">
+      <div class="cols">
+        <div class="col-text">
+          <span class="kicker anim"><span class="num">01</span><span class="pre">/</span> Positioning</span>
+          <h1 class="title anim">CLI-first,<br />by <span class="g">design</span></h1>
+          <p class="lead anim">The agent isn't a side panel bolted on. Claude Code is the primary surface — you describe intent, it reads, edits, runs and reports. Every other tool is one keystroke away.</p>
+        </div>
+        <div class="col-vis">
+          <div class="surface anim d1">
+            <div class="surface-bar"><span class="dots"><i class="r"></i><i class="y"></i><i class="g"></i></span><span style="margin-left:8px">zsh — ~/dev/yuuzu-api</span></div>
+            <div class="term">
+              <div class="in"><b>❯</b> yuuzu</div>
+              <div class="out">◆ workspace ready · 3 projects · postgres + sqlite</div>
+              <div class="in"><b>❯</b> claude code "paginate the users route"</div>
+              <div class="out">⏺ reading src/routes/users.ts …</div>
+              <div class="out">⏺ editing 1 file · running build</div>
+              <div class="ok">✔ done — GET /api/users now paginates</div>
+              <div class="in"><b>❯</b> <span class="cur"></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="pagefoot">yuuzu-ide<span class="sep"></span>cli-first</div>
+    </div>
+  </section>
+
+  <!-- 3 · ANATOMY -->
+  <section data-label="Anatomy">
+    <div class="slide">
+      <span class="kicker anim"><span class="num">02</span><span class="pre">/</span> The shell</span>
+      <h1 class="title anim">One window, every surface</h1>
+      <div class="cols" style="margin-top:48px; gap:50px; align-items:center;">
+        <ul class="flist col-text" style="flex-basis:38%; margin-top:0;">
+          <li class="anim"><span class="b"></span><div><b>Dual sidebar</b><span class="sub">Icon rail picks a function; the panel beside it shows its contents.</span></div></li>
+          <li class="anim"><span class="b"></span><div><b>Project switcher &amp; tabs</b><span class="sub">Hop between repos in the header; files, browsers and shells share one tab strip.</span></div></li>
+          <li class="anim"><span class="b"></span><div><b>Split content area</b><span class="sub">Send any tab to a second group — code beside a live preview.</span></div></li>
+        </ul>
+        <div class="col-vis">
+          <div class="surface anim d1" style="height:560px; display:flex; flex-direction:column;">
+            <div class="surface-bar"><span class="dots"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="glyph" style="width:26px;height:26px;font-size:15px;border-radius:7px;margin-left:6px;">ヾ</span><span style="color:var(--txt)">yuuzu-api</span><span style="color:var(--faint)">main</span><span style="margin-left:auto;color:var(--faint)">⌘K</span></div>
+            <div style="flex:1; display:flex; min-height:0;">
+              <div style="width:62px; background:var(--rail); border-right:1px solid var(--line); display:flex; flex-direction:column; align-items:center; gap:14px; padding:16px 0;">
+                <span style="color:var(--yuzu)">✦</span><span style="color:var(--dim)">▤</span><span style="color:var(--dim)">⌕</span><span style="color:var(--dim)">⎘</span><span style="color:var(--dim)">▦</span>
+              </div>
+              <div style="width:200px; background:#0b0f17; border-right:1px solid var(--line); padding:16px; font-family:var(--font-mono); font-size:16px; color:var(--dim);">
+                <div style="color:var(--faint); font-size:13px; letter-spacing:.1em;">EXPLORER</div>
+                <div style="margin-top:12px; line-height:2;">
+                  <div style="color:var(--txt)">▾ src</div>
+                  <div style="padding-left:18px;">routes</div>
+                  <div style="padding-left:18px; color:var(--yuzu)">server.ts</div>
+                  <div>README.md</div>
+                </div>
+              </div>
+              <div style="flex:1; display:flex; flex-direction:column;">
+                <div style="height:42px; display:flex; border-bottom:1px solid var(--line); font-family:var(--font-mono); font-size:15px;">
+                  <div style="display:flex; align-items:center; gap:8px; padding:0 16px; border-right:1px solid var(--line); color:var(--yuzu); border-top:2px solid var(--yuzu);">✦ claude code</div>
+                  <div style="display:flex; align-items:center; gap:8px; padding:0 16px; border-right:1px solid var(--line); color:var(--dim);">server.ts</div>
+                  <div style="display:flex; align-items:center; gap:8px; padding:0 16px; border-right:1px solid var(--line); color:var(--dim);">:3000</div>
+                </div>
+                <div style="flex:1; padding:20px; font-family:var(--font-mono); font-size:16px; color:var(--dim); line-height:1.7;">
+                  <div class="auser" style="font-size:16px; padding:12px 16px;"><span class="c">❯</span> paginate the users route</div>
+                  <div style="margin-top:12px; color:var(--yuzu)">⏺ <span style="color:var(--dim)">editing src/routes/users.ts</span></div>
+                  <div style="color:var(--c-attr)">  Update <span style="color:var(--dim)">+6 −2</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="pagefoot">yuuzu-ide<span class="sep"></span>anatomy</div>
+    </div>
+  </section>
+
+  <!-- 4 · CLAUDE CODE CORE -->
+  <section data-label="Claude Code">
+    <div class="slide">
+      <div class="cols">
+        <div class="col-text">
+          <span class="kicker anim"><span class="num">03</span><span class="pre">/</span> The core</span>
+          <h1 class="title anim">Claude Code<br />is the <span class="g">core</span></h1>
+          <p class="lead anim">A prompt becomes a transcript of real work: reads, edits with inline diffs, and shell runs you can audit line by line — all inside the editor, against your repo.</p>
+        </div>
+        <div class="col-vis">
+          <div class="surface anim d1">
+            <div class="surface-bar"><span class="glyph" style="width:24px;height:24px;font-size:13px;border-radius:6px;">✦</span><span style="color:var(--txt)">claude code</span><span class="pill" style="margin-left:6px">sonnet</span><span style="margin-left:auto">~/dev/yuuzu-api</span></div>
+            <div style="padding:24px 26px;">
+              <div class="auser"><span class="c">❯</span> add cursor pagination to the users route, 50 per page</div>
+              <div class="athink" style="margin-top:16px;"><span class="g">⏺</span> I'll read the route and the pool helper, then add an OFFSET clause.</div>
+              <div class="arow"><span class="verb read">Read</span><span class="arg">src/routes/users.ts</span><span class="meta">24 lines</span></div>
+              <div class="arow"><span class="verb edit">Update</span><span class="arg">src/routes/users.ts</span><span class="meta" style="color:var(--c-str)">+6 −2</span></div>
+              <div style="border:1px solid var(--line); border-radius:8px; overflow:hidden; margin:8px 0 0;">
+                <div class="dl del">-  const rows = await db.query("SELECT * FROM users");</div>
+                <div class="dl add">+  const page = Number(req.query.page ?? 1);</div>
+                <div class="dl add">+  const rows = await db.query(</div>
+                <div class="dl add">+    "SELECT id,name,email FROM users LIMIT 50 OFFSET $1", [(page-1)*50]);</div>
+              </div>
+              <div class="arow" style="margin-top:6px;"><span class="verb run">$</span><span class="arg" style="color:var(--txt)">npm run build</span><span class="meta ok" style="color:var(--yuzu)">✔ 1.24s</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="pagefoot">yuuzu-ide<span class="sep"></span>claude code</div>
+    </div>
+  </section>
+
+  <!-- 5 · EXPORT PROMPTS -->
+  <section data-label="Export prompts">
+    <div class="slide">
+      <span class="kicker anim"><span class="num">04</span><span class="pre">/</span> Reproducible</span>
+      <h1 class="title anim">Prompts you can export</h1>
+      <p class="lead anim" style="max-width:34em;">Every session captures the structured prompts behind the work — plan, edits, verification, system. Export them as Markdown, JSON or <span class="mono" style="color:var(--yuzu)">.prompt</span> to replay or share a workflow.</p>
+      <div class="cards anim d1" style="grid-template-columns:repeat(4,1fr); margin-top:54px;">
+        <div class="card">
+          <div class="cm" style="margin:0; color:var(--c-fn); font-weight:700; letter-spacing:.06em;">PLAN</div>
+          <div style="font-size:var(--type-subtitle); font-weight:700; margin-top:10px;">Task plan</div>
+          <div class="cstat">~86 tokens</div>
+          <div style="margin-top:14px; color:var(--dim); font-size:18px; line-height:1.5; font-family:var(--font-mono);">Goal, constraints, ordered steps.</div>
+        </div>
+        <div class="card">
+          <div class="cm" style="margin:0; color:var(--c-attr); font-weight:700; letter-spacing:.06em;">EDIT</div>
+          <div style="font-size:var(--type-subtitle); font-weight:700; margin-top:10px;">File edit</div>
+          <div class="cstat">~142 tokens</div>
+          <div style="margin-top:14px; color:var(--dim); font-size:18px; line-height:1.5; font-family:var(--font-mono);">Exact change, bound params, scope.</div>
+        </div>
+        <div class="card">
+          <div class="cm" style="margin:0; color:var(--yuzu); font-weight:700; letter-spacing:.06em;">VERIFY</div>
+          <div style="font-size:var(--type-subtitle); font-weight:700; margin-top:10px;">Checks</div>
+          <div class="cstat">~64 tokens</div>
+          <div style="margin-top:14px; color:var(--dim); font-size:18px; line-height:1.5; font-family:var(--font-mono);">Build, curl, row-count asserts.</div>
+        </div>
+        <div class="card">
+          <div class="cm" style="margin:0; color:var(--c-key); font-weight:700; letter-spacing:.06em;">SYSTEM</div>
+          <div style="font-size:var(--type-subtitle); font-weight:700; margin-top:10px;">Session</div>
+          <div class="cstat">~38 tokens</div>
+          <div style="margin-top:14px; color:var(--dim); font-size:18px; line-height:1.5; font-family:var(--font-mono);">Stack, conventions, guardrails.</div>
+        </div>
+      </div>
+      <div class="grow"></div>
+      <div class="anim d2" style="display:flex; gap:14px; align-items:center;">
+        <span class="chip neutral">Markdown</span><span class="chip neutral">JSON</span><span class="chip">.prompt</span>
+        <span style="margin-left:8px; color:var(--faint); font-family:var(--font-mono); font-size:var(--type-small);">→ yuuzu-prompts.md</span>
+      </div>
+      <div class="pagefoot">yuuzu-ide<span class="sep"></span>export prompts</div>
+    </div>
+  </section>
+
+  <!-- 6 · DATABASES -->
+  <section data-label="Databases">
+    <div class="slide">
+      <div class="cols">
+        <div class="col-text">
+          <span class="kicker anim"><span class="num">05</span><span class="pre">/</span> Data</span>
+          <h1 class="title anim">Databases,<br />built <span class="g">in</span></h1>
+          <p class="lead anim">Browse schemas, run SQL and read results without leaving the window. SQLite, PostgreSQL and MS SQL Server connect from the same rail.</p>
+          <div class="anim d2" style="display:flex; flex-direction:column; gap:14px; margin-top:40px;">
+            <span class="chip"><span class="d"></span>SQLite · local.db</span>
+            <span class="chip"><span class="d"></span>PostgreSQL · aws-rds</span>
+            <span class="chip neutral"><span class="d"></span>MS SQL Server · legacy-erp</span>
+          </div>
+        </div>
+        <div class="col-vis">
+          <div class="surface anim d1">
+            <div class="surface-bar"><span style="color:var(--yuzu)">▦</span><span style="color:var(--txt)">prod · users</span><span class="pill" style="margin-left:6px">PostgreSQL</span><span style="margin-left:auto; color:var(--yuzu)">▶ Run ⌘↵</span></div>
+            <div class="code" style="border-bottom:1px solid var(--line);">
+              <div class="ln"><span class="tk-key">SELECT</span> id, name, email, role</div>
+              <div class="ln"><span class="tk-key">FROM</span> users <span class="tk-key">WHERE</span> role = <span class="tk-str">'admin'</span> <span class="tk-key">LIMIT</span> <span class="tk-num">8</span>;</div>
+            </div>
+            <table class="grid">
+              <thead><tr><th>id</th><th>name</th><th>email</th><th>role</th></tr></thead>
+              <tbody>
+                <tr><td>1042</td><td>Mina Okada</td><td>mina@yuuzu.dev</td><td><span class="pill">admin</span></td></tr>
+                <tr><td>1038</td><td>Theo Brandt</td><td>theo@yuuzu.dev</td><td><span class="pill">admin</span></td></tr>
+                <tr><td>1021</td><td>Priya Nair</td><td>priya@yuuzu.dev</td><td><span class="pill">admin</span></td></tr>
+                <tr><td>0994</td><td>Lukas Vogel</td><td>lukas@yuuzu.dev</td><td><span class="pill">admin</span></td></tr>
+              </tbody>
+            </table>
+            <div style="padding:12px 18px; font-family:var(--font-mono); font-size:16px; color:var(--faint); border-top:1px solid var(--line);">8 rows · 14 ms</div>
+          </div>
+        </div>
+      </div>
+      <div class="pagefoot">yuuzu-ide<span class="sep"></span>databases</div>
+    </div>
+  </section>
+
+  <!-- 7 · REMOTES -->
+  <section data-label="Remotes">
+    <div class="slide">
+      <div class="cols">
+        <div class="col-text">
+          <span class="kicker anim"><span class="num">06</span><span class="pre">/</span> Remote</span>
+          <h1 class="title anim">Remotes without<br />leaving</h1>
+          <p class="lead anim">Open an SSH session and an SFTP browser side by side. Manage hosts, keys and files from the rail — production is one click from your editor.</p>
+        </div>
+        <div class="col-vis" style="gap:22px;">
+          <div class="surface anim d1">
+            <div class="surface-bar"><span style="color:var(--yuzu)">▣</span><span style="color:var(--txt)">deploy@edge-01</span><span class="pill" style="margin-left:6px">SSH · connected</span></div>
+            <div class="term" style="font-size:19px; padding:20px 26px;">
+              <div class="in"><b>deploy@edge-01:~$</b> systemctl status yuuzu-api</div>
+              <div class="ok">  ● active (running) since 08:44 UTC</div>
+              <div class="out">  Memory: 84.2M · Tasks: 11 · CPU: 3.1s</div>
+              <div class="in"><b>deploy@edge-01:~$</b> <span class="cur" style="height:19px"></span></div>
+            </div>
+          </div>
+          <div class="surface anim d2">
+            <div class="surface-bar"><span style="color:var(--yuzu)">⇅</span><span style="color:var(--txt)">SFTP</span><span style="margin-left:auto; color:var(--faint)">/var/www</span></div>
+            <div style="padding:16px 24px; font-family:var(--font-mono); font-size:18px; line-height:2; color:var(--dim);">
+              <div style="display:flex; gap:18px;"><span style="color:#6b97c9">▸ releases</span><span style="margin-left:auto; color:var(--faint)">4.0K</span></div>
+              <div style="display:flex; gap:18px;"><span style="color:var(--yuzu)">current → releases/0.4.2</span></div>
+              <div style="display:flex; gap:18px;"><span>deploy.sh</span><span style="margin-left:auto; color:var(--faint)">2.1K</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="pagefoot">yuuzu-ide<span class="sep"></span>ssh + sftp</div>
+    </div>
+  </section>
+
+  <!-- 8 · BROWSER + SPLIT -->
+  <section data-label="Browser & split">
+    <div class="slide">
+      <span class="kicker anim"><span class="num">07</span><span class="pre">/</span> Preview</span>
+      <h1 class="title anim">Browser &amp; split view</h1>
+      <p class="lead anim" style="max-width:36em;">Run the built-in browser beside your code. Split sends any tab to a second group, so the edit and the result sit in one frame — no alt-tabbing to localhost.</p>
+      <div class="surface anim d1" style="flex:1; margin-top:48px; display:flex; flex-direction:column; min-height:0;">
+        <div class="surface-bar"><span class="dots"><i class="r"></i><i class="y"></i><i class="g"></i></span><span style="margin-left:8px; color:var(--txt)">yuuzu-api</span><span style="margin-left:auto;">⊟ split</span></div>
+        <div style="flex:1; display:flex; min-height:0;">
+          <div style="flex:1; border-right:1px solid var(--line-2); display:flex; flex-direction:column;">
+            <div style="height:38px; display:flex; align-items:center; gap:8px; padding:0 16px; border-bottom:1px solid var(--line); font-family:var(--font-mono); font-size:15px; color:var(--yuzu); border-top:2px solid var(--yuzu);">server.ts</div>
+            <div class="code" style="flex:1; font-size:18px;">
+              <div class="ln"><span class="tk-key">app</span>.<span class="tk-fn">get</span>(<span class="tk-str">"/health"</span>, (req, res) =&gt; {</div>
+              <div class="ln">  res.<span class="tk-fn">json</span>({ status: <span class="tk-str">"ok"</span>,</div>
+              <div class="ln">    uptime: process.<span class="tk-fn">uptime</span>() });</div>
+              <div class="ln">});</div>
+            </div>
+          </div>
+          <div style="flex:1; display:flex; flex-direction:column;">
+            <div style="height:38px; display:flex; align-items:center; gap:10px; padding:0 16px; border-bottom:1px solid var(--line); font-family:var(--font-mono); font-size:15px; color:var(--dim);"><span style="color:var(--yuzu)">⬡</span> localhost:3000/health</div>
+            <div style="flex:1; background:#fff; display:flex; align-items:center; justify-content:center;">
+              <pre style="margin:0; font-family:var(--font-mono); font-size:26px; color:#1f2937; line-height:1.6;">{
+  "status": "ok",
+  "uptime": 8421.44
+}</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="pagefoot">yuuzu-ide<span class="sep"></span>browser + split</div>
+    </div>
+  </section>
+
+  <!-- 9 · TWEAKS -->
+  <section data-label="Tailored">
+    <div class="slide">
+      <span class="kicker anim"><span class="num">08</span><span class="pre">/</span> Yours</span>
+      <h1 class="title anim">Tailored to your setup</h1>
+      <p class="lead anim" style="max-width:34em;">Theme, accent, density, code size, default scene — tune the whole workspace live. Dark terminal by day, light by review.</p>
+      <div class="cols anim d1" style="margin-top:56px; gap:30px; flex:0 0 auto;">
+        <div class="card" style="flex:1;">
+          <div class="cm" style="margin:0; letter-spacing:.06em;">THEME</div>
+          <div style="display:flex; gap:14px; margin-top:18px;">
+            <div style="flex:1; height:70px; border-radius:10px; background:linear-gradient(180deg,#0c1018,#080b11); border:2px solid var(--yuzu); display:grid; place-items:center; font-family:var(--font-mono); color:var(--yuzu); font-size:18px;">dark</div>
+            <div style="flex:1; height:70px; border-radius:10px; background:#fff; border:1px solid var(--line-2); display:grid; place-items:center; font-family:var(--font-mono); color:#0f172a; font-size:18px;">light</div>
+          </div>
+        </div>
+        <div class="card" style="flex:1;">
+          <div class="cm" style="margin:0; letter-spacing:.06em;">ACCENT</div>
+          <div style="display:flex; gap:14px; margin-top:18px;">
+            <span style="width:54px; height:54px; border-radius:11px; background:#a8e23f; outline:3px solid var(--txt); outline-offset:3px;"></span>
+            <span style="width:54px; height:54px; border-radius:11px; background:#38bdf8;"></span>
+            <span style="width:54px; height:54px; border-radius:11px; background:#fb923c;"></span>
+            <span style="width:54px; height:54px; border-radius:11px; background:#c084fc;"></span>
+            <span style="width:54px; height:54px; border-radius:11px; background:#f472b6;"></span>
+          </div>
+        </div>
+        <div class="card" style="flex:1;">
+          <div class="cm" style="margin:0; letter-spacing:.06em;">DENSITY</div>
+          <div style="display:flex; gap:10px; margin-top:18px;">
+            <span class="chip neutral" style="flex:1; justify-content:center;">compact</span>
+            <span class="chip" style="flex:1; justify-content:center;">regular</span>
+            <span class="chip neutral" style="flex:1; justify-content:center;">comfy</span>
+          </div>
+        </div>
+      </div>
+      <div class="pagefoot">yuuzu-ide<span class="sep"></span>tweaks</div>
+    </div>
+  </section>
+
+  <!-- 10 · LIVE / CLOSING -->
+  <section data-label="See it live">
+    <div class="slide">
+      <div style="display:flex; align-items:flex-end; justify-content:space-between; flex:0 0 auto;">
+        <div>
+          <span class="kicker anim" style="margin-bottom:14px;"><span class="num">09</span><span class="pre">/</span> Live</span>
+          <h1 class="title anim" style="font-size:52px; white-space:nowrap; margin:0;">See it live</h1>
+        </div>
+        <div class="brandline anim d1">
+          <span class="glyph">ゆ</span>
+          <div style="font-family:var(--font-mono); line-height:1.3;">
+            <div style="font-size:24px; font-weight:700;">yuuzu/ide</div>
+            <div style="font-size:18px; color:var(--dim);">⌘K to begin · claude code build</div>
+          </div>
+        </div>
+      </div>
+      <div class="embed-wrap anim d2" style="margin-top:28px; flex:1; min-height:0;">
+        <iframe src="Yuuzu-IDE.html" title="Yuuzu-IDE live" scrolling="no"></iframe>
+        <div class="embed-fallback">Loading live workspace…</div>
+      </div>
+    </div>
+  </section>
+
+</deck-stage>
+<script src="deck-stage.js"></script>
+<script>
+  // Fit the live IDE iframe to its frame on resize (it renders at 1700×940).
+  function fitEmbed() {
+    document.querySelectorAll('.embed-wrap').forEach(w => {
+      const f = w.querySelector('iframe'); if (!f) return;
+      const s = Math.min(w.clientWidth / 1700, w.clientHeight / 940);
+      f.style.transform = 'scale(' + s + ')';
+      f.style.width = (w.clientWidth / s) + 'px';
+      f.style.height = (w.clientHeight / s) + 'px';
+    });
+  }
+  window.addEventListener('resize', fitEmbed);
+  document.querySelector('deck-stage').addEventListener('slidechange', () => setTimeout(fitEmbed, 60));
+  setTimeout(fitEmbed, 300);
+</script>
+</body>
+</html>

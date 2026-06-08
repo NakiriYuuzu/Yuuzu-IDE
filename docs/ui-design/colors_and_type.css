@@ -1,0 +1,229 @@
+/* ============================================================
+   shadcn/ui — Colors & Type
+   The canonical design tokens for the shadcn/ui system.
+   Base color: Slate. Light + Dark themes. Radius: 0.5rem.
+   Font: Inter (UI/display) · system mono (code).
+   Reference: ui.shadcn.com — "New York"/"Default" default theme.
+   ============================================================ */
+
+/* ---- Fonts ---------------------------------------------------
+   Inter is loaded from Google Fonts. If you are offline, the
+   project ships local Inter in /fonts (see fonts/inter.css).    */
+@import url("https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700;0,14..32,800;1,14..32,400&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
+:root {
+  /* ---- Raw Slate scale (the neutral spine of the system) ---- */
+  --slate-50:  #f8fafc;
+  --slate-100: #f1f5f9;
+  --slate-200: #e2e8f0;
+  --slate-300: #cbd5e1;
+  --slate-400: #94a3b8;
+  --slate-500: #64748b;
+  --slate-600: #475569;
+  --slate-700: #334155;
+  --slate-800: #1e293b;
+  --slate-900: #0f172a;
+  --slate-950: #020817;
+
+  /* ---- Accent / status raw values ---- */
+  --red-500:   #ef4444;  /* destructive */
+  --red-600:   #dc2626;
+  --green-500: #22c55e;
+  --amber-500: #f59e0b;
+  --blue-500:  #3b82f6;
+
+  /* ============================================================
+     SEMANTIC TOKENS — LIGHT (default)
+     Stored as raw hex here; shadcn ships them as HSL channels.
+     ============================================================ */
+  --background:            #ffffff;
+  --foreground:            #020817;  /* hsl(222.2 84% 4.9%) */
+
+  --card:                  #ffffff;
+  --card-foreground:       #020817;
+
+  --popover:               #ffffff;
+  --popover-foreground:    #020817;
+
+  --primary:               #0f172a;  /* slate-900 */
+  --primary-foreground:    #f8fafc;
+
+  --secondary:             #f1f5f9;  /* slate-100 */
+  --secondary-foreground:  #0f172a;
+
+  --muted:                 #f1f5f9;
+  --muted-foreground:      #64748b;  /* slate-500 */
+
+  --accent:                #f1f5f9;
+  --accent-foreground:     #0f172a;
+
+  --destructive:           #ef4444;
+  --destructive-foreground:#f8fafc;
+
+  --border:                #e2e8f0;  /* slate-200 */
+  --input:                 #e2e8f0;
+  --ring:                  #020817;  /* focus ring */
+
+  /* ---- Radius scale (derived from --radius: 0.5rem) ---- */
+  --radius:    0.5rem;             /* 8px  — lg, cards */
+  --radius-lg: var(--radius);      /* 8px  */
+  --radius-md: calc(var(--radius) - 2px); /* 6px — buttons, inputs */
+  --radius-sm: calc(var(--radius) - 4px); /* 4px — badges, small */
+
+  /* ---- Elevation (Tailwind shadow scale) ---- */
+  --shadow-2xs: 0 1px rgb(0 0 0 / 0.05);
+  --shadow-xs:  0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-sm:  0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --shadow-md:  0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg:  0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --shadow-xl:  0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+
+  /* ---- Type families ---- */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system,
+               "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo,
+               Monaco, Consolas, "Liberation Mono", monospace;
+
+  /* ---- Type scale (Tailwind, in rem) ---- */
+  --text-xs:   0.75rem;   /* 12px / 16 */
+  --text-sm:   0.875rem;  /* 14px / 20 */
+  --text-base: 1rem;      /* 16px / 24 */
+  --text-lg:   1.125rem;  /* 18px / 28 */
+  --text-xl:   1.25rem;   /* 20px / 28 */
+  --text-2xl:  1.5rem;    /* 24px / 32 */
+  --text-3xl:  1.875rem;  /* 30px / 36 */
+  --text-4xl:  2.25rem;   /* 36px / 40 */
+  --text-5xl:  3rem;      /* 48px / 1  */
+
+  /* ---- Spacing base (Tailwind 4px scale, common steps) ---- */
+  --space-1:  0.25rem;  /* 4  */
+  --space-2:  0.5rem;   /* 8  */
+  --space-3:  0.75rem;  /* 12 */
+  --space-4:  1rem;     /* 16 */
+  --space-6:  1.5rem;   /* 24 */
+  --space-8:  2rem;     /* 32 */
+  --space-12: 3rem;     /* 48 */
+  --space-16: 4rem;     /* 64 */
+}
+
+/* ============================================================
+   SEMANTIC TOKENS — DARK
+   Apply with <html class="dark"> or [data-theme="dark"].
+   ============================================================ */
+.dark,
+[data-theme="dark"] {
+  --background:            #020817;  /* hsl(222.2 84% 4.9%) */
+  --foreground:            #f8fafc;
+
+  --card:                  #020817;
+  --card-foreground:       #f8fafc;
+
+  --popover:               #020817;
+  --popover-foreground:    #f8fafc;
+
+  --primary:               #f8fafc;
+  --primary-foreground:    #0f172a;
+
+  --secondary:             #1e293b;  /* slate-800 */
+  --secondary-foreground:  #f8fafc;
+
+  --muted:                 #1e293b;
+  --muted-foreground:      #94a3b8;  /* slate-400 */
+
+  --accent:                #1e293b;
+  --accent-foreground:     #f8fafc;
+
+  --destructive:           #7f1d1d;  /* red-900 in dark */
+  --destructive-foreground:#f8fafc;
+
+  --border:                #1e293b;  /* slate-800 */
+  --input:                 #1e293b;
+  --ring:                  #cbd5e1;  /* slate-300 */
+}
+
+/* ============================================================
+   SEMANTIC TYPE CLASSES
+   The shadcn typography styles (ui.shadcn.com/docs/components/typography)
+   ============================================================ */
+.ds-h1 {
+  font-family: var(--font-sans);
+  font-weight: 800;             /* extrabold */
+  font-size: var(--text-5xl);   /* 48px */
+  line-height: 1;
+  letter-spacing: -0.025em;     /* tracking-tight */
+  color: var(--foreground);
+}
+.ds-h2 {
+  font-family: var(--font-sans);
+  font-weight: 600;             /* semibold */
+  font-size: var(--text-3xl);   /* 30px */
+  line-height: 2.25rem;         /* 36px */
+  letter-spacing: -0.025em;
+  color: var(--foreground);
+}
+.ds-h3 {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--text-2xl);   /* 24px */
+  line-height: 2rem;            /* 32px */
+  letter-spacing: -0.025em;
+  color: var(--foreground);
+}
+.ds-h4 {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--text-xl);    /* 20px */
+  line-height: 1.75rem;         /* 28px */
+  letter-spacing: -0.025em;
+  color: var(--foreground);
+}
+.ds-p {
+  font-family: var(--font-sans);
+  font-weight: 400;
+  font-size: var(--text-base);  /* 16px */
+  line-height: 1.75rem;         /* 28px (leading-7) */
+  color: var(--foreground);
+}
+.ds-lead {
+  font-family: var(--font-sans);
+  font-size: var(--text-xl);    /* 20px */
+  line-height: 1.75rem;
+  color: var(--muted-foreground);
+}
+.ds-large {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--text-lg);    /* 18px */
+  line-height: 1.75rem;
+  color: var(--foreground);
+}
+.ds-small {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: var(--text-sm);    /* 14px */
+  line-height: 1;
+  color: var(--foreground);
+}
+.ds-muted {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);    /* 14px */
+  color: var(--muted-foreground);
+}
+.ds-blockquote {
+  font-family: var(--font-sans);
+  font-style: italic;
+  font-size: var(--text-base);
+  line-height: 1.5rem;
+  border-left: 2px solid var(--border);
+  padding-left: 1.5rem;
+  color: var(--foreground);
+}
+.ds-code {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  background: var(--muted);
+  border-radius: var(--radius-sm);
+  padding: 0.2rem 0.3rem;
+  color: var(--foreground);
+}
