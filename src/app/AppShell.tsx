@@ -10,12 +10,20 @@ import {
   SplitSquareHorizontal,
   X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 
 import { ActivityRail, type ActivityId } from "./activity-rail";
 import { FileTreePanel } from "../features/workspace/FileTreePanel";
 import { useWorkspaceStore } from "./workspace-store";
 import { WorkspaceSwitcher } from "./workspace-switcher";
+
+const EditorTab = lazy(() =>
+  import("../features/editor/EditorTab").then((module) => ({
+    default: module.EditorTab,
+  })),
+);
+
+type Surface = "empty" | "editor";
 
 const panelTitles: Record<ActivityId, string> = {
   explorer: "Explorer",
@@ -49,6 +57,7 @@ export function AppShell() {
     useState<ActivityId>("explorer");
   const [panelOpen, setPanelOpen] = useState(true);
   const [fileTreeRefreshKey, setFileTreeRefreshKey] = useState(0);
+  const [surface, setSurface] = useState<Surface>("empty");
   const registry = useWorkspaceStore((state) => state.registry);
 
   const activeWorkspace = useMemo(
@@ -127,19 +136,29 @@ export function AppShell() {
         <main className="editor-region">
           <section className="group focus">
             <div className="tabstrip">
-              <div className="tab active">
-                <FileCode2 className="ftype ico-tsx" aria-hidden="true" />
-                <span className="tlabel mono">AppShell.tsx</span>
-                <span className="close">
-                  <X aria-hidden="true" />
-                </span>
-              </div>
-              <div className="tab">
-                <FileCode2 className="ftype ico-ts" aria-hidden="true" />
-                <span className="tlabel mono">workspace-api.ts</span>
-              </div>
+              {surface === "editor" ? (
+                <div className="tab active">
+                  <FileCode2 className="ftype ico-ts" aria-hidden="true" />
+                  <span className="tlabel mono">server.ts</span>
+                  <button
+                    type="button"
+                    className="close"
+                    title="Close editor"
+                    aria-label="Close editor"
+                    onClick={() => setSurface("empty")}
+                  >
+                    <X aria-hidden="true" />
+                  </button>
+                </div>
+              ) : null}
               <div className="tabstrip-tail">
-                <button type="button" className="iconbtn" title="New tab">
+                <button
+                  type="button"
+                  className="iconbtn"
+                  title="Open editor"
+                  aria-label="Open editor"
+                  onClick={() => setSurface("editor")}
+                >
                   <Plus aria-hidden="true" />
                 </button>
               </div>
@@ -148,59 +167,83 @@ export function AppShell() {
             <div className="breadcrumb">
               <span className="crumb">src</span>
               <ChevronDown aria-hidden="true" />
-              <span className="crumb">app</span>
+              <span className="crumb">
+                {surface === "editor" ? "features" : "app"}
+              </span>
               <ChevronDown aria-hidden="true" />
-              <span className="crumb">AppShell.tsx</span>
+              <span className="crumb">
+                {surface === "editor" ? "server.ts" : "AppShell.tsx"}
+              </span>
             </div>
 
-            <div className="group-content">
-              <div className="workspace-hero">
-                <div>
-                  <span className="eyebrow">Node 0 workspace shell</span>
-                  <h1>{activeWorkspace?.name ?? "Yuuzu IDE"}</h1>
-                  <p className="mono">
-                    {activeWorkspace?.path ??
-                      "Waiting for the Tauri workspace registry"}
-                  </p>
-                </div>
-                <button type="button" className="btn primary">
-                  <Play aria-hidden="true" />
-                  Start session
-                </button>
-              </div>
-
-              <div className="control-grid">
-                <section>
-                  <div className="section-label">
-                    <span>Open controls</span>
-                  </div>
-                  {["Explorer seeded", "Registry transient", "Rust invoke ready"].map(
-                    (item) => (
-                      <div className="row" key={item}>
-                        <span className="tw">•</span>
-                        <span className="nm">{item}</span>
-                        <span className="meta">ok</span>
-                      </div>
-                    ),
-                  )}
-                </section>
-                <section>
-                  <div className="section-label">
-                    <span>Workspace registry</span>
-                  </div>
-                  {registry.workspaces.map((workspace) => (
-                    <div className="row" key={workspace.id}>
-                      <GitBranch aria-hidden="true" />
-                      <span className="nm">{workspace.name}</span>
-                      <span className="meta">
-                        {workspace.id === registry.active_workspace_id
-                          ? "active"
-                          : "idle"}
-                      </span>
+            <div
+              className={`group-content${
+                surface === "editor" ? " editor-content" : ""
+              }`}
+            >
+              {surface === "editor" ? (
+                <Suspense
+                  fallback={<div className="editor-loading">Loading editor</div>}
+                >
+                  <EditorTab />
+                </Suspense>
+              ) : (
+                <>
+                  <div className="workspace-hero">
+                    <div>
+                      <span className="eyebrow">Node 0 workspace shell</span>
+                      <h1>{activeWorkspace?.name ?? "Yuuzu IDE"}</h1>
+                      <p className="mono">
+                        {activeWorkspace?.path ??
+                          "Waiting for the Tauri workspace registry"}
+                      </p>
                     </div>
-                  ))}
-                </section>
-              </div>
+                    <button
+                      type="button"
+                      className="btn primary"
+                      onClick={() => setSurface("editor")}
+                    >
+                      <Play aria-hidden="true" />
+                      Open editor
+                    </button>
+                  </div>
+
+                  <div className="control-grid">
+                    <section>
+                      <div className="section-label">
+                        <span>Open controls</span>
+                      </div>
+                      {[
+                        "Explorer seeded",
+                        "Registry transient",
+                        "Rust invoke ready",
+                      ].map((item) => (
+                        <div className="row" key={item}>
+                          <span className="tw">•</span>
+                          <span className="nm">{item}</span>
+                          <span className="meta">ok</span>
+                        </div>
+                      ))}
+                    </section>
+                    <section>
+                      <div className="section-label">
+                        <span>Workspace registry</span>
+                      </div>
+                      {registry.workspaces.map((workspace) => (
+                        <div className="row" key={workspace.id}>
+                          <GitBranch aria-hidden="true" />
+                          <span className="nm">{workspace.name}</span>
+                          <span className="meta">
+                            {workspace.id === registry.active_workspace_id
+                              ? "active"
+                              : "idle"}
+                          </span>
+                        </div>
+                      ))}
+                    </section>
+                  </div>
+                </>
+              )}
             </div>
           </section>
         </main>
