@@ -177,6 +177,16 @@ impl AgentSessionStore {
         let _guard = self.lock.lock().map_err(|err| err.to_string())?;
         let mut sessions = self.load()?;
         let now = current_time_ms()?;
+        let max_updated_ms = sessions
+            .iter()
+            .map(|session| session.updated_ms)
+            .max()
+            .unwrap_or(now);
+        let session_updated_ms = if max_updated_ms < now {
+            now
+        } else {
+            max_updated_ms.saturating_add(1)
+        };
         let session_id = uuid::Uuid::new_v4().to_string();
         let mut session = AgentSession {
             id: session_id.clone(),
@@ -186,7 +196,7 @@ impl AgentSessionStore {
             context_items: bound_context_items(context_items),
             transcript: Vec::new(),
             created_ms: now,
-            updated_ms: now,
+            updated_ms: session_updated_ms,
         };
         session.transcript.push(AgentTranscriptEntry {
             id: uuid::Uuid::new_v4().to_string(),
@@ -203,7 +213,10 @@ impl AgentSessionStore {
         trim_session_transcript(&mut session.transcript, MAX_AGENT_TRANSCRIPT_ENTRIES);
         trim_sessions(&mut sessions);
         self.save(&sessions)?;
-        Ok(session)
+        sessions
+            .into_iter()
+            .find(|saved_session| saved_session.id == session.id)
+            .ok_or_else(|| format!("agent session not persisted: {}", session.id))
     }
 
     pub fn append_transcript(
@@ -416,8 +429,8 @@ fn trim_session_transcript(transcript: &mut Vec<AgentTranscriptEntry>, max_entri
         return;
     }
 
-    transcript.sort_by_key(|entry| std::cmp::Reverse(entry.created_ms));
-    transcript.truncate(max_entries);
+    let drop_count = transcript.len() - max_entries;
+    transcript.drain(0..drop_count);
 }
 
 fn trim_sessions(sessions: &mut Vec<AgentSession>) {
@@ -713,6 +726,102 @@ mod tests {
                 .get("original_chars")
                 .and_then(serde_json::Value::as_u64),
             Some(original_metadata_len as u64)
+        );
+    }
+
+    #[test]
+    fn transcript_trimming_preserves_chronological_order() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = AgentSessionStore::new(temp.path().join("agent-sessions.json"));
+        let session = store
+            .start_session("/workspace", AgentMode::Report, "Trim order", Vec::new())
+            .expect("start session");
+
+        let overflow = 10;
+        for index in 0..(MAX_AGENT_TRANSCRIPT_ENTRIES + overflow) {
+            let _ = store
+                .append_transcript(
+                    &session.id,
+                    AgentTranscriptInput {
+                        kind: AgentTranscriptKind::Report,
+                        title: format!("report-{index}"),
+                        content: "ok".to_string(),
+                        status: None,
+                        metadata: serde_json::json!({}),
+                    },
+                )
+                .expect("append transcript");
+        }
+
+        let session = store
+            .list_sessions("/workspace")
+            .expect("list sessions")
+            .into_iter()
+            .find(|item| item.id == session.id)
+            .expect("session found");
+
+        assert_eq!(session.transcript.len(), MAX_AGENT_TRANSCRIPT_ENTRIES);
+        let first_retained_report_index = overflow; // prompt + first 10 entries should be dropped
+        assert_eq!(
+            session.transcript[0].title,
+            format!("report-{first_retained_report_index}")
+        );
+        assert_eq!(
+            session.transcript[MAX_AGENT_TRANSCRIPT_ENTRIES - 1].title,
+            format!("report-{}", MAX_AGENT_TRANSCRIPT_ENTRIES + overflow - 1)
+        );
+
+        let mut previous_index = 0u64;
+        for entry in session
+            .transcript
+            .iter()
+            .filter(|entry| entry.kind == AgentTranscriptKind::Report)
+        {
+            let index = entry
+                .title
+                .split_once('-')
+                .and_then(|(_, suffix)| suffix.parse::<u64>().ok())
+                .expect("entry index");
+            assert!(index >= previous_index);
+            previous_index = index;
+        }
+    }
+
+    #[test]
+    fn start_session_returns_a_persisted_session_after_store_trim() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = AgentSessionStore::new(temp.path().join("agent-sessions.json"));
+        let future_updated_ms = current_time_ms().expect("timestamp") + 10_000;
+        let mut seeded_sessions = Vec::new();
+
+        for index in 0..MAX_AGENT_SESSIONS {
+            seeded_sessions.push(AgentSession {
+                id: format!("seed-session-{index}"),
+                workspace_root: "/workspace".to_string(),
+                mode: AgentMode::Plan,
+                prompt: "Seed session".to_string(),
+                context_items: Vec::new(),
+                transcript: Vec::new(),
+                created_ms: index as u64,
+                updated_ms: future_updated_ms,
+            });
+        }
+        store.save(&seeded_sessions).expect("seed sessions");
+
+        let session = store
+            .start_session(
+                "/workspace",
+                AgentMode::Edit,
+                "Started after trim",
+                Vec::new(),
+            )
+            .expect("start session");
+
+        let sessions = store.list_sessions("/workspace").expect("list sessions");
+        assert_eq!(sessions.len(), MAX_AGENT_SESSIONS);
+        assert!(
+            sessions.iter().any(|entry| entry.id == session.id),
+            "newly created session should be persisted after trim"
         );
     }
 }
