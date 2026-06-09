@@ -27,6 +27,17 @@ describe("ActivityRail", () => {
     expect(result.getByText("2")).toBeTruthy();
   });
 
+  test("renders browser activity and badge", () => {
+    const result = render(
+      <ActivityRail
+        active="explorer"
+        onSelect={() => {}}
+      />,
+    );
+
+    expect(result.getByLabelText("Browser")).toBeTruthy();
+  });
+
   test("selects agents and notifies callback", () => {
     const onSelect = mock(() => {});
     const result = render(
@@ -39,5 +50,19 @@ describe("ActivityRail", () => {
     fireEvent.click(result.getByLabelText("Agents"));
 
     expect(onSelect).toHaveBeenCalledWith("agents");
+  });
+
+  test("selects browser and notifies callback", () => {
+    const onSelect = mock(() => {});
+    const result = render(
+      <ActivityRail
+        active="explorer"
+        onSelect={onSelect}
+      />,
+    );
+
+    fireEvent.click(result.getByLabelText("Browser"));
+
+    expect(onSelect).toHaveBeenCalledWith("browser");
   });
 });

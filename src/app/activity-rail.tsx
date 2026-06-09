@@ -5,6 +5,7 @@ import {
   Files,
   GitBranch,
   Languages,
+  Globe,
   Bot,
   Search,
   Settings,
@@ -12,7 +13,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
-export type ActivityId =
+type KnownActivityId =
   | "explorer"
   | "search"
   | "git"
@@ -22,7 +23,10 @@ export type ActivityId =
   | "language"
   | "agents"
   | "database"
-  | "settings";
+  | "settings"
+  | "browser";
+
+export type ActivityId = string & (KnownActivityId | {});
 
 type ActivityItem = {
   id: ActivityId;
@@ -39,6 +43,7 @@ const activities: ActivityItem[] = [
   { id: "docs", label: "Docs", icon: BookOpenText },
   { id: "language", label: "Language", icon: Languages },
   { id: "agents", label: "Agents", icon: Bot },
+  { id: "browser", label: "Browser", icon: Globe },
   { id: "database", label: "Database", icon: Database },
   { id: "settings", label: "Settings", icon: Settings },
 ];

@@ -6,6 +6,7 @@ import {
   filterCommands,
   node1Commands,
   allCommands,
+  node8Commands,
   node5Commands,
   node6Commands,
   node7Commands,
@@ -118,5 +119,46 @@ describe("filterCommands", () => {
     expect(allCommands.map((command) => command.id)).toContain(
       "language-restart",
     );
+  });
+
+  test("includes browser commands in palette", () => {
+    expect(node8Commands).toEqual([
+      { id: "open-browser-preview", label: "Browser: Open preview", group: "Browser" },
+      {
+        id: "browser-reload",
+        label: "Browser: Reload preview",
+        group: "Browser",
+      },
+      {
+        id: "browser-hard-reload",
+        label: "Browser: Hard reload preview",
+        group: "Browser",
+      },
+      {
+        id: "browser-capture-screenshot",
+        label: "Browser: Capture screenshot",
+        group: "Browser",
+      },
+    ]);
+    expect(allCommands).toContainEqual({
+      id: "open-browser-preview",
+      label: "Browser: Open preview",
+      group: "Browser",
+    });
+    expect(allCommands).toContainEqual({
+      id: "browser-reload",
+      label: "Browser: Reload preview",
+      group: "Browser",
+    });
+  });
+
+  test("searches browser commands", () => {
+    const filtered = filterCommands(allCommands, "browser");
+    const ids = filtered.map((command) => command.id);
+
+    expect(ids).toContain("open-browser-preview");
+    expect(ids).toContain("browser-reload");
+    expect(ids).toContain("browser-hard-reload");
+    expect(ids).toContain("browser-capture-screenshot");
   });
 });

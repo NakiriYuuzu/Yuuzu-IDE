@@ -66,11 +66,35 @@ export const node7Commands: CommandItem[] = [
   },
 ];
 
+export const node8Commands: CommandItem[] = [
+  {
+    id: "open-browser-preview",
+    label: "Browser: Open preview",
+    group: "Browser",
+  },
+  {
+    id: "browser-reload",
+    label: "Browser: Reload preview",
+    group: "Browser",
+  },
+  {
+    id: "browser-hard-reload",
+    label: "Browser: Hard reload preview",
+    group: "Browser",
+  },
+  {
+    id: "browser-capture-screenshot",
+    label: "Browser: Capture screenshot",
+    group: "Browser",
+  },
+];
+
 export const allCommands: CommandItem[] = [
   ...node1Commands,
   ...node5Commands,
   ...node6Commands,
   ...node7Commands,
+  ...node8Commands,
 ];
 
 export function filterCommands(
