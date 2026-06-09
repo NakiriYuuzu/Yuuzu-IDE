@@ -5,7 +5,10 @@ use std::{
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     thread,
     time::Duration,
 };
@@ -230,6 +233,7 @@ fn configure_process_group(_command: &mut Command) {}
 #[derive(Clone)]
 struct TaskProcess {
     child: Arc<Mutex<Child>>,
+    stop_started: Arc<AtomicBool>,
     #[cfg(unix)]
     process_group_id: u32,
     #[cfg(windows)]
@@ -241,6 +245,7 @@ impl TaskProcess {
         let pid = child.id();
         Self {
             child: Arc::new(Mutex::new(child)),
+            stop_started: Arc::new(AtomicBool::new(false)),
             #[cfg(unix)]
             process_group_id: pid,
             #[cfg(windows)]
@@ -306,15 +311,16 @@ impl TaskState {
         thread::spawn(move || loop {
             match try_child_exit_code(&process) {
                 Ok(Some(exit_code)) => {
-                    let final_run = mark_run_finished_in_state(
+                    let event = finish_wait_observed_exit(
                         &wait_registry,
                         &wait_processes,
+                        &process,
                         &wait_run_id,
                         exit_code,
                     )
                     .ok()
                     .flatten();
-                    if let Some(event) = final_run.as_ref().and_then(task_finished_event) {
+                    if let Some(event) = event {
                         let _ = app.emit("workspace://task-finished", event);
                     }
                     break;
@@ -343,13 +349,8 @@ impl TaskState {
                 .ok_or_else(|| format!("missing task run: {run_id}"));
         };
 
-        if let Some(exit_code) = try_child_exit_code(&process)? {
-            return mark_run_finished_in_state(&self.registry, &self.processes, run_id, exit_code)?
-                .ok_or_else(|| format!("missing task run: {run_id}"));
-        }
-
-        if let Err(err) = kill_process(&process) {
-            if let Some(exit_code) = try_child_exit_code(&process)? {
+        match begin_stop_or_observe_exit(&process)? {
+            StopStart::AlreadyExited(exit_code) => {
                 return mark_run_finished_in_state(
                     &self.registry,
                     &self.processes,
@@ -358,21 +359,17 @@ impl TaskState {
                 )?
                 .ok_or_else(|| format!("missing task run: {run_id}"));
             }
+            StopStart::Started => {}
+        }
+
+        if let Err(err) = kill_process(&process) {
+            if try_child_exit_code(&process)?.is_some() {
+                return mark_run_stopped_in_state(&self.registry, &self.processes, run_id);
+            }
             return Err(err);
         }
 
-        let run = self
-            .registry
-            .lock()
-            .map_err(|err| err.to_string())?
-            .stop_run(run_id)
-            .ok_or_else(|| format!("missing task run: {run_id}"))?;
-        self.processes
-            .lock()
-            .map_err(|err| err.to_string())?
-            .remove(run_id);
-
-        Ok(run)
+        mark_run_stopped_in_state(&self.registry, &self.processes, run_id)
     }
 
     pub fn list_runs(&self, workspace_id: &str) -> Result<Vec<TaskRun>, String> {
@@ -450,6 +447,62 @@ fn mark_run_finished_in_state(
     }
 
     Ok(run)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum StopStart {
+    AlreadyExited(Option<i32>),
+    Started,
+}
+
+fn begin_stop_or_observe_exit(process: &TaskProcess) -> Result<StopStart, String> {
+    let mut child = process.child.lock().map_err(|err| err.to_string())?;
+    if let Some(status) = child.try_wait().map_err(|err| err.to_string())? {
+        return Ok(StopStart::AlreadyExited(status.code()));
+    }
+
+    process.stop_started.store(true, Ordering::SeqCst);
+    Ok(StopStart::Started)
+}
+
+fn mark_run_stopped_in_state(
+    registry: &Mutex<TaskRunRegistry>,
+    processes: &Mutex<HashMap<String, TaskProcess>>,
+    run_id: &str,
+) -> Result<TaskRun, String> {
+    let run = registry
+        .lock()
+        .map_err(|err| err.to_string())?
+        .stop_run(run_id)
+        .ok_or_else(|| format!("missing task run: {run_id}"))?;
+    processes
+        .lock()
+        .map_err(|err| err.to_string())?
+        .remove(run_id);
+
+    Ok(run)
+}
+
+fn finish_wait_observed_exit(
+    registry: &Mutex<TaskRunRegistry>,
+    processes: &Mutex<HashMap<String, TaskProcess>>,
+    process: &TaskProcess,
+    run_id: &str,
+    exit_code: Option<i32>,
+) -> Result<Option<TaskFinishedEvent>, String> {
+    if process.stop_started.load(Ordering::SeqCst) {
+        processes
+            .lock()
+            .map_err(|err| err.to_string())?
+            .remove(run_id);
+        return Ok(None);
+    }
+
+    Ok(
+        mark_run_finished_in_state(registry, processes, run_id, exit_code)?
+            .as_ref()
+            .and_then(task_finished_event),
+    )
 }
 
 fn try_child_exit_code(process: &TaskProcess) -> Result<Option<Option<i32>>, String> {
@@ -696,6 +749,64 @@ mod tests {
         assert!(super::task_finished_event(&final_run).is_none());
     }
 
+    #[test]
+    fn wait_thread_finalization_after_stop_intent_does_not_emit_or_mark_exited() {
+        let temp = tempdir().expect("tempdir");
+        let state = super::TaskState::new();
+        let run = state
+            .register_test_run(
+                "workspace-a".to_string(),
+                "custom".to_string(),
+                "sleep 60".to_string(),
+                temp.path().into(),
+            )
+            .expect("run");
+        let child = super::task_command("sleep 60", temp.path())
+            .spawn()
+            .expect("child");
+        state
+            .insert_test_process(run.id.clone(), child)
+            .expect("insert child");
+        let process = state
+            .processes
+            .lock()
+            .expect("processes")
+            .get(&run.id)
+            .expect("process")
+            .clone();
+
+        assert_eq!(
+            super::begin_stop_or_observe_exit(&process).expect("begin stop"),
+            super::StopStart::Started
+        );
+        super::kill_process(&process).expect("kill");
+        let exit_code = wait_until_process_exited(&process);
+        let event = super::finish_wait_observed_exit(
+            &state.registry,
+            &state.processes,
+            &process,
+            &run.id,
+            exit_code,
+        )
+        .expect("finish wait");
+        let run_after_wait = state
+            .list_runs("workspace-a")
+            .expect("runs")
+            .into_iter()
+            .next()
+            .expect("run");
+        let stopped = state
+            .registry
+            .lock()
+            .expect("registry")
+            .stop_run(&run.id)
+            .expect("stop");
+
+        assert!(event.is_none());
+        assert_eq!(run_after_wait.status, super::TaskRunStatus::Running);
+        assert_eq!(stopped.status, super::TaskRunStatus::Stopped);
+    }
+
     #[cfg(unix)]
     fn process_group_id(pid: u32) -> Result<u32, String> {
         let output = Command::new("ps")
@@ -722,5 +833,22 @@ mod tests {
         }
 
         panic!("child did not exit");
+    }
+
+    fn wait_until_process_exited(process: &super::TaskProcess) -> Option<i32> {
+        for _ in 0..100 {
+            if let Some(status) = process
+                .child
+                .lock()
+                .expect("child")
+                .try_wait()
+                .expect("try wait")
+            {
+                return status.code();
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        panic!("process did not exit");
     }
 }
