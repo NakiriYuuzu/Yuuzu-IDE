@@ -203,10 +203,10 @@ pub fn write_text_file(
     content: &str,
     expected_version: Option<FileVersion>,
 ) -> Result<FileOperationResult, String> {
-    if content.as_bytes().len() as u64 > EDITABLE_TEXT_LIMIT_BYTES {
+    if content.len() as u64 > EDITABLE_TEXT_LIMIT_BYTES {
         return Err(format!(
             "content exceeds editable limit: {} bytes",
-            content.as_bytes().len()
+            content.len()
         ));
     }
 

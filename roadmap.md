@@ -304,6 +304,9 @@ window.
 
 ### Node 2: Explorer, Files, Search, And Basic Editor
 
+**Status:** completed and passed; measured editor/search results are recorded
+in `docs/architecture/node-2-editor-results.md`.
+
 **Goal:** make the workbench useful for reading and editing project files.
 
 **Scope**
@@ -685,12 +688,16 @@ stable.
 
 ## Current Priority
 
-Node 0 and Node 1 are complete. The next active priority is Node 2: make the
-workbench useful for reading and editing project files while preserving the
-single-WebView, Rust-owned workspace core proven in the first two nodes.
+Node 0, Node 1, and Node 2 are complete. The next active priority is Node 3:
+make terminal workflows first-class inside each workspace while preserving the
+single-WebView, Rust-owned workspace core proven in the first three nodes.
 
 - Node 0 measurements keep Tauri 2 as the main route; Rust-native fallback
   research remains deferred.
 - Node 1 measurements keep the multi-workspace shell inside the physical
   footprint and single-main-WebContent targets; process-tree RSS remains a
   diagnostic metric to watch in future nodes.
+- Node 2 measurements and verification keep explorer, file editing, search,
+  watcher, and large-file guardrails inside the command-level responsiveness
+  targets; WebView-only memory smoke should be filled when desktop automation
+  evidence is available.

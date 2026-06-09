@@ -138,3 +138,150 @@ Residual risks:
   one-workspace memory target. Node 1 treats macOS physical footprint as the
   primary metric because RSS double-counts shared clean WebKit/Tauri mappings,
   but RSS should continue to be tracked as a diagnostic caveat.
+
+### Node 2: Explorer, Files, Search, And Basic Editor
+
+Status: completed and passed.
+
+Node 2 finished Tasks 1-9 and records the final editor/search measurements in
+`docs/architecture/node-2-editor-results.md`. The command-level probe keeps
+file tree scan, small-file read/save, filename search, full-text search, and
+temp-workspace file operations responsive, while the large-file guard keeps
+large content out of editable buffers.
+
+Completed progress:
+
+- Task 1 added bounded Rust file-system commands for read, write, create,
+  rename, delete, metadata/version checks, path containment, and large-file
+  handling.
+- Task 2 added bounded Rust workspace search for filename and full-text hits
+  while respecting ignore traversal and per-file read limits.
+- Task 3 added typed frontend file APIs and pure editor tab/draft state.
+- Task 4 added the interactive explorer tree, nested directory scans, reveal,
+  and guarded create/rename/delete flows.
+- Task 5 added Monaco-backed file tabs, dirty state, draft storage, and save.
+- Task 6 added find-in-file behavior and command-palette file/search commands.
+- Task 7 added the search panel UI and stale-result guards.
+- Task 8 added file watcher commands, external-change detection, watcher
+  ownership claims, and unguessable watcher tokens.
+- Task 9 recorded verification, measurements, documentation, generated Tauri
+  schemas from the debug build, and the lint-only `content.len()` cleanup in
+  `src-tauri/src/file_system.rs`.
+
+Important files and commit milestones:
+
+- `src-tauri/src/file_system.rs`, `src-tauri/src/search.rs`,
+  `src-tauri/src/file_watcher.rs`, `src-tauri/src/workspace_scan.rs`,
+  `src-tauri/src/commands.rs`, and `src-tauri/src/lib.rs` own the Rust
+  filesystem, search, watcher, scan, and IPC surfaces.
+- `src/features/files/file-api.ts`, `src/features/files/file-model.ts`,
+  `src/features/files/draft-store.ts`, `src/features/files/find-model.ts`,
+  `src/features/files/search-model.ts`, `src/features/editor/EditorTab.tsx`,
+  `src/features/workspace/FileTreePanel.tsx`,
+  `src/features/workspace/SearchPanel.tsx`, `src/app/AppShell.tsx`,
+  `src/app/editor-buffer-state.ts`, `src/app/command-palette-model.ts`, and
+  `src/index.css` own the frontend explorer, search, editor, tabs, drafts,
+  dirty/external-change state, and command wiring.
+- `4b51076` through `b273784` added and hardened bounded file-system commands.
+- `e827d8f` through `ae4a6ab` added and hardened bounded workspace search.
+- `74557d9` and `05ce0cb` added and hardened frontend editor file state.
+- `39d6ac8`, `716b05a`, and `acfea6e` added and hardened the explorer tree and
+  file operation UI state.
+- `ad6f95b` and `6826936` added Monaco file editing, drafts, saves, and scoped
+  editor buffer identity.
+- `755984a` and `68b9051` added and stabilized find-in-file commands.
+- `3fabba4` and `279773b` added and guarded the workspace search panel.
+- `9a1997b`, `8e1a3d1`, `2b2e3d1`, and `2f666e6` added and hardened watcher
+  external-change detection, ownership claims, and token safety.
+
+Verification evidence:
+
+- `bun test`: passed with 46 tests, 0 failed, and 77 expect calls across
+  14 files.
+- `bun run build`: passed; Vite emitted a chunk-size warning only.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml`:
+  passed with 66 Rust lib tests plus 0 main/doc tests.
+- `. "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check`:
+  passed.
+- `. "$HOME/.cargo/env" && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`:
+  passed after the lint-only `content.as_bytes().len()` to `content.len()`
+  cleanup.
+- `. "$HOME/.cargo/env" && bun run tauri build --debug`: passed and built the
+  debug app plus macOS debug app/dmg bundles under `src-tauri/target/debug/bundle`;
+  the build regenerated `src-tauri/gen/schemas/*.json`.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml file_system`:
+  passed with 15 focused file-system tests.
+- `bunx playwright test node2-smoke.spec.ts --reporter=line` from
+  `/tmp/yuuzu-node2-playwright`: passed with 1 mocked-preview smoke test in
+  1.5s. The temporary spec injected Tauri IPC mocks and changed no repository
+  files.
+
+TDD red/green/refactor evidence summary:
+
+- Rust file-system behavior was introduced under focused
+  `cargo test --manifest-path src-tauri/Cargo.toml file_system` coverage,
+  then hardened through follow-up tests for command boundaries, normalized
+  containment, lexical mutation/read constraints, bounded reads, save metadata,
+  and symlink-safe operations.
+- Rust search behavior was introduced under focused
+  `cargo test --manifest-path src-tauri/Cargo.toml search` coverage, then
+  hardened through tests for bounded work, unreadable files, failed entries,
+  metadata failures, skipped large files, and deterministic ordering.
+- Frontend editor/file model behavior was introduced under focused Bun tests
+  for `src/features/files/file-model.test.ts` and
+  `src/app/workspace-view-state.test.ts`, then hardened with
+  `src/features/files/draft-store.test.ts`,
+  `src/app/editor-buffer-state.test.ts`, and
+  `src/features/editor/EditorTab.test.ts`.
+- Explorer behavior was covered by
+  `bun test src/features/workspace/file-tree-model.test.ts`, including reveal
+  state, stale directory results, editor cleanup after removed paths, and unsafe
+  rename states.
+- Find and search panel behavior were covered by
+  `bun test src/features/files/find-model.test.ts`,
+  `bun test src/app/command-palette-model.test.ts`, and
+  `bun test src/features/files/search-model.test.ts`.
+- Watcher behavior was introduced under focused
+  `cargo test --manifest-path src-tauri/Cargo.toml file_watcher` coverage and
+  frontend `bun test src/features/files/file-model.test.ts` coverage, then
+  hardened for canonical event matching, missing versions, ownership claims,
+  release behavior, and unguessable watch IDs.
+- Task 9 itself is documentation and verification only, so it records the
+  behavior-task evidence rather than adding a new behavior RED/GREEN cycle.
+
+Final measurement evidence:
+
+- Measurement probe path: `/tmp/yuuzu-node2-measure`, outside the repository.
+- Probe dependency note: it directly included the repository Rust modules and
+  used `ignore` 0.4.26.
+- Nested file tree scan: 1 ms for 2 entries.
+- Small file read: 1 ms for 49 bytes.
+- Small file save: 11 ms.
+- Filename search over the medium workspace: 16 ms with 1 match.
+- Full-text search over the medium workspace: 12 ms with 1 match.
+- Large-file open guard: `too_large=true` and `content_loaded=false`, keeping
+  content out of editable Monaco buffers.
+- Temp-workspace destructive file operation smoke: passed.
+- Create, rename, and delete timings in the temp workspace: 1 ms each.
+- Temporary preview server:
+  `bun run preview -- --host 127.0.0.1 --port 4173`.
+- Temporary mocked Playwright spec:
+  `/tmp/yuuzu-node2-playwright/node2-smoke.spec.ts`.
+- Mocked preview smoke covered app shell loading a mocked workspace, explorer
+  expansion for `src`, opening `main.ts`, Monaco editor visibility, lazy editor
+  chunk loading, and JS heap after file open.
+- Initial editor chunk requests: 0.
+- Editor chunk requests after opening the file: 4.
+- Used JS heap after file open: 18 MB.
+- Chromium was installed into the user Playwright cache for the temporary
+  runner; repository dependencies were not modified.
+
+Residual risks:
+
+- Normal browser preview cannot exercise real Tauri filesystem IPC, so the
+  Playwright smoke used injected mocks for UI coverage. The debug app build
+  passed, and command-level tests/probes covered real file workflows.
+- The 18 MB memory value is a mocked Chromium preview JS heap measurement, not
+  a settled desktop Tauri app footprint value.
+- Vite chunk-size warning remains during `bun run build`; it is accepted for
+  Node 2 because the build exits successfully and Monaco remains lazy-loaded.
