@@ -2,9 +2,13 @@
 
 ## Status
 
-Node 8 (Tasks 1-5) is documented here.  
-Verification was captured from the required Task 6 commands in the `Verification
-Evidence` section.
+Node 8 completed and passed.
+
+Task 6 verification first exposed a full-suite frontend test isolation failure:
+`DocsPanel.test.tsx` replaced the shared Happy DOM after Testing Library had
+already loaded. The remediation commit `b382df1` switched that test to the
+shared `ensureTestDom()` helper. The required verification commands were then
+rerun and passed as recorded in the `Verification Evidence` section.
 
 ## Scope Delivered
 
@@ -38,11 +42,20 @@ Evidence` section.
 | Task 4 | `987c999`, `eefdf3f`, `cbb0842` | `987c999` was approved after implementation. | `eefdf3f` and `cbb0842` were approved for code-quality issues. | `eefdf3f`, `cbb0842` |
 | Task 5 | `d395791`, `8b04509`, `9645e89`, `7cbb68f` | `8b04509` and `9645e89` were approved for spec alignment. | `7cbb68f` was approved for code-quality hardening. | `8b04509`, `9645e89`, `7cbb68f` |
 
+Verification remediation:
+
+- `b382df1` fixed `DocsPanel.test.tsx` test-DOM isolation. The RED command
+  `bun test src/app/activity-rail.test.tsx src/features/docs/DocsPanel.test.tsx src/features/browser/BrowserPanel.test.tsx src/features/browser/BrowserPreviewSurface.test.tsx`
+  reproduced 15 pass and 9 fail with empty-document Testing Library errors.
+  The same command passed after the fix with 24 pass, 0 failed, and 70 expect
+  calls.
+
 ## Verification Evidence
 
-- `bun test` → FAIL: 226 passed, 9 failed, 603 expect() calls, ran 235 tests across 31 files.
+- `bun test` → PASS: 235 passed, 0 failed, 627 expect() calls, ran 235 tests
+  across 31 files.
 - `bun run build` → PASS: `tsc && vite build` completed successfully, with chunk-size warnings only.
-- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml` → PASS: 176 Rust tests passed, 0 failed, 1 ignored.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml` → PASS: 176 Rust tests passed, 0 failed, 1 ignored, plus 0 main/doc tests.
 - `. "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check` → PASS.
 - `. "$HOME/.cargo/env" && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings` → PASS.
 - `. "$HOME/.cargo/env" && bun run tauri build --debug` → PASS: built `src-tauri/target/debug/yuuzu-ide`, `src-tauri/target/debug/bundle/macos/Yuuzu-IDE.app`, and `src-tauri/target/debug/bundle/dmg/Yuuzu-IDE_0.1.0_aarch64.dmg`.

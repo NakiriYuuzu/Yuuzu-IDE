@@ -872,11 +872,10 @@ Node 8 finished Tasks 1-5 and records final results in
 
 Final verification outcomes:
 
-- `bun test`: ran 235 tests across 31 files with 226 pass, 9 fail, and 603 expect
-  calls.
+- `bun test`: PASS with 235 passed, 0 failed, 627 expect calls across 31 files.
 - `bun run build`: PASS with `tsc && vite build`; Vite chunk-size warnings only.
 - `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml`:
-  PASS with 176 Rust tests passed, 0 failed, 1 ignored.
+  PASS with 176 Rust tests passed, 0 failed, 1 ignored, plus 0 main/doc tests.
 - `. "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check`:
   PASS.
 - `. "$HOME/.cargo/env" && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings`:
@@ -888,6 +887,10 @@ Final verification outcomes:
 - `git diff --check`: PASS.
 - `bun test src/features/browser/browser-model.test.ts src/features/browser/BrowserPanel.test.tsx src/features/browser/BrowserPreviewSurface.test.tsx src/app/AppShell.contract.test.tsx`:
   PASS with 54 passed, 0 failed, 178 expect() calls.
+- Verification remediation `b382df1` fixed a full-suite test-DOM isolation issue
+  in `src/features/docs/DocsPanel.test.tsx`. The reproducer command
+  `bun test src/app/activity-rail.test.tsx src/features/docs/DocsPanel.test.tsx src/features/browser/BrowserPanel.test.tsx src/features/browser/BrowserPreviewSurface.test.tsx`
+  passed afterward with 24 passed, 0 failed, 70 expect calls.
 
 Next decision:
 

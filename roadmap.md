@@ -692,14 +692,11 @@ stable.
 - Index storage format.
 - Workspace metadata file location.
 - Extension host language and sandbox.
-- Whether browser preview should be embedded in the first stable app or delayed
-  until after agent/docs workflows.
 
 ## Current Priority
 
-Node 0, Node 1, Node 2, Node 3, Node 4, Node 5, Node 6, and Node 7 are
+Node 0, Node 1, Node 2, Node 3, Node 4, Node 5, Node 6, Node 7, and Node 8 are
 complete. The next active priority is Node 9: Database Tools.
-development loops beside code.
 
 - Node 0 measurements keep Tauri 2 as the main route; Rust-native fallback
   research remains deferred.
