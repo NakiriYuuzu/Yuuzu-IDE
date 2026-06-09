@@ -49,6 +49,100 @@ afterEach(() => {
 });
 
 describe("AppShell AppShell helpers", () => {
+  test("PanelBody renders browser placeholder when active", () => {
+    const renderResult = render(
+      <PanelBody
+        active="browser"
+        refreshKey={0}
+        activeFilePath="src/app/AppShell.tsx"
+        terminalSessions={[]}
+        activeTerminalId={null}
+        terminalCwdInput=""
+        terminalError={null}
+        taskState={{
+          detectedTasks: [],
+          runs: [],
+          activeRunId: null,
+          outputByRunId: {},
+          problemsByRunId: {},
+          pendingOutputByRunId: {},
+          pendingFinishByRunId: {},
+          contextPackByRunId: {},
+          customCommand: "",
+        }}
+        taskError={null}
+        gitState={{
+          status: null,
+          loading: false,
+          error: null,
+          commitMessage: "",
+          selectedDiff: null,
+          diffByKey: {},
+          branches: [],
+          graph: [],
+        }}
+        docsState={createDocsState()}
+        contextPackNameById={{}}
+        gitDecorations={{}}
+        agentState={createAgentState()}
+        availableAgentContext={[]}
+        onAgentModeChange={() => {}}
+        onAgentPromptChange={() => {}}
+        onAgentToggleContext={() => {}}
+        onAgentStartSession={() => {}}
+        onAgentSelectSession={() => {}}
+        onAgentApprove={() => {}}
+        onAgentReject={() => {}}
+        onAgentExport={() => {}}
+        onOpenFile={() => Promise.resolve()}
+        onCreateFile={async () => {}}
+        onRenamePath={async () => {}}
+        onDeletePath={async () => {}}
+        onTerminalCwdInputChange={() => {}}
+        onNewTerminal={() => Promise.resolve()}
+        onActivateTerminal={() => {}}
+        onCloseTerminal={() => Promise.resolve()}
+        onRestartTerminal={() => Promise.resolve()}
+        onTaskCustomCommandChange={() => {}}
+        onRunTask={() => {}}
+        onRunCustomTask={() => {}}
+        onActivateTaskRun={() => {}}
+        onStopTaskRun={() => Promise.resolve()}
+        onRerunTaskRun={() => {}}
+        onGitRefresh={() => Promise.resolve()}
+        onGitCommitMessageChange={() => {}}
+        onGitCommit={() => {}}
+        onGitStage={() => {}}
+        onGitUnstage={() => {}}
+        onGitDiscard={() => {}}
+        onGitOpenDiff={() => {}}
+        onGitStash={() => {}}
+        onGitFetch={() => {}}
+        onGitPull={() => {}}
+        onGitPush={() => {}}
+        onGitCheckoutBranch={() => {}}
+        onGitCreateBranch={() => {}}
+        onGitOpenGraph={() => {}}
+        onDocsRefresh={() => Promise.resolve()}
+        onDocsSearch={() => {}}
+        onDocsOpenPreview={() => Promise.resolve()}
+        onDocsToggleSource={() => {}}
+        onDocsPackNameChange={() => {}}
+        onDocsCreatePack={() => Promise.resolve()}
+        onDocsSelectPack={() => {}}
+        onDocsDeletePack={() => Promise.resolve()}
+        onDocsUsePackForActiveTask={() => Promise.resolve()}
+        onDocsLinkPackToAgentSession={() => Promise.resolve()}
+        onLanguageOpenDiagnostic={() => {}}
+        onLanguageRefresh={() => Promise.resolve()}
+        onLanguageRestartServer={() => {}}
+        languageState={createLanguageState()}
+      />,
+    );
+
+    expect(renderResult.getByText("Browser")).toBeTruthy();
+  });
+
   test("collects all bounded agent context pieces", () => {
     const source = {
       workspaceRoot: "/repo",

@@ -607,9 +607,16 @@ button {
 }
 
 .browser-preview-surface {
+  height: 100%;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  background: var(--chrome-2);
+}
+
+.browser-preview-surface-wrap > .browser-preview-surface {
   height: 230px;
   min-height: 230px;
-  background: var(--chrome-2);
 }
 
 .browser-empty-state {

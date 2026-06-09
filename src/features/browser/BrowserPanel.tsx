@@ -89,9 +89,9 @@ export function BrowserPanel({
           aria-label="Browser URL"
           value={state.urlInput}
           onChange={(event) => onUrlInputChange(event.currentTarget.value)}
-          onKeyDown={(event) => {
+          onKeyDown={(event: React.KeyboardEvent<HTMLInputElement>) => {
             if (event.key === "Enter") {
-              onOpenUrl(state.urlInput);
+              onOpenUrl(event.currentTarget.value);
             }
           }}
         />
@@ -202,7 +202,10 @@ export function BrowserPanel({
         </div>
         {state.consoleErrors.length > 0 ? (
           state.consoleErrors.map((entry) => (
-            <div className="row browser-console-row" key={`${entry.captured_ms}`}>
+            <div
+              className="row browser-console-row"
+              key={`${entry.captured_ms}:${entry.level}:${entry.message}`}
+            >
               <span
                 className={`badge2${consoleBadgeLevel(entry) ? ` ${consoleBadgeLevel(entry)}` : ""}`}
               >

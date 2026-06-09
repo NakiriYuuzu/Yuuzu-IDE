@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
-type KnownActivityId =
+export type KnownActivityId =
   | "explorer"
   | "search"
   | "git"
@@ -26,7 +26,7 @@ type KnownActivityId =
   | "settings"
   | "browser";
 
-export type ActivityId = string & (KnownActivityId | {});
+export type ActivityId = KnownActivityId;
 
 type ActivityItem = {
   id: ActivityId;

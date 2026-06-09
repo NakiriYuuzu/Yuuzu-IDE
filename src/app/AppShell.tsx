@@ -284,6 +284,7 @@ const panelTitles: Record<ActivityId, string> = {
   language: "Language",
   agents: "Agents",
   database: "Database",
+  browser: "Browser",
   settings: "Settings",
 };
 
@@ -2882,6 +2883,11 @@ export function AppShell() {
     setPanelOpen(true);
   }
 
+  function openBrowserPanel() {
+    setActiveActivity("browser");
+    setPanelOpen(true);
+  }
+
   function openAgentsPanel() {
     setActiveActivity("agents");
     setPanelOpen(true);
@@ -3527,6 +3533,9 @@ export function AppShell() {
         break;
       case "open-agents":
         openAgentsPanel();
+        break;
+      case "open-browser-preview":
+        openBrowserPanel();
         break;
       case "agent-start-session": {
         if (!activeWorkspaceId) {

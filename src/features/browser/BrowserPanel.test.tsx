@@ -42,9 +42,13 @@ describe("BrowserPanel", () => {
 
     fireEvent.change(input, { target: { value: "http://localhost:5174" } });
     expect(onUrlInputChange).toHaveBeenCalledWith("http://localhost:5174");
+    input.value = "http://localhost:5174";
 
-    fireEvent.keyDown(input, { key: "Enter" });
-    expect(onOpenUrl).toHaveBeenCalledWith(state.urlInput);
+    fireEvent.keyDown(input, {
+      key: "Enter",
+      target: { value: "http://localhost:5174" },
+    });
+    expect(onOpenUrl).toHaveBeenCalledWith("http://localhost:5174");
   });
 
   test("opens URL via open button", () => {
@@ -304,5 +308,55 @@ describe("BrowserPanel", () => {
     expect(screen.getByText("error")).toBeTruthy();
     expect(screen.getByText("warning")).toBeTruthy();
     expect(screen.getByText("info")).toBeTruthy();
+  });
+
+  test("uses stable deduplicated console row keys", () => {
+    const originalError = console.error;
+    const consoleError = mock<(message?: string, ..._rest: any[]) => void>(
+      () => {},
+    );
+    console.error = consoleError;
+
+    try {
+      render(
+        <BrowserPanel
+          state={{
+            ...createBrowserState(),
+            consoleErrors: [
+              {
+                message: "Error failed",
+                level: "error" as const,
+                captured_ms: 4,
+              },
+              {
+                message: "Warning slow",
+                level: "warning" as const,
+                captured_ms: 4,
+              },
+            ],
+          }}
+          devServerTargets={[]}
+          canCapture={true}
+          onUrlInputChange={() => {}}
+          onOpenUrl={() => {}}
+          onOpenTarget={() => {}}
+          onReload={() => {}}
+          onHardReload={() => {}}
+          onCapture={() => {}}
+          onSelectScreenshot={() => {}}
+        />,
+      );
+
+      const duplicateKeyWarningCalls = consoleError.mock.calls.filter((call) =>
+        typeof call[0] === "string" &&
+        call[0].includes("Encountered two children with the same key"),
+      );
+
+      expect(duplicateKeyWarningCalls).toHaveLength(0);
+      expect(screen.getByText("Error failed")).toBeTruthy();
+      expect(screen.getByText("Warning slow")).toBeTruthy();
+    } finally {
+      console.error = originalError;
+    }
   });
 });
