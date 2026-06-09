@@ -7,6 +7,8 @@ import {
   agentBadgeCount,
   agentContextSummary,
   approvalEntries,
+  type AgentMode,
+  type AgentViewState,
   createAgentState,
   replaceAgentSessions,
   selectAgentSession,
@@ -15,7 +17,7 @@ import {
   type AgentSession,
 } from "./agent-model";
 
-function session(id: string, mode = "plan"): AgentSession {
+function session(id: string, mode: AgentMode = "plan"): AgentSession {
   return {
     id,
     workspace_root: "/repo",
@@ -71,11 +73,17 @@ describe("agent model", () => {
     expect(activeAgentSession(state)?.id).toBe("new");
   });
 
-  test("stores updated sessions without reordering unrelated sessions", () => {
-    const state = replaceAgentSessions(createAgentState(), [
-      session("one"),
-      session("two"),
-    ]);
+  test("preserves draft and active session when updating existing non-active sessions", () => {
+    const state: AgentViewState = {
+      ...replaceAgentSessions(createAgentState(), [
+        session("one"),
+        session("two"),
+      ]),
+      activeSessionId: "two",
+      promptDraft: "In progress",
+      selectedContextIds: { "file:src/app/AppShell.tsx": true } satisfies Record<string, true>,
+    };
+
     const updated = storeAgentSession(state, {
       ...session("one"),
       prompt: "Updated",
@@ -84,6 +92,31 @@ describe("agent model", () => {
 
     expect(updated.sessions.map((item) => item.id)).toEqual(["one", "two"]);
     expect(updated.sessions[0].prompt).toBe("Updated");
+    expect(updated.activeSessionId).toBe("two");
+    expect(updated.promptDraft).toBe("In progress");
+    expect(updated.selectedContextIds).toEqual({
+      "file:src/app/AppShell.tsx": true,
+    });
+  });
+
+  test("clears draft and selects newly inserted sessions", () => {
+    const state: AgentViewState = {
+      ...replaceAgentSessions(createAgentState(), [session("one"), session("two")]),
+      activeSessionId: "two",
+      promptDraft: "In progress",
+      selectedContextIds: { "file:src/app/AppShell.tsx": true } satisfies Record<string, true>,
+    };
+
+    const updated = storeAgentSession(state, {
+      ...session("three"),
+      prompt: "New plan",
+      updated_ms: 10,
+    });
+
+    expect(updated.sessions[0].id).toBe("three");
+    expect(updated.activeSessionId).toBe("three");
+    expect(updated.promptDraft).toBe("");
+    expect(updated.selectedContextIds).toEqual({});
   });
 
   test("summarizes context and approvals", () => {

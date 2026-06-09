@@ -100,6 +100,10 @@ export function storeAgentSession(
   const sessions = exists
     ? state.sessions.map((item) => (item.id === session.id ? session : item))
     : [session, ...state.sessions];
+  if (exists) {
+    return { ...state, sessions, loading: false, error: null };
+  }
+
   return {
     ...state,
     sessions,
