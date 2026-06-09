@@ -32,6 +32,7 @@ import { MarkdownPreview } from "../features/docs/MarkdownPreview";
 import {
   activeDocPreview,
   beginDocPreview,
+  contextPackByLinkedTaskRunId,
   createDocsRequestIdentity,
   docsBadgeCount,
   docsPreviewPathLabel,
@@ -145,6 +146,7 @@ import {
   activateTaskRun,
   appendTaskOutput,
   finishTaskRun,
+  hydrateTaskRunContextPacks,
   linkTaskRunContextPack,
   replaceDetectedTasks,
   replaceTaskRuns,
@@ -444,7 +446,7 @@ function PanelBody({
   onDocsLinkPackToAgentSession: (
     id: string,
     agentSessionId: string,
-  ) => void;
+  ) => Promise<void>;
 }) {
   if (active === "git") {
     return (
@@ -932,7 +934,15 @@ export function AppShell() {
           return;
         }
 
-        updateTask(workspaceId, (task) => replaceTaskRuns(task, runs));
+        const contextPackByRunId = contextPackByLinkedTaskRunId(
+          workspaceViewStore.getState().viewFor(workspaceId).docs.contextPacks,
+        );
+        updateTask(workspaceId, (task) =>
+          replaceTaskRuns(task, runs, {
+            ...task.contextPackByRunId,
+            ...contextPackByRunId,
+          }),
+        );
       })
       .catch((error) => {
         if (!disposed) {
@@ -1036,6 +1046,12 @@ export function AppShell() {
           loading: false,
           error: null,
         }));
+        updateTask(workspaceId, (task) =>
+          hydrateTaskRunContextPacks(
+            task,
+            contextPackByLinkedTaskRunId(contextPacks),
+          ),
+        );
       })
       .catch((error) => {
         if (docsLoadRequestRef.current !== requestId) {
@@ -2367,6 +2383,7 @@ export function AppShell() {
         ...state,
         error: `Link agent failed: ${terminalErrorMessage(error)}`,
       }));
+      throw error;
     }
   }
 
@@ -2582,9 +2599,7 @@ export function AppShell() {
               onDocsUsePackForActiveTask={(id) =>
                 void linkPackToActiveTask(id)
               }
-              onDocsLinkPackToAgentSession={(id, agentSessionId) =>
-                void linkPackToAgentSession(id, agentSessionId)
-              }
+              onDocsLinkPackToAgentSession={linkPackToAgentSession}
             />
           </aside>
         ) : null}

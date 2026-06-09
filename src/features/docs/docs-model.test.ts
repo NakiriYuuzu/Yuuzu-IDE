@@ -4,6 +4,7 @@ import {
   activeDocPreview,
   beginDocPreview,
   type ContextPack,
+  contextPackByLinkedTaskRunId,
   contextPackSummary,
   createDocsState,
   docsBadgeCount,
@@ -139,6 +140,25 @@ describe("docs model", () => {
         linked_agent_session_ids: ["agent-1", "agent-2"],
       }),
     ).toBe("2 docs | 1 task link | 2 agent links");
+  });
+
+  test("maps linked task runs to their context packs", () => {
+    expect(
+      contextPackByLinkedTaskRunId([
+        {
+          ...pack("pack-1", "First"),
+          linked_task_run_ids: ["workspace:task-1"],
+        },
+        {
+          ...pack("pack-2", "Second"),
+          linked_task_run_ids: ["workspace:task-2", "workspace:task-3"],
+        },
+      ]),
+    ).toEqual({
+      "workspace:task-1": "pack-1",
+      "workspace:task-2": "pack-2",
+      "workspace:task-3": "pack-2",
+    });
   });
 
   test("tracks active docs preview independently from cached preview order", () => {

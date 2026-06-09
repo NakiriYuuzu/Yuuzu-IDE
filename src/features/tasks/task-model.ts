@@ -137,16 +137,17 @@ export function setTaskErrorForWorkspace(
 export function replaceTaskRuns(
   state: TaskViewState,
   runs: TaskRun[],
+  contextPackByRunId: Record<string, string> = state.contextPackByRunId,
 ): TaskViewState {
+  const restoredRuns = [...runs]
+    .sort(compareRestoredTaskRuns)
+    .slice(0, MAX_TASK_RUNS);
   const emptyState: TaskViewState = {
     ...state,
     runs: [],
     activeRunId: null,
-    contextPackByRunId: {},
+    contextPackByRunId: contextPackLinksForRuns(contextPackByRunId, restoredRuns),
   };
-  const restoredRuns = [...runs]
-    .sort(compareRestoredTaskRuns)
-    .slice(0, MAX_TASK_RUNS);
   const restoredState = [...restoredRuns]
     .reverse()
     .reduce<TaskViewState>(
@@ -155,6 +156,33 @@ export function replaceTaskRuns(
     );
 
   return { ...restoredState, activeRunId: restoredRuns[0]?.id ?? null };
+}
+
+function contextPackLinksForRuns(
+  contextPackByRunId: Record<string, string>,
+  runs: TaskRun[],
+): Record<string, string> {
+  const runIds = new Set(runs.map((run) => run.id));
+
+  return Object.fromEntries(
+    Object.entries(contextPackByRunId).filter(([runId]) => runIds.has(runId)),
+  );
+}
+
+export function hydrateTaskRunContextPacks(
+  state: TaskViewState,
+  contextPackByRunId: Record<string, string>,
+): TaskViewState {
+  return {
+    ...state,
+    contextPackByRunId: contextPackLinksForRuns(
+      {
+        ...state.contextPackByRunId,
+        ...contextPackByRunId,
+      },
+      state.runs,
+    ),
+  };
 }
 
 export function upsertTaskRun(state: TaskViewState, run: TaskRun): TaskViewState {

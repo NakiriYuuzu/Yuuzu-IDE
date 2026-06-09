@@ -31,7 +31,10 @@ type DocsPanelProps = {
   onDeletePack: (id: string) => void;
   activeTaskRunId: string | null;
   onUsePackForActiveTask: (id: string) => void;
-  onLinkPackToAgentSession: (id: string, agentSessionId: string) => void;
+  onLinkPackToAgentSession: (
+    id: string,
+    agentSessionId: string,
+  ) => Promise<void>;
 };
 
 function DocsIndexRow({
@@ -118,7 +121,10 @@ function ContextPackRow({
   onDeletePack: (id: string) => void;
   onAgentSessionIdChange: (id: string, value: string) => void;
   onUsePackForActiveTask: (id: string) => void;
-  onLinkPackToAgentSession: (id: string, agentSessionId: string) => void;
+  onLinkPackToAgentSession: (
+    id: string,
+    agentSessionId: string,
+  ) => Promise<void>;
 }) {
   const trimmedAgentSessionId = agentSessionId.trim();
 
@@ -155,9 +161,7 @@ function ContextPackRow({
           title={`Link ${pack.name} to agent session`}
           aria-label={`Link ${pack.name} to agent session`}
           disabled={!trimmedAgentSessionId}
-          onClick={() =>
-            onLinkPackToAgentSession(pack.id, trimmedAgentSessionId)
-          }
+          onClick={() => void onLinkPackToAgentSession(pack.id, trimmedAgentSessionId)}
         >
           <Link2 aria-hidden="true" />
         </button>
@@ -338,12 +342,16 @@ export function DocsPanel({
                   }))
                 }
                 onUsePackForActiveTask={onUsePackForActiveTask}
-                onLinkPackToAgentSession={(id, agentSessionId) => {
-                  onLinkPackToAgentSession(id, agentSessionId);
-                  setAgentSessionByPackId((current) => ({
-                    ...current,
-                    [id]: "",
-                  }));
+                onLinkPackToAgentSession={async (id, agentSessionId) => {
+                  try {
+                    await onLinkPackToAgentSession(id, agentSessionId);
+                    setAgentSessionByPackId((current) => ({
+                      ...current,
+                      [id]: "",
+                    }));
+                  } catch {
+                    // AppShell owns the visible error state; keep the draft intact.
+                  }
                 }}
               />
             ))

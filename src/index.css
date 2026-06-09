@@ -2021,6 +2021,15 @@ button {
 
 .docs-pack-row {
   min-height: 38px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 5px 6px;
+  padding-block: 5px;
+  white-space: normal;
+}
+
+.docs-pack-row .docs-row-main {
+  flex: 1 1 100%;
 }
 
 .docs-row-main {
@@ -2089,8 +2098,10 @@ button {
 }
 
 .docs-pack-actions {
+  flex: 1 1 100%;
   display: flex;
   min-width: 0;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
 }

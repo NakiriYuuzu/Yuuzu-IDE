@@ -134,6 +134,20 @@ export function contextPackSummary(pack: ContextPack): string {
   ].join(" | ");
 }
 
+export function contextPackByLinkedTaskRunId(
+  packs: ContextPack[],
+): Record<string, string> {
+  const contextPackByRunId: Record<string, string> = {};
+
+  for (const pack of packs) {
+    for (const runId of pack.linked_task_run_ids) {
+      contextPackByRunId[runId] = pack.id;
+    }
+  }
+
+  return contextPackByRunId;
+}
+
 export function beginDocPreview(
   state: DocsViewState,
   path: string,

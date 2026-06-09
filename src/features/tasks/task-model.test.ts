@@ -7,6 +7,7 @@ import {
   appendTaskOutput,
   createTaskState,
   finishTaskRun,
+  hydrateTaskRunContextPacks,
   linkTaskRunContextPack,
   replaceDetectedTasks,
   replaceTaskRuns,
@@ -207,6 +208,77 @@ describe("task model", () => {
 
     expect(linked.contextPackByRunId[run.id]).toBe("pack-1");
     expect(missing.contextPackByRunId).toEqual(linked.contextPackByRunId);
+  });
+
+  test("restored task history preserves context pack links for restored runs", () => {
+    const first = runningRun({
+      id: "workspace:task-1",
+      workspace_id: "workspace",
+    });
+    const second = runningRun({
+      id: "workspace:task-2",
+      workspace_id: "workspace",
+    });
+    const linked = linkTaskRunContextPack(
+      upsertTaskRun(upsertTaskRun(createTaskState(), first), second),
+      first.id,
+      "pack-1",
+    );
+
+    const restored = replaceTaskRuns(linked, [first]);
+
+    expect(restored.contextPackByRunId).toEqual({
+      [first.id]: "pack-1",
+    });
+  });
+
+  test("hydrates restored task context pack links from persisted metadata", () => {
+    const restored = replaceTaskRuns(createTaskState(), [
+      runningRun({
+        id: "workspace:task-1",
+        workspace_id: "workspace",
+      }),
+      runningRun({
+        id: "workspace:task-2",
+        workspace_id: "workspace",
+      }),
+    ]);
+
+    const hydrated = hydrateTaskRunContextPacks(restored, {
+      "workspace:task-1": "pack-1",
+      "workspace:task-missing": "pack-missing",
+    });
+
+    expect(hydrated.contextPackByRunId).toEqual({
+      "workspace:task-1": "pack-1",
+    });
+  });
+
+  test("hydrated context pack links preserve local links for restored runs", () => {
+    const restored = replaceTaskRuns(createTaskState(), [
+      runningRun({
+        id: "workspace:task-1",
+        workspace_id: "workspace",
+      }),
+      runningRun({
+        id: "workspace:task-2",
+        workspace_id: "workspace",
+      }),
+    ]);
+    const locallyLinked = linkTaskRunContextPack(
+      restored,
+      "workspace:task-2",
+      "local-pack",
+    );
+
+    const hydrated = hydrateTaskRunContextPacks(locallyLinked, {
+      "workspace:task-1": "persisted-pack",
+    });
+
+    expect(hydrated.contextPackByRunId).toEqual({
+      "workspace:task-1": "persisted-pack",
+      "workspace:task-2": "local-pack",
+    });
   });
 
   test("workspace task defaults freeze context pack metadata", () => {
