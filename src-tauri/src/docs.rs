@@ -1,7 +1,10 @@
 use std::{
+    ffi::{OsStr, OsString},
     fs,
+    fs::OpenOptions,
+    io::Write,
     path::{Component, Path, PathBuf},
-    time::UNIX_EPOCH,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 pub const MAX_DOC_BYTES: u64 = 512 * 1024;
@@ -50,6 +53,158 @@ pub struct DocSearchMatch {
     pub title: String,
     pub line_number: usize,
     pub line: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ContextPack {
+    pub id: String,
+    pub workspace_root: String,
+    pub name: String,
+    pub doc_paths: Vec<String>,
+    pub linked_task_run_ids: Vec<String>,
+    pub linked_agent_session_ids: Vec<String>,
+    pub created_ms: u64,
+    pub updated_ms: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct ContextPackStore {
+    path: PathBuf,
+}
+
+impl ContextPackStore {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    pub fn list_packs(&self, workspace_root: &str) -> Result<Vec<ContextPack>, String> {
+        Ok(self
+            .load()?
+            .into_iter()
+            .filter(|pack| pack.workspace_root == workspace_root)
+            .collect())
+    }
+
+    pub fn create_pack(
+        &self,
+        workspace_root: &str,
+        name: &str,
+        doc_paths: Vec<String>,
+    ) -> Result<ContextPack, String> {
+        let mut packs = self.load()?;
+        let now = current_time_ms()?;
+        let pack = ContextPack {
+            id: uuid::Uuid::new_v4().to_string(),
+            workspace_root: workspace_root.to_string(),
+            name: name.to_string(),
+            doc_paths,
+            linked_task_run_ids: Vec::new(),
+            linked_agent_session_ids: Vec::new(),
+            created_ms: now,
+            updated_ms: now,
+        };
+
+        packs.push(pack.clone());
+        self.save(&packs)?;
+        Ok(pack)
+    }
+
+    pub fn delete_pack(&self, id: &str) -> Result<(), String> {
+        let mut packs = self.load()?;
+        let original_len = packs.len();
+        packs.retain(|pack| pack.id != id);
+        if packs.len() == original_len {
+            return Err(format!("context pack not found: {id}"));
+        }
+
+        self.save(&packs)
+    }
+
+    pub fn link_pack(
+        &self,
+        id: &str,
+        task_run_id: Option<&str>,
+        agent_session_id: Option<&str>,
+    ) -> Result<ContextPack, String> {
+        let mut packs = self.load()?;
+        let pack = packs
+            .iter_mut()
+            .find(|pack| pack.id == id)
+            .ok_or_else(|| format!("context pack not found: {id}"))?;
+
+        if let Some(task_run_id) = task_run_id {
+            push_unique(&mut pack.linked_task_run_ids, task_run_id);
+        }
+        if let Some(agent_session_id) = agent_session_id {
+            push_unique(&mut pack.linked_agent_session_ids, agent_session_id);
+        }
+        let now = current_time_ms()?;
+        pack.updated_ms = now.max(pack.updated_ms.saturating_add(1));
+        let updated = pack.clone();
+
+        self.save(&packs)?;
+        Ok(updated)
+    }
+
+    fn load(&self) -> Result<Vec<ContextPack>, String> {
+        if !self.path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let value = fs::read_to_string(&self.path).map_err(|err| err.to_string())?;
+        serde_json::from_str(&value).map_err(|err| err.to_string())
+    }
+
+    fn save(&self, packs: &[ContextPack]) -> Result<(), String> {
+        if let Some(parent) = self
+            .path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        }
+
+        let value = serde_json::to_string_pretty(packs).map_err(|err| err.to_string())?;
+        let parent = self
+            .path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let file_name = self
+            .path
+            .file_name()
+            .unwrap_or_else(|| OsStr::new("context-packs.json"));
+        let mut temp_file_name = OsString::from(".");
+        temp_file_name.push(file_name);
+        temp_file_name.push(".tmp");
+        let temp_path = parent.join(temp_file_name);
+
+        let result = (|| {
+            match fs::remove_file(&temp_path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err.to_string()),
+            }
+
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&temp_path)
+                .map_err(|err| err.to_string())?;
+            file.write_all(value.as_bytes())
+                .map_err(|err| err.to_string())?;
+            file.sync_all().map_err(|err| err.to_string())?;
+            drop(file);
+            fs::rename(&temp_path, &self.path).map_err(|err| err.to_string())
+        })();
+
+        if result.is_err() {
+            let _ = fs::remove_file(&temp_path);
+        }
+
+        result
+    }
 }
 
 pub fn index_docs(workspace_root: &Path) -> Result<Vec<DocIndexEntry>, String> {
@@ -336,6 +491,19 @@ fn modified_ms(metadata: &fs::Metadata) -> Result<u64, String> {
         .duration_since(UNIX_EPOCH)
         .map_err(|err| err.to_string())?;
     Ok(duration.as_millis() as u64)
+}
+
+fn current_time_ms() -> Result<u64, String> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| err.to_string())?;
+    Ok(duration.as_millis() as u64)
+}
+
+fn push_unique(values: &mut Vec<String>, value: &str) {
+    if !values.iter().any(|existing| existing == value) {
+        values.push(value.to_string());
+    }
 }
 
 fn title_for(content: &str, path: &Path) -> String {
@@ -694,5 +862,45 @@ mod tests {
 
         assert_eq!(result.matches.len(), 1);
         assert!(result.truncated);
+    }
+
+    #[test]
+    fn context_pack_store_round_trips_workspace_packs() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = ContextPackStore::new(temp.path().join("context-packs.json"));
+
+        let pack = store
+            .create_pack(
+                "/workspace",
+                "Architecture pack",
+                vec!["docs/architecture/overview.md".to_string()],
+            )
+            .expect("create pack");
+
+        let loaded = store.list_packs("/workspace").expect("list packs");
+        assert_eq!(loaded, vec![pack]);
+    }
+
+    #[test]
+    fn context_pack_links_task_and_agent_metadata_without_duplicates() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = ContextPackStore::new(temp.path().join("context-packs.json"));
+        let pack = store
+            .create_pack("/workspace", "Run pack", vec!["README.md".to_string()])
+            .expect("create pack");
+
+        let updated = store
+            .link_pack(&pack.id, Some("workspace:task-1"), Some("agent-session-1"))
+            .expect("link pack");
+        let updated = store
+            .link_pack(
+                &updated.id,
+                Some("workspace:task-1"),
+                Some("agent-session-1"),
+            )
+            .expect("link pack again");
+
+        assert_eq!(updated.linked_task_run_ids, vec!["workspace:task-1"]);
+        assert_eq!(updated.linked_agent_session_ids, vec!["agent-session-1"]);
     }
 }

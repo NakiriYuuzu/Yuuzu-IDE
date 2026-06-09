@@ -21,6 +21,7 @@ pub struct AppState {
     registry_store: WorkspaceRegistryStore,
     settings: Mutex<AppSettings>,
     settings_store: SettingsStore,
+    docs_store: crate::docs::ContextPackStore,
 }
 
 impl AppState {
@@ -30,12 +31,15 @@ impl AppState {
         let registry = registry_store.load()?;
         let settings_store = SettingsStore::new(config_dir.as_ref().join("settings.json"));
         let settings = settings_store.load()?;
+        let docs_store =
+            crate::docs::ContextPackStore::new(config_dir.as_ref().join("context-packs.json"));
 
         Ok(Self {
             registry: Mutex::new(registry),
             registry_store,
             settings: Mutex::new(settings),
             settings_store,
+            docs_store,
         })
     }
 
@@ -98,6 +102,43 @@ impl AppState {
             registry.add_workspace(Workspace::from_path(path));
             Ok(())
         })
+    }
+
+    pub fn list_context_packs(
+        &self,
+        workspace_root: &str,
+    ) -> Result<Vec<crate::docs::ContextPack>, String> {
+        let workspace_root = self.trusted_workspace_root(workspace_root)?;
+        self.docs_store
+            .list_packs(&workspace_root.to_string_lossy())
+    }
+
+    pub fn create_context_pack(
+        &self,
+        workspace_root: &str,
+        name: String,
+        doc_paths: Vec<String>,
+    ) -> Result<crate::docs::ContextPack, String> {
+        let workspace_root = self.trusted_workspace_root(workspace_root)?;
+        for doc_path in &doc_paths {
+            crate::docs::preview_doc(&workspace_root, doc_path)?;
+        }
+        self.docs_store
+            .create_pack(&workspace_root.to_string_lossy(), &name, doc_paths)
+    }
+
+    pub fn delete_context_pack(&self, id: String) -> Result<(), String> {
+        self.docs_store.delete_pack(&id)
+    }
+
+    pub fn link_context_pack(
+        &self,
+        id: String,
+        task_run_id: Option<String>,
+        agent_session_id: Option<String>,
+    ) -> Result<crate::docs::ContextPack, String> {
+        self.docs_store
+            .link_pack(&id, task_run_id.as_deref(), agent_session_id.as_deref())
     }
 }
 
@@ -246,6 +287,39 @@ pub fn docs_search(
 ) -> Result<crate::docs::DocSearchResult, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
     crate::docs::search_docs(&workspace_root, &query, crate::docs::MAX_DOC_SEARCH_RESULTS)
+}
+
+#[tauri::command]
+pub fn list_context_packs(
+    state: State<'_, AppState>,
+    workspace_root: String,
+) -> Result<Vec<crate::docs::ContextPack>, String> {
+    state.list_context_packs(&workspace_root)
+}
+
+#[tauri::command]
+pub fn create_context_pack(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    name: String,
+    doc_paths: Vec<String>,
+) -> Result<crate::docs::ContextPack, String> {
+    state.create_context_pack(&workspace_root, name, doc_paths)
+}
+
+#[tauri::command]
+pub fn delete_context_pack(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.delete_context_pack(id)
+}
+
+#[tauri::command]
+pub fn link_context_pack(
+    state: State<'_, AppState>,
+    id: String,
+    task_run_id: Option<String>,
+    agent_session_id: Option<String>,
+) -> Result<crate::docs::ContextPack, String> {
+    state.link_context_pack(id, task_run_id, agent_session_id)
 }
 
 #[tauri::command]
@@ -798,6 +872,16 @@ mod tests {
         fn assert_flat_signature(_command: FlatRunWorkspaceTaskCommand) {}
 
         assert_flat_signature(super::run_workspace_task);
+    }
+
+    #[test]
+    fn create_context_pack_preserves_flat_command_signature() {
+        let _command: fn(
+            State<'_, AppState>,
+            String,
+            String,
+            Vec<String>,
+        ) -> Result<crate::docs::ContextPack, String> = create_context_pack;
     }
 
     #[cfg(unix)]
