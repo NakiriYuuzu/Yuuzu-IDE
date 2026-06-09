@@ -3,7 +3,12 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
 import { BrowserPreviewSurface } from "./BrowserPreviewSurface";
-import type { BrowserPaneGeometry } from "./browser-webview";
+import {
+  browserPaneGeometryFromNumbers,
+  createTauriBrowserPreviewAdapterWithDependencies,
+  hardReloadUrl,
+  type BrowserPaneGeometry,
+} from "./browser-webview";
 import { ensureTestDom } from "../../app/test-dom";
 
 ensureTestDom();
@@ -185,5 +190,77 @@ describe("BrowserPreviewSurface", () => {
     });
 
     expect(adapter.hardReload).toHaveBeenCalledWith("http://localhost:5173");
+  });
+});
+
+describe("browser webview adapter geometry", () => {
+  test("rounds webview and capture geometry to integers", () => {
+    const geometry = browserPaneGeometryFromNumbers({
+      rect: {
+        x: 10.4,
+        y: 20.6,
+        width: 640.5,
+        height: 360.4,
+      },
+      windowPosition: {
+        x: 15.6,
+        y: 7.2,
+      },
+      scaleFactor: 1.2,
+    });
+
+    expect(geometry).toEqual({
+      webviewBounds: {
+        x: 10,
+        y: 21,
+        width: 641,
+        height: 360,
+      },
+      captureBounds: {
+        x: 28,
+        y: 32,
+        width: 769,
+        height: 432,
+      },
+    });
+  });
+
+  test("does not increment hard reload version when request is missing", async () => {
+    const openedUrls: string[] = [];
+    const fakeWindow = {} as unknown as Parameters<typeof createTauriBrowserPreviewAdapterWithDependencies>[0]["getCurrentWindow"] extends () => infer T
+      ? T
+      : never;
+
+    const adapter = createTauriBrowserPreviewAdapterWithDependencies({
+      getCurrentWindow: () => fakeWindow,
+      createWebview: (_window, _label, options) => {
+        openedUrls.push(options.url);
+        return {
+          close: mock(async () => {}),
+        };
+      },
+    });
+
+    await adapter.hardReload("http://localhost:5173");
+    expect(openedUrls).toEqual([]);
+
+    await adapter.attach({
+      workspaceId: "workspace-1",
+      url: "http://localhost:5173",
+      webviewBounds: {
+        x: 0,
+        y: 0,
+        width: 640,
+        height: 360,
+      },
+    });
+
+    await adapter.hardReload("http://localhost:5173");
+    expect(openedUrls).toHaveLength(2);
+    expect(hardReloadUrl("http://localhost:5173", 1)).toBe(openedUrls[1]);
+
+    await adapter.hardReload("http://localhost:5173");
+    expect(openedUrls).toHaveLength(3);
+    expect(hardReloadUrl("http://localhost:5173", 2)).toBe(openedUrls[2]);
   });
 });

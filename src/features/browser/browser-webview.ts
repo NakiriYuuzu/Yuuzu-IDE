@@ -1,5 +1,10 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Webview } from "@tauri-apps/api/webview";
+import type { Window as TauriWindow } from "@tauri-apps/api/window";
+
+type BrowserWebviewHandle = {
+  close: () => Promise<void>;
+};
 
 export type BrowserWebviewBounds = {
   x: number;
@@ -26,6 +31,49 @@ export type BrowserPreviewAdapter = {
   hardReload: (url: string) => Promise<void>;
 };
 
+type BrowserGeometryInput = {
+  rect: Pick<DOMRect, "x" | "y" | "width" | "height">;
+  windowPosition: { x: number; y: number };
+  scaleFactor: number;
+};
+
+type BrowserTauriAdapterDependencies = {
+  getCurrentWindow: () => TauriWindow;
+  createWebview: (
+    window: TauriWindow,
+    label: string,
+    options: {
+      url: string;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      devtools: boolean;
+    },
+  ) => BrowserWebviewHandle;
+};
+
+function roundGeometry(value: number): number {
+  return Math.round(value);
+}
+
+export function browserPaneGeometryFromNumbers(args: BrowserGeometryInput): BrowserPaneGeometry {
+  return {
+    webviewBounds: {
+      x: roundGeometry(args.rect.x),
+      y: roundGeometry(args.rect.y),
+      width: roundGeometry(args.rect.width),
+      height: roundGeometry(args.rect.height),
+    },
+    captureBounds: {
+      x: roundGeometry(args.windowPosition.x + args.rect.x * args.scaleFactor),
+      y: roundGeometry(args.windowPosition.y + args.rect.y * args.scaleFactor),
+      width: roundGeometry(args.rect.width * args.scaleFactor),
+      height: roundGeometry(args.rect.height * args.scaleFactor),
+    },
+  };
+}
+
 export function hardReloadUrl(url: string, version: number): string {
   const parsed = new URL(url, "http://localhost/");
   parsed.searchParams.set("_yuuzu_hard_reload", String(version));
@@ -36,26 +84,17 @@ export async function browserPaneGeometryFromElement(
   element: Element,
 ): Promise<BrowserPaneGeometry> {
   const appWindow = getCurrentWindow();
-  const [windowPosition, factor, rect] = await Promise.all([
+  const [windowPosition, factor] = await Promise.all([
     appWindow.innerPosition(),
     appWindow.scaleFactor(),
-    Promise.resolve(element.getBoundingClientRect()),
   ]);
+  const rect = element.getBoundingClientRect();
 
-  return {
-    webviewBounds: {
-      x: rect.x,
-      y: rect.y,
-      width: rect.width,
-      height: rect.height,
-    },
-    captureBounds: {
-      x: windowPosition.x + rect.x * factor,
-      y: windowPosition.y + rect.y * factor,
-      width: rect.width * factor,
-      height: rect.height * factor,
-    },
-  };
+  return browserPaneGeometryFromNumbers({
+    rect,
+    windowPosition,
+    scaleFactor: factor,
+  });
 }
 
 function sanitizeWorkspaceId(workspaceId: string): string {
@@ -63,7 +102,18 @@ function sanitizeWorkspaceId(workspaceId: string): string {
 }
 
 export function createTauriBrowserPreviewAdapter(): BrowserPreviewAdapter {
-  let webview: Webview | null = null;
+  const dependencies: BrowserTauriAdapterDependencies = {
+    getCurrentWindow,
+    createWebview: (window, label, options) => new Webview(window, label, options),
+  };
+
+  return createTauriBrowserPreviewAdapterWithDependencies(dependencies);
+}
+
+export function createTauriBrowserPreviewAdapterWithDependencies(
+  dependencies: BrowserTauriAdapterDependencies,
+): BrowserPreviewAdapter {
+  let webview: BrowserWebviewHandle | null = null;
   let lastRequest: BrowserAttachRequest | null = null;
   let hardReloadVersion = 0;
 
@@ -80,15 +130,19 @@ export function createTauriBrowserPreviewAdapter(): BrowserPreviewAdapter {
   return {
     attach: async (request) => {
       await closeCurrent();
-      const appWindow = getCurrentWindow();
-      const view = new Webview(appWindow, `browser-preview-${sanitizeWorkspaceId(request.workspaceId)}`, {
-        url: request.url,
-        x: request.webviewBounds.x,
-        y: request.webviewBounds.y,
-        width: request.webviewBounds.width,
-        height: request.webviewBounds.height,
-        devtools: true,
-      });
+      const appWindow = dependencies.getCurrentWindow();
+      const view = dependencies.createWebview(
+        appWindow,
+        `browser-preview-${sanitizeWorkspaceId(request.workspaceId)}`,
+        {
+          url: request.url,
+          x: request.webviewBounds.x,
+          y: request.webviewBounds.y,
+          width: request.webviewBounds.width,
+          height: request.webviewBounds.height,
+          devtools: true,
+        },
+      );
 
       webview = view;
       lastRequest = request;
@@ -109,11 +163,11 @@ export function createTauriBrowserPreviewAdapter(): BrowserPreviewAdapter {
       });
     },
     hardReload: async (url) => {
-      hardReloadVersion += 1;
       if (!lastRequest) {
         return;
       }
 
+      hardReloadVersion += 1;
       await closeCurrent();
       await thisAttach({
         ...lastRequest,
@@ -123,15 +177,19 @@ export function createTauriBrowserPreviewAdapter(): BrowserPreviewAdapter {
   };
 
   async function thisAttach(request: BrowserAttachRequest): Promise<void> {
-    const appWindow = getCurrentWindow();
-    const view = new Webview(appWindow, `browser-preview-${sanitizeWorkspaceId(request.workspaceId)}`, {
-      url: request.url,
-      x: request.webviewBounds.x,
-      y: request.webviewBounds.y,
-      width: request.webviewBounds.width,
-      height: request.webviewBounds.height,
-      devtools: true,
-    });
+    const appWindow = dependencies.getCurrentWindow();
+    const view = dependencies.createWebview(
+      appWindow,
+      `browser-preview-${sanitizeWorkspaceId(request.workspaceId)}`,
+      {
+        url: request.url,
+        x: request.webviewBounds.x,
+        y: request.webviewBounds.y,
+        width: request.webviewBounds.width,
+        height: request.webviewBounds.height,
+        devtools: true,
+      },
+    );
 
     webview = view;
     lastRequest = request;
