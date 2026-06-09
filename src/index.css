@@ -2355,9 +2355,9 @@ button {
 }
 
 .agent-status.passed {
-  color: var(--c-str);
-  border-color: color-mix(in srgb, var(--c-str) 35%, var(--line));
-  background: color-mix(in srgb, var(--c-str) 10%, transparent);
+  color: var(--yuzu);
+  border-color: color-mix(in srgb, var(--yuzu-edge) 55%, var(--line));
+  background: color-mix(in srgb, var(--yuzu-wash) 85%, transparent);
 }
 
 .agent-status.failed {

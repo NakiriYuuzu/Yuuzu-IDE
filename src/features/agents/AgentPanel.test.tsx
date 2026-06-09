@@ -468,4 +468,55 @@ describe("AgentPanel css contract", () => {
     expect(source.includes(".agent-panel .agent-transcript-head .badge2")).toBe(true);
     expect(source.includes(".agent-modes .btn.sm")).toBe(true);
   });
+
+  test("keeps badge hide override scoped correctly in compact media query", () => {
+    const cssPath = resolve(
+      process.cwd(),
+      "src/index.css",
+    );
+    const source = readFileSync(cssPath, "utf8");
+
+    const mediaQueryStart = source.indexOf("@media (max-width: 760px)");
+    expect(mediaQueryStart).toBeGreaterThan(-1);
+
+    const blockStart = source.indexOf("{", mediaQueryStart);
+    let depth = 0;
+    let blockEnd = -1;
+    for (let i = blockStart; i < source.length; i++) {
+      const char = source[i];
+      if (char === "{") depth += 1;
+      if (char === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          blockEnd = i;
+          break;
+        }
+      }
+    }
+
+    expect(blockEnd).toBeGreaterThan(-1);
+    const mediaBlock = source.slice(blockStart, blockEnd + 1);
+
+    expect(/\.badge2\s*\{[\s\S]*?display\s*:\s*none/.test(mediaBlock)).toBe(true);
+    expect(/\.agent-session-toolbar\s+\.[^{}\n]*badge2[\s\S]*?display\s*:\s*inline-flex/.test(mediaBlock)).toBe(true);
+    expect(/\.agent-panel\s+\.agent-status[\s\S]*?display\s*:\s*inline-flex/.test(mediaBlock)).toBe(true);
+    expect(/\.agent-panel\s+\.agent-transcript-head\s+\.[^{}\n]*badge2[\s\S]*?display\s*:\s*inline-flex/.test(mediaBlock)).toBe(true);
+  });
+
+  test("uses runtime-defined tokens for passed status", () => {
+    const cssPath = resolve(
+      process.cwd(),
+      "src/index.css",
+    );
+    const source = readFileSync(cssPath, "utf8");
+
+    const statusRule = source.match(/\.agent-status\.passed\s*\{[\s\S]*?\}/);
+    expect(statusRule).not.toBeNull();
+    const rule = statusRule?.[0] ?? "";
+
+    expect(rule.includes("var(--c-str)")).toBe(false);
+    expect(rule.includes("var(--yuzu)")).toBe(true);
+    expect(rule.includes("var(--yuzu-edge)")).toBe(true);
+    expect(rule.includes("var(--yuzu-wash)")).toBe(true);
+  });
 });
