@@ -220,6 +220,35 @@ pub fn search_workspace(
 }
 
 #[tauri::command]
+pub fn docs_index(
+    state: State<'_, AppState>,
+    workspace_root: String,
+) -> Result<Vec<crate::docs::DocIndexEntry>, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::docs::index_docs(&workspace_root)
+}
+
+#[tauri::command]
+pub fn docs_preview(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    path: String,
+) -> Result<crate::docs::DocPreview, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::docs::preview_doc(&workspace_root, &path)
+}
+
+#[tauri::command]
+pub fn docs_search(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    query: String,
+) -> Result<crate::docs::DocSearchResult, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::docs::search_docs(&workspace_root, &query, crate::docs::MAX_DOC_SEARCH_RESULTS)
+}
+
+#[tauri::command]
 pub fn git_status(
     state: State<'_, AppState>,
     workspace_root: String,

@@ -1,4 +1,5 @@
 mod commands;
+pub mod docs;
 mod file_system;
 mod file_watcher;
 pub mod git;
@@ -38,6 +39,9 @@ pub fn run() {
             commands::scan_workspace,
             commands::scan_directory,
             commands::search_workspace,
+            commands::docs_index,
+            commands::docs_preview,
+            commands::docs_search,
             commands::git_status,
             commands::git_diff_file,
             commands::git_stage_paths,
