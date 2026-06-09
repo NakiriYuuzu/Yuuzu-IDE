@@ -1115,7 +1115,7 @@ async fn execute_postgres_query(
     if matches!(classification.kind, QueryKind::Read) {
         let limit = request.limit.min(MAX_DATABASE_ROWS);
         let read_limit = limit + 1;
-        let bounded_sql = bounded_postgres_read_sql(&request.sql, read_limit);
+        let bounded_sql = prepare_bounded_postgres_read_sql(&request.sql, read_limit);
         let rows = client
             .query(&bounded_sql, &[])
             .await
@@ -1186,6 +1186,28 @@ fn bounded_postgres_read_sql(sql: &str, max_rows: usize) -> String {
         "SELECT * FROM ({normalized}) AS __yuuzu_database_read LIMIT {}",
         max_rows
     )
+}
+
+fn prepare_bounded_postgres_read_sql(sql: &str, max_rows: usize) -> String {
+    if is_postgres_read_sql_subqueryable(sql) {
+        bounded_postgres_read_sql(sql, max_rows)
+    } else {
+        sql.to_string()
+    }
+}
+
+fn is_postgres_read_sql_subqueryable(sql: &str) -> bool {
+    let statements = split_sql_statements(sql);
+    if statements.len() != 1 {
+        return false;
+    }
+
+    let mut index = 0;
+    let Some(token) = next_token(statements[0].as_bytes(), &mut index) else {
+        return false;
+    };
+
+    matches!(token.as_str(), "SELECT" | "WITH")
 }
 
 fn database_cell_from_postgres_value(row: &tokio_postgres::Row, index: usize) -> DatabaseCell {
@@ -2954,6 +2976,36 @@ mod tests {
             "SELECT * FROM (SELECT * FROM users) AS __yuuzu_database_read LIMIT 501"
         );
         assert!(!wrapped.contains("password"));
+    }
+
+    #[test]
+    fn postgresql_read_sql_not_wrapped_when_not_subqueryable() {
+        assert_eq!(
+            prepare_bounded_postgres_read_sql("EXPLAIN SELECT 1", MAX_DATABASE_ROWS),
+            "EXPLAIN SELECT 1"
+        );
+        assert_eq!(
+            prepare_bounded_postgres_read_sql("SHOW search_path", MAX_DATABASE_ROWS),
+            "SHOW search_path"
+        );
+    }
+
+    #[test]
+    fn postgresql_read_sql_wrapped_when_subqueryable() {
+        assert_eq!(
+            prepare_bounded_postgres_read_sql("SELECT id FROM users", MAX_DATABASE_ROWS),
+            format!(
+                "SELECT * FROM (SELECT id FROM users) AS __yuuzu_database_read LIMIT {}",
+                MAX_DATABASE_ROWS
+            )
+        );
+        assert_eq!(
+            prepare_bounded_postgres_read_sql("WITH recent AS (SELECT 1) SELECT 1", MAX_DATABASE_ROWS),
+            format!(
+                "SELECT * FROM (WITH recent AS (SELECT 1) SELECT 1) AS __yuuzu_database_read LIMIT {}",
+                MAX_DATABASE_ROWS
+            )
+        );
     }
 
     #[test]
