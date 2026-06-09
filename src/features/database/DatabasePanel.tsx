@@ -206,7 +206,7 @@ export function DatabasePanel({
   const requireConfirmation = state.confirmation !== null;
   const canRunConfirmed =
     requireConfirmation &&
-    confirmationInput.trim() === state.confirmation?.confirmationText;
+    confirmationInput === state.confirmation?.confirmationText;
   const canRunQuery =
     !state.loading && state.activeProfileId !== null && state.queryDraft.trim() !== "";
 

@@ -87,6 +87,42 @@ describe("DatabasePanel", () => {
         .disabled,
     ).toBe(true);
   });
+
+  test("does not enable run with surrounding whitespace in confirmation input", () => {
+    const view = render(
+      <DatabasePanel
+        state={{
+          ...createDatabaseState(),
+          queryDraft: "DROP TABLE users",
+          confirmation: {
+            confirmationText: "RUN DESTRUCTIVE SQL",
+            reason: "destructive or unknown SQL requires explicit confirmation",
+            input: "",
+          },
+        }}
+        onRefreshProfiles={() => {}}
+        onSelectProfile={() => {}}
+        onInspectSchema={() => {}}
+        onOpenTable={() => {}}
+        onQueryDraftChange={() => {}}
+        onRunQuery={() => {}}
+        onConfirmQuery={() => {}}
+        onCancelConfirmation={() => {}}
+        onExportResult={() => {}}
+        onSelectHistory={() => {}}
+      />,
+    );
+
+    const confirmationInput = view.getByRole("textbox", {
+      name: "Confirmation text",
+    }) as HTMLInputElement;
+    fireEvent.change(confirmationInput, { target: { value: " RUN DESTRUCTIVE SQL " } });
+
+    expect(
+      (view.getByRole("button", { name: "Run confirmed SQL" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
 });
 
 function profile(id: string): DatabaseProfile {
