@@ -4,9 +4,10 @@ use std::{
     fs,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
     thread,
+    time::Duration,
 };
 use tauri::{AppHandle, Emitter};
 
@@ -162,6 +163,10 @@ impl TaskRunRegistry {
         runs
     }
 
+    pub fn get_run(&self, run_id: &str) -> Option<TaskRun> {
+        self.runs.get(run_id).cloned()
+    }
+
     fn remove_run(&mut self, run_id: &str) -> Option<TaskRun> {
         self.runs.remove(run_id)
     }
@@ -208,12 +213,40 @@ fn task_command(command: &str, cwd: &Path) -> Command {
         .current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    configure_process_group(&mut task);
     task
 }
 
-#[derive(Clone, Debug)]
+#[cfg(unix)]
+fn configure_process_group(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    command.process_group(0);
+}
+
+#[cfg(windows)]
+fn configure_process_group(_command: &mut Command) {}
+
+#[derive(Clone)]
 struct TaskProcess {
+    child: Arc<Mutex<Child>>,
+    #[cfg(unix)]
+    process_group_id: u32,
+    #[cfg(windows)]
     pid: u32,
+}
+
+impl TaskProcess {
+    fn new(child: Child) -> Self {
+        let pid = child.id();
+        Self {
+            child: Arc::new(Mutex::new(child)),
+            #[cfg(unix)]
+            process_group_id: pid,
+            #[cfg(windows)]
+            pid,
+        }
+    }
 }
 
 pub struct TaskState {
@@ -253,7 +286,6 @@ impl TaskState {
                 return Err(err.to_string());
             }
         };
-        let pid = child.id();
 
         if let Some(stdout) = child.stdout.take() {
             spawn_output_reader(app.clone(), run.id.clone(), stdout);
@@ -261,30 +293,35 @@ impl TaskState {
         if let Some(stderr) = child.stderr.take() {
             spawn_output_reader(app.clone(), run.id.clone(), stderr);
         }
+        let process = TaskProcess::new(child);
 
         self.processes
             .lock()
             .map_err(|err| err.to_string())?
-            .insert(run.id.clone(), TaskProcess { pid });
+            .insert(run.id.clone(), process.clone());
 
         let wait_run_id = run.id.clone();
         let wait_registry = Arc::clone(&self.registry);
         let wait_processes = Arc::clone(&self.processes);
-        thread::spawn(move || {
-            let exit_code = child.wait().ok().and_then(|status| status.code());
-            let _ = mark_run_finished_in_state(
-                &wait_registry,
-                &wait_processes,
-                &wait_run_id,
-                exit_code,
-            );
-            let _ = app.emit(
-                "workspace://task-finished",
-                TaskFinishedEvent {
-                    run_id: wait_run_id,
-                    exit_code,
-                },
-            );
+        thread::spawn(move || loop {
+            match try_child_exit_code(&process) {
+                Ok(Some(exit_code)) => {
+                    let final_run = mark_run_finished_in_state(
+                        &wait_registry,
+                        &wait_processes,
+                        &wait_run_id,
+                        exit_code,
+                    )
+                    .ok()
+                    .flatten();
+                    if let Some(event) = final_run.as_ref().and_then(task_finished_event) {
+                        let _ = app.emit("workspace://task-finished", event);
+                    }
+                    break;
+                }
+                Ok(None) => thread::sleep(Duration::from_millis(50)),
+                Err(_) => break,
+            }
         });
 
         Ok(run)
@@ -295,16 +332,47 @@ impl TaskState {
             .processes
             .lock()
             .map_err(|err| err.to_string())?
-            .remove(run_id);
-        if let Some(process) = process {
-            let _ = kill_process(process.pid);
+            .get(run_id)
+            .cloned();
+        let Some(process) = process else {
+            return self
+                .registry
+                .lock()
+                .map_err(|err| err.to_string())?
+                .get_run(run_id)
+                .ok_or_else(|| format!("missing task run: {run_id}"));
+        };
+
+        if let Some(exit_code) = try_child_exit_code(&process)? {
+            return mark_run_finished_in_state(&self.registry, &self.processes, run_id, exit_code)?
+                .ok_or_else(|| format!("missing task run: {run_id}"));
         }
 
-        self.registry
+        if let Err(err) = kill_process(&process) {
+            if let Some(exit_code) = try_child_exit_code(&process)? {
+                return mark_run_finished_in_state(
+                    &self.registry,
+                    &self.processes,
+                    run_id,
+                    exit_code,
+                )?
+                .ok_or_else(|| format!("missing task run: {run_id}"));
+            }
+            return Err(err);
+        }
+
+        let run = self
+            .registry
             .lock()
             .map_err(|err| err.to_string())?
             .stop_run(run_id)
-            .ok_or_else(|| format!("missing task run: {run_id}"))
+            .ok_or_else(|| format!("missing task run: {run_id}"))?;
+        self.processes
+            .lock()
+            .map_err(|err| err.to_string())?
+            .remove(run_id);
+
+        Ok(run)
     }
 
     pub fn list_runs(&self, workspace_id: &str) -> Result<Vec<TaskRun>, String> {
@@ -327,11 +395,11 @@ impl TaskState {
     }
 
     #[cfg(test)]
-    fn insert_test_process(&self, run_id: String, pid: u32) -> Result<(), String> {
+    fn insert_test_process(&self, run_id: String, child: Child) -> Result<(), String> {
         self.processes
             .lock()
             .map_err(|err| err.to_string())?
-            .insert(run_id, TaskProcess { pid });
+            .insert(run_id, TaskProcess::new(child));
         Ok(())
     }
 
@@ -369,41 +437,74 @@ fn mark_run_finished_in_state(
     run_id: &str,
     exit_code: Option<i32>,
 ) -> Result<Option<TaskRun>, String> {
-    processes
+    let run = registry
         .lock()
         .map_err(|err| err.to_string())?
-        .remove(run_id);
+        .finish_run(run_id, exit_code);
 
-    Ok(registry
-        .lock()
-        .map_err(|err| err.to_string())?
-        .finish_run(run_id, exit_code))
+    if run.is_some() {
+        processes
+            .lock()
+            .map_err(|err| err.to_string())?
+            .remove(run_id);
+    }
+
+    Ok(run)
 }
 
-#[cfg(unix)]
-fn kill_process(pid: u32) -> Result<(), String> {
-    let status = Command::new("kill")
-        .arg("-TERM")
-        .arg(pid.to_string())
-        .status()
-        .map_err(|err| err.to_string())?;
-    if status.success() {
-        Ok(())
+fn try_child_exit_code(process: &TaskProcess) -> Result<Option<Option<i32>>, String> {
+    process
+        .child
+        .lock()
+        .map_err(|err| err.to_string())?
+        .try_wait()
+        .map(|status| status.map(|status| status.code()))
+        .map_err(|err| err.to_string())
+}
+
+fn task_finished_event(run: &TaskRun) -> Option<TaskFinishedEvent> {
+    if run.status == TaskRunStatus::Exited {
+        Some(TaskFinishedEvent {
+            run_id: run.id.clone(),
+            exit_code: run.exit_code,
+        })
     } else {
-        Err(format!("failed to stop task process: {pid}"))
+        None
     }
 }
 
-#[cfg(windows)]
-fn kill_process(pid: u32) -> Result<(), String> {
-    let status = Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
+#[cfg(unix)]
+fn kill_process(process: &TaskProcess) -> Result<(), String> {
+    let status = Command::new("kill")
+        .arg("-TERM")
+        .arg(unix_process_group_signal_target(process.process_group_id))
         .status()
         .map_err(|err| err.to_string())?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("failed to stop task process: {pid}"))
+        Err(format!(
+            "failed to stop task process group: {}",
+            process.process_group_id
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn unix_process_group_signal_target(process_group_id: u32) -> String {
+    format!("-{process_group_id}")
+}
+
+#[cfg(windows)]
+fn kill_process(process: &TaskProcess) -> Result<(), String> {
+    let status = Command::new("taskkill")
+        .args(["/PID", &process.pid.to_string(), "/T", "/F"])
+        .status()
+        .map_err(|err| err.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("failed to stop task process: {}", process.pid))
     }
 }
 
@@ -412,6 +513,7 @@ mod tests {
     use std::fs;
     #[cfg(unix)]
     use std::process::Command;
+    use std::{thread, time::Duration};
     use tempfile::tempdir;
 
     #[test]
@@ -506,6 +608,27 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn task_command_starts_a_new_process_group() {
+        let temp = tempdir().expect("tempdir");
+        let mut child = super::task_command("sleep 1", temp.path())
+            .spawn()
+            .expect("child");
+        let pid = child.id();
+        let pgid = process_group_id(pid).expect("pgid");
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert_eq!(pgid, pid);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_stop_signal_targets_process_group() {
+        assert_eq!(super::unix_process_group_signal_target(123), "-123");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn stop_task_marks_run_stopped_and_removes_child_handle() {
         let state = super::TaskState::new();
         let run = state
@@ -516,18 +639,88 @@ mod tests {
                 "/repo".into(),
             )
             .expect("run");
-        let mut child = Command::new("/bin/sh")
-            .args(["-lc", "sleep 60"])
+        let child = super::task_command("sleep 60", &std::env::temp_dir())
             .spawn()
             .expect("child");
         state
-            .insert_test_process(run.id.clone(), child.id())
+            .insert_test_process(run.id.clone(), child)
             .expect("insert child");
 
         let stopped = state.stop_task(&run.id).expect("stop");
 
         assert_eq!(stopped.status, super::TaskRunStatus::Stopped);
         assert_eq!(state.child_count(), 0);
-        let _ = child.wait();
+    }
+
+    #[test]
+    fn stop_task_returns_exited_when_child_already_exited() {
+        let temp = tempdir().expect("tempdir");
+        let state = super::TaskState::new();
+        let run = state
+            .register_test_run(
+                "workspace-a".to_string(),
+                "custom".to_string(),
+                "exit 7".to_string(),
+                temp.path().into(),
+            )
+            .expect("run");
+        let mut child = super::task_command("exit 7", temp.path())
+            .spawn()
+            .expect("child");
+        wait_until_exited(&mut child);
+        state
+            .insert_test_process(run.id.clone(), child)
+            .expect("insert child");
+
+        let stopped = state.stop_task(&run.id).expect("stop");
+
+        assert_eq!(stopped.status, super::TaskRunStatus::Exited);
+        assert_eq!(stopped.exit_code, Some(7));
+        assert_eq!(state.child_count(), 0);
+    }
+
+    #[test]
+    fn stopped_final_runs_do_not_emit_finished_events() {
+        let mut registry = super::TaskRunRegistry::default();
+        let run = registry.reserve_run(
+            "workspace-a".to_string(),
+            "custom".to_string(),
+            "echo ok".to_string(),
+            "/repo".into(),
+        );
+
+        registry.stop_run(&run.id).expect("stop");
+        let final_run = registry.finish_run(&run.id, Some(143)).expect("finish");
+
+        assert_eq!(final_run.status, super::TaskRunStatus::Stopped);
+        assert!(super::task_finished_event(&final_run).is_none());
+    }
+
+    #[cfg(unix)]
+    fn process_group_id(pid: u32) -> Result<u32, String> {
+        let output = Command::new("ps")
+            .args(["-o", "pgid=", "-p", &pid.to_string()])
+            .output()
+            .map_err(|err| err.to_string())?;
+        if !output.status.success() {
+            return Err(format!("ps failed for pid {pid}"));
+        }
+
+        String::from_utf8(output.stdout)
+            .map_err(|err| err.to_string())?
+            .trim()
+            .parse::<u32>()
+            .map_err(|err| err.to_string())
+    }
+
+    fn wait_until_exited(child: &mut std::process::Child) {
+        for _ in 0..100 {
+            if child.try_wait().expect("try wait").is_some() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        panic!("child did not exit");
     }
 }
