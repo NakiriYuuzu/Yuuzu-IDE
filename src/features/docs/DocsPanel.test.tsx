@@ -19,7 +19,7 @@ Object.defineProperty(globalThis, "navigator", {
   configurable: true,
 });
 
-const { cleanup, fireEvent, render, screen, waitFor } = await import(
+const { cleanup, fireEvent, render, waitFor } = await import(
   "@testing-library/react"
 );
 
@@ -45,7 +45,7 @@ function renderDocsPanel({
     agentSessionId: string,
   ) => Promise<void>;
 } = {}) {
-  render(
+  return render(
     <DocsPanel
       state={{ ...createDocsState(), contextPacks: [pack()] }}
       onRefresh={() => {}}
@@ -73,14 +73,14 @@ describe("DocsPanel", () => {
     rejected.catch(() => {});
     const onLinkPackToAgentSession = mock(() => rejected);
 
-    renderDocsPanel({ onLinkPackToAgentSession });
-    const input = screen.getByLabelText(
+    const view = renderDocsPanel({ onLinkPackToAgentSession });
+    const input = view.getByLabelText(
       "Agent session id for Architecture pack",
     ) as HTMLInputElement;
 
     fireEvent.change(input, { target: { value: "agent-session-42" } });
     fireEvent.click(
-      screen.getByLabelText("Link Architecture pack to agent session"),
+      view.getByLabelText("Link Architecture pack to agent session"),
     );
 
     await waitFor(() => expect(onLinkPackToAgentSession).toHaveBeenCalledTimes(1));

@@ -87,6 +87,19 @@ export function lspDocumentPathForWorkspace(
     : path;
 }
 
+export function lspDocumentChangeForWorkspace(
+  workspaceRoot: string,
+  previousPath: string,
+  nextPath: string | null,
+): { closePath: string; openPath: string | null } {
+  return {
+    closePath: lspDocumentPathForWorkspace(workspaceRoot, previousPath),
+    openPath: nextPath
+      ? lspDocumentPathForWorkspace(workspaceRoot, nextPath)
+      : null,
+  };
+}
+
 export function createLanguageState(): LanguageViewState {
   return {
     diagnosticsByPath: {},

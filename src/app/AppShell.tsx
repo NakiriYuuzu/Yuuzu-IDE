@@ -67,6 +67,7 @@ import {
   nextLanguageRefreshRequest,
   replaceDiagnostics,
   diagnosticsForPath,
+  lspDocumentChangeForWorkspace,
   lspDocumentPathForWorkspace,
   replaceServerStatuses,
   selectDiagnosticBadge,
@@ -1443,7 +1444,39 @@ export function AppShell() {
       return;
     }
 
+    const loadedBeforeRename = loadedFile;
     const result = await renamePath(activeWorkspace.path, path, newName);
+    if (
+      activeWorkspaceId &&
+      loadedBeforeRename?.workspaceId === activeWorkspaceId &&
+      isSameOrDescendant(loadedBeforeRename.path, path)
+    ) {
+      const nextPath = replacePathPrefix(
+        loadedBeforeRename.path,
+        path,
+        result.path,
+      );
+      const change = lspDocumentChangeForWorkspace(
+        activeWorkspace.path,
+        loadedBeforeRename.path,
+        nextPath,
+      );
+      if (isLspSupportedLanguage(languageForPath(loadedBeforeRename.path))) {
+        void closeLanguageDocument({
+          workspaceId: activeWorkspaceId,
+          workspaceRoot: activeWorkspace.path,
+          path: change.closePath,
+        }).catch(() => {});
+      }
+      if (isLspSupportedLanguage(languageForPath(nextPath))) {
+        void openLanguageDocument({
+          workspaceId: activeWorkspaceId,
+          workspaceRoot: activeWorkspace.path,
+          path: change.openPath!,
+          content: loadedBeforeRename.content,
+        }).catch(() => {});
+      }
+    }
     updateEditor(activeWorkspaceId, (editor) =>
       renameEditorPath(editor, path, result.path, result.version),
     );
@@ -1480,6 +1513,7 @@ export function AppShell() {
       return;
     }
 
+    const loadedBeforeDelete = loadedFile;
     await deletePath(activeWorkspace.path, path);
     const currentView = workspaceViewStore
       .getState()
@@ -1494,6 +1528,23 @@ export function AppShell() {
       ? loadedFile.workspaceId === activeWorkspaceId &&
         isSameOrDescendant(loadedFile.path, path)
       : false;
+    if (
+      activeWorkspaceId &&
+      loadedBeforeDelete?.workspaceId === activeWorkspaceId &&
+      isSameOrDescendant(loadedBeforeDelete.path, path) &&
+      isLspSupportedLanguage(languageForPath(loadedBeforeDelete.path))
+    ) {
+      const change = lspDocumentChangeForWorkspace(
+        activeWorkspace.path,
+        loadedBeforeDelete.path,
+        null,
+      );
+      void closeLanguageDocument({
+        workspaceId: activeWorkspaceId,
+        workspaceRoot: activeWorkspace.path,
+        path: change.closePath,
+      }).catch(() => {});
+    }
     updateEditor(activeWorkspaceId, (editor) => removeEditorPath(editor, path));
     if (nextSurface !== currentView.surface) {
       updateView(activeWorkspaceId, { surface: nextSurface });

@@ -20,11 +20,11 @@ type EditorTabProps = {
   onContentChange: (content: string) => void;
   diagnostics: LspDiagnostic[];
   onHover: (line: number, character: number) => Promise<string | null>;
-  onGoToDefinition: (line: number, character: number) => Promise<void>;
-  onReferences: (line: number, character: number) => Promise<void>;
-  onCompletion: (line: number, character: number) => Promise<unknown[]>;
-  onCodeActions: (line: number, character: number) => Promise<unknown[]>;
-  onRename: (line: number, character: number, newName: string) => Promise<void>;
+  onGoToDefinition: (line: number, character: number) => Promise<unknown>;
+  onReferences: (line: number, character: number) => Promise<unknown>;
+  onCompletion: (line: number, character: number) => Promise<unknown>;
+  onCodeActions: (line: number, character: number) => Promise<unknown>;
+  onRename: (line: number, character: number, newName: string) => Promise<unknown>;
 };
 
 type EditorIdentityInput = Pick<
@@ -53,6 +53,339 @@ export function shouldFocusFindInput(
   );
 }
 
+type UriFactory<TUri> = {
+  file: (path: string) => TUri;
+  parse: (uri: string) => TUri;
+};
+
+type MonacoLocation<TUri> = {
+  uri: TUri;
+  range: Monaco.IRange;
+};
+
+type MonacoTextEdit<TUri> = {
+  resource: TUri;
+  textEdit: {
+    range: Monaco.IRange;
+    text: string;
+  };
+  versionId: undefined;
+};
+
+type MonacoWorkspaceEdit<TUri> = {
+  edits: MonacoTextEdit<TUri>[];
+};
+
+type MonacoCodeAction<TUri> = {
+  title: string;
+  command?: Monaco.languages.Command;
+  edit?: MonacoWorkspaceEdit<TUri>;
+  diagnostics?: Monaco.editor.IMarkerData[];
+  kind?: string;
+  isPreferred?: boolean;
+};
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function lspRangeToMonacoRange(value: unknown): Monaco.IRange | null {
+  const range = record(value);
+  const start = record(range?.start);
+  const end = record(range?.end);
+  if (
+    typeof start?.line !== "number" ||
+    typeof start.character !== "number" ||
+    typeof end?.line !== "number" ||
+    typeof end.character !== "number"
+  ) {
+    return null;
+  }
+
+  return {
+    startLineNumber: start.line + 1,
+    startColumn: start.character + 1,
+    endLineNumber: end.line + 1,
+    endColumn: end.character + 1,
+  };
+}
+
+function uriFromLsp<TUri>(uriFactory: UriFactory<TUri>, value: unknown): TUri | null {
+  if (typeof value !== "string" || value.length === 0) {
+    return null;
+  }
+
+  return value.includes("://") ? uriFactory.parse(value) : uriFactory.file(value);
+}
+
+export function normalizeLspLocations<TUri>(
+  value: unknown,
+  uriFactory: UriFactory<TUri>,
+): MonacoLocation<TUri>[] {
+  const items = Array.isArray(value) ? value : value ? [value] : [];
+  const locations: MonacoLocation<TUri>[] = [];
+
+  for (const item of items) {
+    const location = record(item);
+    const uri = uriFromLsp(
+      uriFactory,
+      location?.uri ?? location?.targetUri,
+    );
+    const range = lspRangeToMonacoRange(location?.range ?? location?.targetRange);
+    if (!uri || !range) {
+      continue;
+    }
+
+    const targetSelectionRange = lspRangeToMonacoRange(
+      location?.targetSelectionRange,
+    );
+    if (targetSelectionRange) {
+      locations.push({ uri, range, targetSelectionRange } as MonacoLocation<TUri>);
+    } else {
+      locations.push({ uri, range });
+    }
+  }
+
+  return locations;
+}
+
+function monacoCompletionKindFromLsp(kind: unknown): number {
+  const map: Record<number, number> = {
+    1: 18,
+    2: 0,
+    3: 1,
+    4: 2,
+    5: 3,
+    6: 4,
+    7: 5,
+    8: 7,
+    9: 8,
+    10: 9,
+    11: 12,
+    12: 13,
+    13: 15,
+    14: 17,
+    15: 28,
+    16: 19,
+    17: 20,
+    18: 21,
+    19: 23,
+    20: 15,
+    21: 14,
+    22: 7,
+    23: 10,
+    24: 9,
+    25: 11,
+  };
+
+  return typeof kind === "number" ? (map[kind] ?? 18) : 18;
+}
+
+function completionLabel(value: unknown): string | Monaco.languages.CompletionItemLabel | null {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  const label = record(value);
+  if (typeof label?.label !== "string") {
+    return null;
+  }
+
+  return {
+    label: label.label,
+    detail: typeof label.detail === "string" ? label.detail : undefined,
+    description:
+      typeof label.description === "string" ? label.description : undefined,
+  };
+}
+
+function completionLabelText(
+  label: string | Monaco.languages.CompletionItemLabel,
+): string {
+  return typeof label === "string" ? label : label.label;
+}
+
+export function normalizeLspCompletionList(
+  value: unknown,
+  fallbackRange: Monaco.IRange,
+): Monaco.languages.CompletionList {
+  const completionList = record(value);
+  const rawItems = Array.isArray(value)
+    ? value
+    : Array.isArray(completionList?.items)
+      ? completionList.items
+      : [];
+  const suggestions: Monaco.languages.CompletionItem[] = [];
+
+  for (const rawItem of rawItems) {
+    const item = record(rawItem);
+    const label = completionLabel(item?.label);
+    if (!item || !label) {
+      continue;
+    }
+
+    const textEdit = record(item.textEdit);
+    const textEditRange = lspRangeToMonacoRange(textEdit?.range);
+    const insertText =
+      typeof item.insertText === "string"
+        ? item.insertText
+        : typeof textEdit?.newText === "string"
+          ? textEdit.newText
+          : completionLabelText(label);
+    const suggestion: Monaco.languages.CompletionItem = {
+      label,
+      kind: monacoCompletionKindFromLsp(item.kind),
+      insertText,
+      range: textEditRange ?? fallbackRange,
+    };
+
+    if (typeof item.detail === "string") {
+      suggestion.detail = item.detail;
+    }
+    if (typeof item.documentation === "string") {
+      suggestion.documentation = item.documentation;
+    }
+    if (typeof item.sortText === "string") {
+      suggestion.sortText = item.sortText;
+    }
+    if (typeof item.filterText === "string") {
+      suggestion.filterText = item.filterText;
+    }
+    if (item.insertTextFormat === 2) {
+      suggestion.insertTextRules = 4;
+    }
+
+    suggestions.push(suggestion);
+  }
+
+  return {
+    suggestions,
+    incomplete: completionList?.isIncomplete === true ? true : undefined,
+  };
+}
+
+function normalizeCommand(value: unknown): Monaco.languages.Command | undefined {
+  const command = record(value);
+  if (
+    typeof command?.command !== "string" ||
+    typeof command.title !== "string"
+  ) {
+    return undefined;
+  }
+
+  return {
+    id: command.command,
+    title: command.title,
+    arguments: Array.isArray(command.arguments) ? command.arguments : undefined,
+  };
+}
+
+function normalizeTextEdits<TUri>(
+  uriFactory: UriFactory<TUri>,
+  uri: unknown,
+  edits: unknown,
+): MonacoTextEdit<TUri>[] {
+  const resource = uriFromLsp(uriFactory, uri);
+  if (!resource || !Array.isArray(edits)) {
+    return [];
+  }
+
+  return edits.flatMap((edit) => {
+    const textEdit = record(edit);
+    const range = lspRangeToMonacoRange(textEdit?.range);
+    if (!range || typeof textEdit?.newText !== "string") {
+      return [];
+    }
+
+    return [{
+      resource,
+      textEdit: {
+        range,
+        text: textEdit.newText,
+      },
+      versionId: undefined,
+    }];
+  });
+}
+
+export function normalizeLspWorkspaceEdit<TUri>(
+  value: unknown,
+  uriFactory: UriFactory<TUri>,
+): MonacoWorkspaceEdit<TUri> | null {
+  const workspaceEdit = record(value);
+  if (!workspaceEdit) {
+    return null;
+  }
+
+  const edits: MonacoTextEdit<TUri>[] = [];
+  const changes = record(workspaceEdit.changes);
+  if (changes) {
+    for (const [uri, textEdits] of Object.entries(changes)) {
+      edits.push(...normalizeTextEdits(uriFactory, uri, textEdits));
+    }
+  }
+
+  if (Array.isArray(workspaceEdit.documentChanges)) {
+    for (const change of workspaceEdit.documentChanges) {
+      const textDocumentEdit = record(change);
+      const textDocument = record(textDocumentEdit?.textDocument);
+      edits.push(
+        ...normalizeTextEdits(
+          uriFactory,
+          textDocument?.uri,
+          textDocumentEdit?.edits,
+        ),
+      );
+    }
+  }
+
+  return edits.length > 0 ? { edits } : null;
+}
+
+export function normalizeLspCodeActionList<TUri>(
+  value: unknown,
+  uriFactory: UriFactory<TUri>,
+): { actions: MonacoCodeAction<TUri>[] } {
+  const codeActionList = record(value);
+  const rawActions = Array.isArray(value)
+    ? value
+    : Array.isArray(codeActionList?.actions)
+      ? codeActionList.actions
+      : [];
+  const actions: MonacoCodeAction<TUri>[] = [];
+
+  for (const rawAction of rawActions) {
+    const action = record(rawAction);
+    if (!action || typeof action.title !== "string") {
+      continue;
+    }
+
+    const normalized: MonacoCodeAction<TUri> = {
+      title: action.title,
+    };
+    if (typeof action.kind === "string") {
+      normalized.kind = action.kind;
+    }
+    if (action.isPreferred === true) {
+      normalized.isPreferred = true;
+    }
+    const edit = normalizeLspWorkspaceEdit(action.edit, uriFactory);
+    if (edit) {
+      normalized.edit = edit;
+    }
+    const command = normalizeCommand(action.command);
+    if (command) {
+      normalized.command = command;
+    }
+
+    actions.push(normalized);
+  }
+
+  return { actions };
+}
+
 export function EditorTab({
   workspaceId,
   filePath,
@@ -78,6 +411,7 @@ export function EditorTab({
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
   const providerDisposablesRef = useRef<Monaco.IDisposable[]>([]);
+  const diagnosticsRef = useRef(diagnostics);
   const previousFindFocusRef = useRef({
     findOpen: false,
     findFocusRequest,
@@ -124,6 +458,7 @@ export function EditorTab({
   ]);
 
   useEffect(() => {
+    diagnosticsRef.current = diagnostics;
     setEditorMarkers(editorRef.current);
   }, [diagnostics, editorIdentity]);
 
@@ -139,7 +474,7 @@ export function EditorTab({
       return;
     }
 
-    const markers = diagnostics.map((diagnostic) => ({
+    const markers = diagnosticsRef.current.map((diagnostic) => ({
       severity: severityToMonacoMarker(diagnostic.severity),
       message: diagnostic.message,
       startLineNumber: diagnostic.range.start_line + 1,
@@ -212,34 +547,59 @@ export function EditorTab({
         }),
         monaco.languages.registerDefinitionProvider(language, {
           provideDefinition: async (_editorModel, position) => {
-            return onGoToDefinitionRef.current(
-              position.lineNumber - 1,
-              position.column - 1,
-            )
-              .then(() => null)
-              .catch(() => null);
+            try {
+              const locations = normalizeLspLocations(
+                await onGoToDefinitionRef.current(
+                  position.lineNumber - 1,
+                  position.column - 1,
+                ),
+                monaco.Uri,
+              );
+
+              return locations.length > 0
+                ? (locations as Monaco.languages.Definition)
+                : null;
+            } catch {
+              return null;
+            }
           },
         }),
         monaco.languages.registerReferenceProvider(language, {
           provideReferences: async (_editorModel, position) => {
-            return onReferencesRef.current(
-              position.lineNumber - 1,
-              position.column - 1,
-            )
-              .then(() => null)
-              .catch(() => null);
+            try {
+              const locations = normalizeLspLocations(
+                await onReferencesRef.current(
+                  position.lineNumber - 1,
+                  position.column - 1,
+                ),
+                monaco.Uri,
+              );
+
+              return locations.length > 0
+                ? (locations as Monaco.languages.Location[])
+                : null;
+            } catch {
+              return null;
+            }
           },
         }),
         monaco.languages.registerCompletionItemProvider(language, {
-          provideCompletionItems: async (_editorModel, position) => {
+          provideCompletionItems: async (editorModel, position) => {
             try {
-              const completionItems = await onCompletionRef.current(
-                position.lineNumber - 1,
-                position.column - 1,
-              );
-              return {
-                suggestions: completionItems as Monaco.languages.CompletionItem[],
+              const word = editorModel.getWordUntilPosition(position);
+              const range = {
+                startLineNumber: position.lineNumber,
+                startColumn: word.startColumn,
+                endLineNumber: position.lineNumber,
+                endColumn: word.endColumn,
               };
+              return normalizeLspCompletionList(
+                await onCompletionRef.current(
+                  position.lineNumber - 1,
+                  position.column - 1,
+                ),
+                range,
+              );
             } catch {
               return { suggestions: [] };
             }
@@ -254,7 +614,7 @@ export function EditorTab({
               );
 
               return {
-                actions: codeActions as Monaco.languages.CodeAction[],
+                ...normalizeLspCodeActionList(codeActions, monaco.Uri),
                 dispose: () => {},
               };
             } catch {
@@ -267,13 +627,18 @@ export function EditorTab({
         }),
         monaco.languages.registerRenameProvider(language, {
           provideRenameEdits: async (_editorModel, position, newName) => {
-            return onRenameRef.current(
-              position.lineNumber - 1,
-              position.column - 1,
-              newName,
-            )
-              .then(() => null)
-              .catch(() => null);
+            try {
+              return normalizeLspWorkspaceEdit(
+                await onRenameRef.current(
+                  position.lineNumber - 1,
+                  position.column - 1,
+                  newName,
+                ),
+                monaco.Uri,
+              ) as Monaco.languages.WorkspaceEdit | null;
+            } catch {
+              return null;
+            }
           },
         }),
       ];

@@ -52,8 +52,8 @@ export function requestLanguageDefinition(args: {
   path: string;
   line: number;
   character: number;
-}): Promise<void> {
-  return call<unknown>("lsp_definition", args).then(() => {});
+}): Promise<unknown> {
+  return call<unknown>("lsp_definition", args);
 }
 
 export function requestLanguageReferences(args: {
@@ -62,8 +62,8 @@ export function requestLanguageReferences(args: {
   path: string;
   line: number;
   character: number;
-}): Promise<void> {
-  return call<unknown>("lsp_references", args).then(() => {});
+}): Promise<unknown> {
+  return call<unknown>("lsp_references", args);
 }
 
 export function requestLanguageCompletion(args: {
@@ -72,8 +72,8 @@ export function requestLanguageCompletion(args: {
   path: string;
   line: number;
   character: number;
-}): Promise<unknown[]> {
-  return call<unknown[]>("lsp_completion", args);
+}): Promise<unknown> {
+  return call<unknown>("lsp_completion", args);
 }
 
 export function requestLanguageCodeActions(args: {
@@ -82,8 +82,8 @@ export function requestLanguageCodeActions(args: {
   path: string;
   line: number;
   character: number;
-}): Promise<unknown[]> {
-  return call<unknown[]>("lsp_code_actions", args);
+}): Promise<unknown> {
+  return call<unknown>("lsp_code_actions", args);
 }
 
 export function requestLanguageRename(args: {
@@ -93,6 +93,6 @@ export function requestLanguageRename(args: {
   line: number;
   character: number;
   newName: string;
-}): Promise<void> {
-  return call<unknown>("lsp_rename", args).then(() => {});
+}): Promise<unknown> {
+  return call<unknown>("lsp_rename", args);
 }

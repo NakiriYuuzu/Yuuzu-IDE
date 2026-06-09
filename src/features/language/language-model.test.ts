@@ -5,6 +5,7 @@ import {
   replaceDiagnostics,
   replaceServerStatuses,
   diagnosticsForPath,
+  lspDocumentChangeForWorkspace,
   lspDocumentPathForWorkspace,
   severityToMonacoMarker,
   selectDiagnosticBadge,
@@ -79,6 +80,29 @@ describe("language model", () => {
     expect(lspDocumentPathForWorkspace("/workspace", "src/main.rs")).toBe(
       "src/main.rs",
     );
+  });
+
+  test("builds LSP document lifecycle paths for rename and delete", () => {
+    expect(
+      lspDocumentChangeForWorkspace(
+        "/workspace",
+        "/workspace/src/main.rs",
+        "/workspace/src/lib.rs",
+      ),
+    ).toEqual({
+      closePath: "src/main.rs",
+      openPath: "src/lib.rs",
+    });
+    expect(
+      lspDocumentChangeForWorkspace(
+        "/workspace",
+        "/workspace/src/main.rs",
+        null,
+      ),
+    ).toEqual({
+      closePath: "src/main.rs",
+      openPath: null,
+    });
   });
 
   test("stores server status, hover, and logs without mutating defaults", () => {
