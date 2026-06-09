@@ -23,6 +23,8 @@ pub struct AppState {
     settings_store: SettingsStore,
     docs_store: crate::docs::ContextPackStore,
     agent_store: crate::agent::AgentSessionStore,
+    database_profiles: crate::database::DatabaseProfileStore,
+    database_secrets: crate::database::KeyringDatabaseSecretStore,
 }
 
 impl AppState {
@@ -36,6 +38,11 @@ impl AppState {
             crate::docs::ContextPackStore::new(config_dir.as_ref().join("context-packs.json"));
         let agent_store =
             crate::agent::AgentSessionStore::new(config_dir.as_ref().join("agent-sessions.json"));
+        let database_profiles = crate::database::DatabaseProfileStore::new(
+            config_dir.as_ref().join("database-profiles.json"),
+        );
+        let database_secrets =
+            crate::database::KeyringDatabaseSecretStore::new("yuuzu-ide.database");
 
         Ok(Self {
             registry: Mutex::new(registry),
@@ -44,6 +51,8 @@ impl AppState {
             settings_store,
             docs_store,
             agent_store,
+            database_profiles,
+            database_secrets,
         })
     }
 
@@ -757,6 +766,46 @@ pub fn link_context_pack(
     agent_session_id: Option<String>,
 ) -> Result<crate::docs::ContextPack, String> {
     state.link_context_pack(id, &task_state, task_run_id, agent_session_id)
+}
+
+#[tauri::command]
+pub fn list_database_profiles(
+    state: State<'_, AppState>,
+    workspace_root: String,
+) -> Result<Vec<crate::database::DatabaseProfile>, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    state
+        .database_profiles
+        .list_profiles(&workspace_root.to_string_lossy())
+}
+
+#[tauri::command]
+pub fn save_database_profile(
+    state: State<'_, AppState>,
+    input: crate::database::DatabaseProfileInput,
+) -> Result<crate::database::DatabaseProfile, String> {
+    let workspace_root = state.trusted_workspace_root(&input.workspace_root)?;
+    let input = crate::database::DatabaseProfileInput {
+        workspace_root: workspace_root.to_string_lossy().to_string(),
+        ..input
+    };
+
+    state.database_profiles.save_profile(
+        input,
+        &state.database_secrets,
+        || Ok(crate::database::database_now_ms()),
+        || uuid::Uuid::new_v4().to_string(),
+    )
+}
+
+#[tauri::command]
+pub fn delete_database_profile(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<(), String> {
+    state
+        .database_profiles
+        .delete_profile(&profile_id, &state.database_secrets)
 }
 
 #[tauri::command]
@@ -1683,6 +1732,42 @@ mod tests {
         fn assert_flat_signature(_command: FlatStartAgentSessionCommand) {}
 
         assert_flat_signature(start_agent_session);
+    }
+
+    #[test]
+    fn list_database_profiles_preserves_flat_command_signature() {
+        type FlatListDatabaseProfilesCommand =
+            fn(
+                State<'_, AppState>,
+                String,
+            ) -> Result<Vec<crate::database::DatabaseProfile>, String>;
+
+        fn assert_flat_signature(_command: FlatListDatabaseProfilesCommand) {}
+
+        assert_flat_signature(super::list_database_profiles);
+    }
+
+    #[test]
+    fn save_database_profile_preserves_flat_command_signature() {
+        type FlatSaveDatabaseProfileCommand =
+            fn(
+                State<'_, AppState>,
+                crate::database::DatabaseProfileInput,
+            ) -> Result<crate::database::DatabaseProfile, String>;
+
+        fn assert_flat_signature(_command: FlatSaveDatabaseProfileCommand) {}
+
+        assert_flat_signature(super::save_database_profile);
+    }
+
+    #[test]
+    fn delete_database_profile_preserves_flat_command_signature() {
+        type FlatDeleteDatabaseProfileCommand =
+            fn(State<'_, AppState>, String) -> Result<(), String>;
+
+        fn assert_flat_signature(_command: FlatDeleteDatabaseProfileCommand) {}
+
+        assert_flat_signature(super::delete_database_profile);
     }
 
     #[test]

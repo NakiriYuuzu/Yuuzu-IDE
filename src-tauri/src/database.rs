@@ -1,8 +1,16 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    path::PathBuf,
+    ffi::OsString,
+    fs::{self, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+use keyring_core::Entry;
+#[cfg(test)]
+use std::collections::HashMap;
 
 pub const MAX_DATABASE_ROWS: usize = 500;
 pub const MAX_DATABASE_CELL_CHARS: usize = 2000;
@@ -186,6 +194,296 @@ impl DatabaseQueryResult {
                 reason: String::new(),
             },
         }
+    }
+}
+
+impl DatabaseConnectionSource {
+    pub fn secret_id(&self) -> Option<&str> {
+        match self {
+            Self::Tcp { secret_id, .. } => secret_id.as_deref(),
+            Self::SQLite { .. } => None,
+        }
+    }
+}
+
+pub trait DatabaseSecretStore: Send + Sync {
+    fn set_secret(&self, secret_id: &str, secret: &str) -> Result<(), String>;
+    fn get_secret(&self, secret_id: &str) -> Result<String, String>;
+    fn delete_secret(&self, secret_id: &str) -> Result<(), String>;
+}
+
+#[derive(Clone, Debug)]
+pub struct KeyringDatabaseSecretStore {
+    service: String,
+}
+
+impl KeyringDatabaseSecretStore {
+    pub fn new(service: impl Into<String>) -> Self {
+        Self {
+            service: service.into(),
+        }
+    }
+}
+
+impl DatabaseSecretStore for KeyringDatabaseSecretStore {
+    fn set_secret(&self, secret_id: &str, secret: &str) -> Result<(), String> {
+        let entry = Entry::new(&self.service, secret_id).map_err(|err| err.to_string())?;
+        entry
+            .set_secret(secret.as_bytes())
+            .map_err(|err| err.to_string())
+    }
+
+    fn get_secret(&self, secret_id: &str) -> Result<String, String> {
+        let entry = Entry::new(&self.service, secret_id).map_err(|err| err.to_string())?;
+        let secret = entry.get_secret().map_err(|err| err.to_string())?;
+        String::from_utf8(secret).map_err(|_| "stored secret is not valid UTF-8".to_string())
+    }
+
+    fn delete_secret(&self, secret_id: &str) -> Result<(), String> {
+        let entry = Entry::new(&self.service, secret_id).map_err(|err| err.to_string())?;
+        entry.delete_credential().map_err(|err| err.to_string())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct DatabaseProfileStore {
+    path: PathBuf,
+    lock: Arc<Mutex<()>>,
+}
+
+impl DatabaseProfileStore {
+    pub fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            lock: Arc::new(Mutex::new(())),
+        }
+    }
+
+    pub fn list_profiles(&self, workspace_root: &str) -> Result<Vec<DatabaseProfile>, String> {
+        let _guard = self.lock.lock().map_err(|err| err.to_string())?;
+        let mut profiles = self.load()?;
+        profiles.retain(|profile| profile.workspace_root == workspace_root);
+        profiles.sort_by(|left, right| {
+            left.name
+                .cmp(&right.name)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(profiles)
+    }
+
+    pub fn get_profile(&self, id: &str) -> Result<DatabaseProfile, String> {
+        let _guard = self.lock.lock().map_err(|err| err.to_string())?;
+        self.load()?
+            .into_iter()
+            .find(|profile| profile.id == id)
+            .ok_or_else(|| format!("database profile not found: {id}"))
+    }
+
+    pub fn save_profile<FNow, FId>(
+        &self,
+        input: DatabaseProfileInput,
+        secrets: &dyn DatabaseSecretStore,
+        now: FNow,
+        id_factory: FId,
+    ) -> Result<DatabaseProfile, String>
+    where
+        FNow: Fn() -> Result<u64, String>,
+        FId: Fn() -> String,
+    {
+        let _guard = self.lock.lock().map_err(|err| err.to_string())?;
+        let now = now()?;
+
+        let mut profiles = self.load()?;
+        let profile_id = input.id.unwrap_or_else(&id_factory);
+        let previous = profiles
+            .iter()
+            .find(|profile| profile.id == profile_id)
+            .cloned();
+
+        let source = match input.kind {
+            DatabaseKind::SQLite => {
+                let sqlite_path = input
+                    .sqlite_path
+                    .map(PathBuf::from)
+                    .ok_or_else(|| "sqlite path is required".to_string())?;
+                DatabaseConnectionSource::SQLite { path: sqlite_path }
+            }
+            DatabaseKind::PostgreSQL | DatabaseKind::MsSql => {
+                let host = input
+                    .host
+                    .ok_or_else(|| "database host is required".to_string())?;
+                let port = input
+                    .port
+                    .ok_or_else(|| "database port is required".to_string())?;
+                let database = input
+                    .database
+                    .ok_or_else(|| "database name is required".to_string())?;
+
+                let secret_id = if let Some(password) = input.password.as_deref() {
+                    let secret_id = previous
+                        .as_ref()
+                        .and_then(|profile| profile.source.secret_id().map(|id| id.to_string()))
+                        .unwrap_or_else(|| format!("database-profile:{profile_id}"));
+                    secrets.set_secret(&secret_id, password)?;
+                    Some(secret_id)
+                } else {
+                    previous
+                        .as_ref()
+                        .and_then(|profile| profile.source.secret_id().map(|id| id.to_string()))
+                };
+
+                DatabaseConnectionSource::Tcp {
+                    host,
+                    port,
+                    database,
+                    username: input.username,
+                    secret_id,
+                }
+            }
+        };
+
+        let created_ms = previous.as_ref().map_or(now, |profile| profile.created_ms);
+        let profile = DatabaseProfile {
+            id: profile_id.clone(),
+            workspace_root: input.workspace_root,
+            name: input.name,
+            kind: input.kind,
+            source,
+            read_only: input.read_only,
+            production: input.production,
+            created_ms,
+            updated_ms: now,
+        };
+
+        profiles.retain(|profile| profile.id != profile_id);
+        profiles.push(profile.clone());
+        self.save(&profiles)?;
+
+        Ok(profile)
+    }
+
+    pub fn delete_profile(
+        &self,
+        id: &str,
+        secrets: &dyn DatabaseSecretStore,
+    ) -> Result<(), String> {
+        let _guard = self.lock.lock().map_err(|err| err.to_string())?;
+        let mut profiles = self.load()?;
+        let index = profiles
+            .iter()
+            .position(|profile| profile.id == id)
+            .ok_or_else(|| format!("database profile not found: {id}"))?;
+        if let Some(secret_id) = profiles[index].source.secret_id() {
+            secrets.delete_secret(secret_id)?;
+        }
+
+        profiles.remove(index);
+        self.save(&profiles)
+    }
+
+    fn load(&self) -> Result<Vec<DatabaseProfile>, String> {
+        if !self.path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let value = fs::read_to_string(&self.path).map_err(|err| err.to_string())?;
+        if value.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        serde_json::from_str(&value).map_err(|err| err.to_string())
+    }
+
+    fn save(&self, profiles: &[DatabaseProfile]) -> Result<(), String> {
+        if let Some(parent) = self
+            .path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        }
+
+        let value = serde_json::to_string_pretty(profiles).map_err(|err| err.to_string())?;
+        let parent = self
+            .path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let file_name = self
+            .path
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("database-profiles.json"));
+        let file_name = OsString::from(file_name);
+        let temp_path = parent.join(format!(
+            ".{}.{}.tmp",
+            file_name.to_string_lossy(),
+            uuid::Uuid::new_v4()
+        ));
+
+        let result = (|| {
+            match fs::remove_file(&temp_path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err.to_string()),
+            }
+
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&temp_path)
+                .map_err(|err| err.to_string())?;
+            file.write_all(value.as_bytes())
+                .map_err(|err| err.to_string())?;
+            file.sync_all().map_err(|err| err.to_string())?;
+            drop(file);
+            fs::rename(&temp_path, &self.path).map_err(|err| err.to_string())
+        })();
+
+        if result.is_err() {
+            let _ = fs::remove_file(&temp_path);
+        }
+
+        result
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug)]
+struct InMemoryDatabaseSecretStore {
+    values: Arc<Mutex<HashMap<String, String>>>,
+}
+
+#[cfg(test)]
+impl Default for InMemoryDatabaseSecretStore {
+    fn default() -> Self {
+        Self {
+            values: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+#[cfg(test)]
+impl DatabaseSecretStore for InMemoryDatabaseSecretStore {
+    fn set_secret(&self, secret_id: &str, secret: &str) -> Result<(), String> {
+        let mut values = self.values.lock().map_err(|err| err.to_string())?;
+        values.insert(secret_id.to_string(), secret.to_string());
+        Ok(())
+    }
+
+    fn get_secret(&self, secret_id: &str) -> Result<String, String> {
+        let values = self.values.lock().map_err(|err| err.to_string())?;
+        values
+            .get(secret_id)
+            .cloned()
+            .ok_or_else(|| format!("secret not found: {secret_id}"))
+    }
+
+    fn delete_secret(&self, secret_id: &str) -> Result<(), String> {
+        let mut values = self.values.lock().map_err(|err| err.to_string())?;
+        values
+            .remove(secret_id)
+            .map(|_| ())
+            .ok_or_else(|| format!("secret not found: {secret_id}"))
     }
 }
 
@@ -479,16 +777,10 @@ fn next_token(bytes: &[u8], index: &mut usize) -> Option<String> {
         if bytes[*index].is_ascii_whitespace() {
             break;
         }
-        if bytes[*index] == b'-'
-            && *index + 1 < bytes.len()
-            && bytes[*index + 1] == b'-'
-        {
+        if bytes[*index] == b'-' && *index + 1 < bytes.len() && bytes[*index + 1] == b'-' {
             break;
         }
-        if bytes[*index] == b'/'
-            && *index + 1 < bytes.len()
-            && bytes[*index + 1] == b'*'
-        {
+        if bytes[*index] == b'/' && *index + 1 < bytes.len() && bytes[*index + 1] == b'*' {
             break;
         }
         if bytes[*index] == b';' || bytes[*index] == b',' {
@@ -721,6 +1013,82 @@ mod tests {
             result.rows[0].cells[1].display.len(),
             MAX_DATABASE_CELL_CHARS
         );
+    }
+
+    #[test]
+    fn profile_store_persists_metadata_without_passwords_or_connection_strings() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = DatabaseProfileStore::new(temp.path().join("database-profiles.json"));
+        let secrets = InMemoryDatabaseSecretStore::default();
+
+        let saved = store
+            .save_profile(
+                DatabaseProfileInput {
+                    id: None,
+                    workspace_root: "/workspace".to_string(),
+                    name: "prod".to_string(),
+                    kind: DatabaseKind::PostgreSQL,
+                    sqlite_path: None,
+                    host: Some("db.example.test".to_string()),
+                    port: Some(5432),
+                    database: Some("app".to_string()),
+                    username: Some("yuuzu".to_string()),
+                    password: Some("super-secret".to_string()),
+                    read_only: true,
+                    production: true,
+                },
+                &secrets,
+                || Ok(10),
+                || "profile-1".to_string(),
+            )
+            .expect("save profile");
+
+        assert_eq!(
+            secrets
+                .get_secret(saved.source.secret_id().expect("secret id"))
+                .unwrap(),
+            "super-secret"
+        );
+        let persisted = std::fs::read_to_string(temp.path().join("database-profiles.json"))
+            .expect("profile json");
+        assert!(!persisted.contains("super-secret"));
+        assert!(!persisted.contains("postgres://"));
+        assert!(!persisted.contains("mssql://"));
+        assert!(!persisted.contains("sqlite://"));
+        assert!(persisted.contains("secret_id"));
+    }
+
+    #[test]
+    fn deleting_profile_deletes_associated_secret() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = DatabaseProfileStore::new(temp.path().join("database-profiles.json"));
+        let secrets = InMemoryDatabaseSecretStore::default();
+        let saved = store
+            .save_profile(
+                DatabaseProfileInput {
+                    id: Some("profile-1".to_string()),
+                    workspace_root: "/workspace".to_string(),
+                    name: "legacy".to_string(),
+                    kind: DatabaseKind::MsSql,
+                    sqlite_path: None,
+                    host: Some("localhost".to_string()),
+                    port: Some(1433),
+                    database: Some("ERP".to_string()),
+                    username: Some("sa".to_string()),
+                    password: Some("pw".to_string()),
+                    read_only: false,
+                    production: false,
+                },
+                &secrets,
+                || Ok(10),
+                || "profile-1".to_string(),
+            )
+            .expect("save");
+
+        let secret_id = saved.source.secret_id().expect("secret id").to_string();
+        store.delete_profile("profile-1", &secrets).expect("delete");
+
+        assert!(secrets.get_secret(&secret_id).is_err());
     }
 
     fn database_profile(
