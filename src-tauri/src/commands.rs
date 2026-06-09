@@ -220,6 +220,26 @@ pub fn search_workspace(
 }
 
 #[tauri::command]
+pub fn git_status(
+    state: State<'_, AppState>,
+    workspace_root: String,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::git::repository_status(&workspace_root)
+}
+
+#[tauri::command]
+pub fn git_diff_file(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    path: String,
+    staged: bool,
+) -> Result<crate::git::GitDiff, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::git::diff_file(&workspace_root, &path, staged)
+}
+
+#[tauri::command]
 pub fn watch_workspace(
     app: AppHandle,
     app_state: State<'_, AppState>,

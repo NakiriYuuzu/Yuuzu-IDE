@@ -1,6 +1,7 @@
 mod commands;
 mod file_system;
 mod file_watcher;
+pub mod git;
 mod metrics;
 mod pty;
 mod search;
@@ -37,6 +38,8 @@ pub fn run() {
             commands::scan_workspace,
             commands::scan_directory,
             commands::search_workspace,
+            commands::git_status,
+            commands::git_diff_file,
             commands::watch_workspace,
             commands::unwatch_workspace,
             commands::terminal_probe,
