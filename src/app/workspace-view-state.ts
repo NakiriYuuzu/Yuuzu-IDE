@@ -95,6 +95,7 @@ function freezeWorkspaceView(view: WorkspaceViewState): WorkspaceViewState {
   Object.freeze(view.task.problemsByRunId);
   Object.freeze(view.task.pendingOutputByRunId);
   Object.freeze(view.task.pendingFinishByRunId);
+  Object.freeze(view.task.contextPackByRunId);
   Object.freeze(view.task);
   if (view.git.status) {
     Object.freeze(view.git.status.changes);

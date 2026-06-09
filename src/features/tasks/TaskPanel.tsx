@@ -15,6 +15,8 @@ type TaskPanelProps = {
   activeRunId: string | null;
   outputByRunId: Record<string, string>;
   problemsByRunId: Record<string, TaskProblem[]>;
+  contextPackNameById: Record<string, string>;
+  contextPackByRunId: Record<string, string>;
   customCommand: string;
   error: string | null;
   onCustomCommandChange: (value: string) => void;
@@ -43,6 +45,8 @@ export function TaskPanel({
   activeRunId,
   outputByRunId,
   problemsByRunId,
+  contextPackNameById,
+  contextPackByRunId,
   customCommand,
   error,
   onCustomCommandChange,
@@ -58,6 +62,12 @@ export function TaskPanel({
   const activeProblems = activeRun
     ? (problemsByRunId[activeRun.id] ?? [])
     : [];
+  const activeContextPackId = activeRun
+    ? (contextPackByRunId[activeRun.id] ?? null)
+    : null;
+  const activeContextPackName = activeContextPackId
+    ? (contextPackNameById[activeContextPackId] ?? activeContextPackId)
+    : null;
   const trimmedCustomCommand = customCommand.trim();
 
   return (
@@ -203,6 +213,14 @@ export function TaskPanel({
           <span>Output</span>
           <span>{activeProblems.length} problems</span>
         </div>
+        {activeContextPackName ? (
+          <div className="task-context-strip">
+            <span className="badge2">Context</span>
+            <span className="docs-context-badge mono" title={activeContextPackName}>
+              {activeContextPackName}
+            </span>
+          </div>
+        ) : null}
         {activeRun ? (
           <pre className="task-output mono">{activeOutput}</pre>
         ) : (

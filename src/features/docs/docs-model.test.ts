@@ -102,6 +102,34 @@ describe("docs model", () => {
     expect(updated.contextPacks[0].name).toBe("First linked");
   });
 
+  test("updates linked context pack metadata in place", () => {
+    const state = storeContextPack(createDocsState(), {
+      id: "pack-1",
+      workspace_root: "/workspace",
+      name: "Pack",
+      doc_paths: ["README.md"],
+      linked_task_run_ids: [],
+      linked_agent_session_ids: [],
+      created_ms: 1,
+      updated_ms: 1,
+    });
+
+    const updated = storeContextPack(state, {
+      ...state.contextPacks[0],
+      linked_task_run_ids: ["workspace:task-1"],
+      linked_agent_session_ids: ["agent-1"],
+      updated_ms: 2,
+    });
+
+    expect(updated.contextPacks.map((item) => item.id)).toEqual(["pack-1"]);
+    expect(updated.contextPacks[0].linked_task_run_ids).toEqual([
+      "workspace:task-1",
+    ]);
+    expect(updated.contextPacks[0].linked_agent_session_ids).toEqual([
+      "agent-1",
+    ]);
+  });
+
   test("summarizes context pack docs, task links, and agent links", () => {
     expect(
       contextPackSummary({

@@ -7,6 +7,7 @@ import {
   appendTaskOutput,
   createTaskState,
   finishTaskRun,
+  linkTaskRunContextPack,
   replaceDetectedTasks,
   replaceTaskRuns,
   rerunnableTaskForState,
@@ -17,6 +18,7 @@ import {
   upsertTaskRun,
 } from "./task-model";
 import type { TaskRun } from "./task-model";
+import { createWorkspaceViewStore } from "../../app/workspace-view-state";
 
 function runningRun(overrides: Partial<TaskRun> = {}): TaskRun {
   return {
@@ -188,5 +190,35 @@ describe("task model", () => {
     expect(taskErrorForWorkspace(errors, null)).toBeNull();
     expect(taskErrorForWorkspace(cleared, "workspace-a")).toBe("Run failed");
     expect(taskErrorForWorkspace(cleared, "workspace-b")).toBeNull();
+  });
+
+  test("tracks selected context pack for an active task run", () => {
+    const run = runningRun({
+      id: "workspace:task-1",
+      workspace_id: "workspace",
+      label: "build",
+      command: "bun run build",
+      cwd: "/workspace",
+    });
+    const state = upsertTaskRun(createTaskState(), run);
+
+    const linked = linkTaskRunContextPack(state, run.id, "pack-1");
+    const missing = linkTaskRunContextPack(linked, "missing:task-1", "pack-2");
+
+    expect(linked.contextPackByRunId[run.id]).toBe("pack-1");
+    expect(missing.contextPackByRunId).toEqual(linked.contextPackByRunId);
+  });
+
+  test("workspace task defaults freeze context pack metadata", () => {
+    const store = createWorkspaceViewStore();
+    const unknownView = store.getState().viewFor("unknown");
+
+    expect(() => {
+      unknownView.task.contextPackByRunId["unknown:task-1"] = "pack-1";
+    }).toThrow(TypeError);
+
+    expect(store.getState().viewFor("other-unknown").task).toMatchObject({
+      contextPackByRunId: {},
+    });
   });
 });

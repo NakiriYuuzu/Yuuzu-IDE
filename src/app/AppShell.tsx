@@ -24,6 +24,7 @@ import {
   getDocPreview,
   getDocsIndex,
   listContextPacks,
+  linkContextPack,
   searchDocs,
 } from "../features/docs/docs-api";
 import { DocsPanel } from "../features/docs/DocsPanel";
@@ -144,6 +145,7 @@ import {
   activateTaskRun,
   appendTaskOutput,
   finishTaskRun,
+  linkTaskRunContextPack,
   replaceDetectedTasks,
   replaceTaskRuns,
   rerunnableTaskForState,
@@ -346,6 +348,7 @@ function PanelBody({
   taskError,
   gitState,
   docsState,
+  contextPackNameById,
   gitDecorations,
   onOpenFile,
   onCreateFile,
@@ -384,6 +387,8 @@ function PanelBody({
   onDocsCreatePack,
   onDocsSelectPack,
   onDocsDeletePack,
+  onDocsUsePackForActiveTask,
+  onDocsLinkPackToAgentSession,
 }: {
   active: ActivityId;
   refreshKey: number;
@@ -396,6 +401,7 @@ function PanelBody({
   taskError: string | null;
   gitState: GitViewState;
   docsState: DocsViewState;
+  contextPackNameById: Record<string, string>;
   gitDecorations: ReturnType<typeof decorationMapFromStatus>;
   onOpenFile: (path: string) => void;
   onCreateFile: (relativePath: string) => Promise<void>;
@@ -434,6 +440,11 @@ function PanelBody({
   onDocsCreatePack: () => void;
   onDocsSelectPack: (id: string) => void;
   onDocsDeletePack: (id: string) => void;
+  onDocsUsePackForActiveTask: (id: string) => void;
+  onDocsLinkPackToAgentSession: (
+    id: string,
+    agentSessionId: string,
+  ) => void;
 }) {
   if (active === "git") {
     return (
@@ -485,6 +496,8 @@ function PanelBody({
         activeRunId={taskState.activeRunId}
         outputByRunId={taskState.outputByRunId}
         problemsByRunId={taskState.problemsByRunId}
+        contextPackNameById={contextPackNameById}
+        contextPackByRunId={taskState.contextPackByRunId}
         customCommand={taskState.customCommand}
         error={taskError}
         onCustomCommandChange={onTaskCustomCommandChange}
@@ -509,6 +522,9 @@ function PanelBody({
         onCreatePack={onDocsCreatePack}
         onSelectPack={onDocsSelectPack}
         onDeletePack={onDocsDeletePack}
+        activeTaskRunId={taskState.activeRunId ?? taskState.runs[0]?.id ?? null}
+        onUsePackForActiveTask={onDocsUsePackForActiveTask}
+        onLinkPackToAgentSession={onDocsLinkPackToAgentSession}
       />
     );
   }
@@ -584,6 +600,13 @@ export function AppShell() {
   const activeTaskProblems = activeTaskRun
     ? (view.task.problemsByRunId[activeTaskRun.id] ?? [])
     : [];
+  const contextPackNameById = useMemo(
+    () =>
+      Object.fromEntries(
+        view.docs.contextPacks.map((pack) => [pack.id, pack.name]),
+      ),
+    [view.docs.contextPacks],
+  );
   const taskError = taskErrorForWorkspace(
     taskErrorsByWorkspace,
     activeWorkspaceId,
@@ -2282,6 +2305,71 @@ export function AppShell() {
     }
   }
 
+  async function linkPackToActiveTask(packId: string) {
+    if (!activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const taskState = workspaceViewStore.getState().viewFor(workspaceId).task;
+    const run =
+      taskState.runs.find((item) => item.id === taskState.activeRunId) ??
+      taskState.runs[0] ??
+      null;
+
+    if (!run) {
+      openDocsPanel();
+      return;
+    }
+
+    try {
+      const pack = await linkContextPack({
+        id: packId,
+        taskRunId: run.id,
+      });
+      updateDocs(workspaceId, (state) => storeContextPack(state, pack));
+      updateTask(workspaceId, (state) =>
+        linkTaskRunContextPack(state, run.id, pack.id),
+      );
+      openDocsPanel();
+    } catch (error) {
+      updateDocs(workspaceId, (state) => ({
+        ...state,
+        error: `Link pack failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
+  async function linkPackToAgentSession(
+    packId: string,
+    agentSessionId: string,
+  ) {
+    if (!activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const trimmedAgentSessionId = agentSessionId.trim();
+
+    if (!trimmedAgentSessionId) {
+      return;
+    }
+
+    try {
+      const pack = await linkContextPack({
+        id: packId,
+        agentSessionId: trimmedAgentSessionId,
+      });
+      updateDocs(workspaceId, (state) => storeContextPack(state, pack));
+      openDocsPanel();
+    } catch (error) {
+      updateDocs(workspaceId, (state) => ({
+        ...state,
+        error: `Link agent failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
   function runCommand(id: string) {
     switch (id) {
       case "save-file":
@@ -2450,6 +2538,7 @@ export function AppShell() {
               taskError={taskError}
               gitState={view.git}
               docsState={view.docs}
+              contextPackNameById={contextPackNameById}
               gitDecorations={gitDecorations}
               onOpenFile={openFile}
               onCreateFile={createFileFromExplorer}
@@ -2490,6 +2579,12 @@ export function AppShell() {
               onDocsCreatePack={() => void createDocsContextPack()}
               onDocsSelectPack={selectDocsContextPack}
               onDocsDeletePack={(id) => void deleteDocsContextPack(id)}
+              onDocsUsePackForActiveTask={(id) =>
+                void linkPackToActiveTask(id)
+              }
+              onDocsLinkPackToAgentSession={(id, agentSessionId) =>
+                void linkPackToAgentSession(id, agentSessionId)
+              }
             />
           </aside>
         ) : null}

@@ -2,10 +2,12 @@ import {
   Eye,
   ExternalLink,
   FileText,
+  Link2,
   Plus,
   RefreshCw,
   Trash2,
 } from "lucide-react";
+import { useState } from "react";
 
 import {
   contextPackSummary,
@@ -27,6 +29,9 @@ type DocsPanelProps = {
   onCreatePack: () => void;
   onSelectPack: (id: string) => void;
   onDeletePack: (id: string) => void;
+  activeTaskRunId: string | null;
+  onUsePackForActiveTask: (id: string) => void;
+  onLinkPackToAgentSession: (id: string, agentSessionId: string) => void;
 };
 
 function DocsIndexRow({
@@ -97,38 +102,84 @@ function SearchMatchRow({
 function ContextPackRow({
   pack,
   active,
+  agentSessionId,
+  activeTaskRunId,
   onSelectPack,
   onDeletePack,
+  onAgentSessionIdChange,
+  onUsePackForActiveTask,
+  onLinkPackToAgentSession,
 }: {
   pack: ContextPack;
   active: boolean;
+  agentSessionId: string;
+  activeTaskRunId: string | null;
   onSelectPack: (id: string) => void;
   onDeletePack: (id: string) => void;
+  onAgentSessionIdChange: (id: string, value: string) => void;
+  onUsePackForActiveTask: (id: string) => void;
+  onLinkPackToAgentSession: (id: string, agentSessionId: string) => void;
 }) {
+  const trimmedAgentSessionId = agentSessionId.trim();
+
   return (
-    <div className={`docs-row row${active ? " sel" : ""}`}>
+    <div className={`docs-row docs-pack-row row${active ? " sel" : ""}`}>
       <div className="docs-row-main">
         <span className="docs-row-title">{pack.name}</span>
         <span className="docs-row-path mono">{contextPackSummary(pack)}</span>
       </div>
-      <button
-        type="button"
-        className="iconbtn docs-row-action docs-pack-action"
-        title={`Inspect ${pack.name}`}
-        aria-label={`Inspect ${pack.name}`}
-        onClick={() => onSelectPack(pack.id)}
-      >
-        <Eye aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        className="iconbtn docs-row-action docs-pack-action"
-        title={`Delete ${pack.name}`}
-        aria-label={`Delete ${pack.name}`}
-        onClick={() => onDeletePack(pack.id)}
-      >
-        <Trash2 aria-hidden="true" />
-      </button>
+      <div className="docs-pack-actions">
+        {activeTaskRunId ? (
+          <button
+            type="button"
+            className="btn sm docs-pack-use"
+            title={`Use ${pack.name} for active task`}
+            onClick={() => onUsePackForActiveTask(pack.id)}
+          >
+            <Link2 aria-hidden="true" />
+            Use for active task
+          </button>
+        ) : null}
+        <input
+          className="input2 mono docs-agent-input"
+          value={agentSessionId}
+          placeholder="agent session"
+          aria-label={`Agent session id for ${pack.name}`}
+          onChange={(event) =>
+            onAgentSessionIdChange(pack.id, event.target.value)
+          }
+        />
+        <button
+          type="button"
+          className="iconbtn docs-row-action docs-pack-action"
+          title={`Link ${pack.name} to agent session`}
+          aria-label={`Link ${pack.name} to agent session`}
+          disabled={!trimmedAgentSessionId}
+          onClick={() =>
+            onLinkPackToAgentSession(pack.id, trimmedAgentSessionId)
+          }
+        >
+          <Link2 aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className="iconbtn docs-row-action docs-pack-action"
+          title={`Inspect ${pack.name}`}
+          aria-label={`Inspect ${pack.name}`}
+          onClick={() => onSelectPack(pack.id)}
+        >
+          <Eye aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className="iconbtn docs-row-action docs-pack-action"
+          title={`Delete ${pack.name}`}
+          aria-label={`Delete ${pack.name}`}
+          onClick={() => onDeletePack(pack.id)}
+        >
+          <Trash2 aria-hidden="true" />
+        </button>
+      </div>
     </div>
   );
 }
@@ -143,7 +194,13 @@ export function DocsPanel({
   onCreatePack,
   onSelectPack,
   onDeletePack,
+  activeTaskRunId,
+  onUsePackForActiveTask,
+  onLinkPackToAgentSession,
 }: DocsPanelProps) {
+  const [agentSessionByPackId, setAgentSessionByPackId] = useState<
+    Record<string, string>
+  >({});
   const sourcePaths = selectedDocPaths(state);
   const canCreatePack = state.packDraftName.trim().length > 0 && sourcePaths.length > 0;
 
@@ -270,8 +327,24 @@ export function DocsPanel({
                 key={pack.id}
                 pack={pack}
                 active={state.activePackId === pack.id}
+                agentSessionId={agentSessionByPackId[pack.id] ?? ""}
+                activeTaskRunId={activeTaskRunId}
                 onSelectPack={onSelectPack}
                 onDeletePack={onDeletePack}
+                onAgentSessionIdChange={(id, value) =>
+                  setAgentSessionByPackId((current) => ({
+                    ...current,
+                    [id]: value,
+                  }))
+                }
+                onUsePackForActiveTask={onUsePackForActiveTask}
+                onLinkPackToAgentSession={(id, agentSessionId) => {
+                  onLinkPackToAgentSession(id, agentSessionId);
+                  setAgentSessionByPackId((current) => ({
+                    ...current,
+                    [id]: "",
+                  }));
+                }}
               />
             ))
           ) : (

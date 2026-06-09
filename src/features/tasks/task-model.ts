@@ -40,6 +40,7 @@ export type TaskViewState = {
   problemsByRunId: Record<string, TaskProblem[]>;
   pendingOutputByRunId: Record<string, string>;
   pendingFinishByRunId: Record<string, PendingTaskFinish>;
+  contextPackByRunId: Record<string, string>;
   customCommand: string;
 };
 
@@ -85,6 +86,7 @@ export function createTaskState(): TaskViewState {
     problemsByRunId: {},
     pendingOutputByRunId: {},
     pendingFinishByRunId: {},
+    contextPackByRunId: {},
     customCommand: "",
   };
 }
@@ -136,7 +138,12 @@ export function replaceTaskRuns(
   state: TaskViewState,
   runs: TaskRun[],
 ): TaskViewState {
-  const emptyState: TaskViewState = { ...state, runs: [], activeRunId: null };
+  const emptyState: TaskViewState = {
+    ...state,
+    runs: [],
+    activeRunId: null,
+    contextPackByRunId: {},
+  };
   const restoredRuns = [...runs]
     .sort(compareRestoredTaskRuns)
     .slice(0, MAX_TASK_RUNS);
@@ -193,6 +200,24 @@ export function activateTaskRun(
   return state.runs.some((run) => run.id === runId)
     ? { ...state, activeRunId: runId }
     : state;
+}
+
+export function linkTaskRunContextPack(
+  state: TaskViewState,
+  runId: string,
+  contextPackId: string,
+): TaskViewState {
+  if (!state.runs.some((run) => run.id === runId)) {
+    return state;
+  }
+
+  return {
+    ...state,
+    contextPackByRunId: {
+      ...state.contextPackByRunId,
+      [runId]: contextPackId,
+    },
+  };
 }
 
 export function appendTaskOutput(

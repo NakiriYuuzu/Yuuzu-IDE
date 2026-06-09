@@ -1932,6 +1932,15 @@ button {
   min-width: 0;
 }
 
+.task-context-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 10px 8px;
+  color: var(--txt-dim);
+  font-size: 11px;
+}
+
 .task-output {
   flex: 1;
   min-height: 148px;
@@ -2010,6 +2019,10 @@ button {
   padding-right: 6px;
 }
 
+.docs-pack-row {
+  min-height: 38px;
+}
+
 .docs-row-main {
   min-width: 0;
   flex: 1;
@@ -2073,6 +2086,39 @@ button {
 
 .docs-pack-action {
   opacity: 1;
+}
+
+.docs-pack-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.docs-pack-use {
+  max-width: 132px;
+  height: 24px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+.docs-pack-use svg {
+  width: 12px;
+  height: 12px;
+}
+
+.docs-agent-input {
+  width: 96px;
+  height: 24px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+.docs-context-badge {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .docs-search-match {
