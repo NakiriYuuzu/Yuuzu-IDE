@@ -1,5 +1,9 @@
 import { create, type StoreApi, useStore } from "zustand";
 
+import {
+  createDocsState,
+  type DocsViewState,
+} from "../features/docs/docs-model";
 import type { EditorFileState } from "../features/files/file-model";
 import {
   createGitState,
@@ -20,7 +24,8 @@ export type Surface =
   | "editor"
   | "terminal"
   | "git-diff"
-  | "git-graph";
+  | "git-graph"
+  | "docs-preview";
 
 export type WorkspaceViewState = {
   activeActivity: ActivityId;
@@ -30,6 +35,7 @@ export type WorkspaceViewState = {
   terminal: TerminalViewState;
   task: TaskViewState;
   git: GitViewState;
+  docs: DocsViewState;
 };
 
 type WorkspaceViewStore = {
@@ -55,6 +61,10 @@ type WorkspaceViewStore = {
     workspaceId: string | null,
     update: (git: GitViewState) => GitViewState,
   ) => void;
+  updateDocs: (
+    workspaceId: string | null,
+    update: (docs: DocsViewState) => DocsViewState,
+  ) => void;
 };
 
 function defaultWorkspaceView(): WorkspaceViewState {
@@ -66,6 +76,7 @@ function defaultWorkspaceView(): WorkspaceViewState {
     terminal: createTerminalState(),
     task: createTaskState(),
     git: createGitState(),
+    docs: createDocsState(),
   };
 }
 
@@ -96,6 +107,25 @@ function freezeWorkspaceView(view: WorkspaceViewState): WorkspaceViewState {
   }
   Object.freeze(view.git.graph);
   Object.freeze(view.git);
+  Object.freeze(view.docs.index);
+  for (const preview of Object.values(view.docs.previewByPath)) {
+    Object.freeze(preview.references);
+    Object.freeze(preview);
+  }
+  Object.freeze(view.docs.previewByPath);
+  if (view.docs.searchResult) {
+    Object.freeze(view.docs.searchResult.matches);
+    Object.freeze(view.docs.searchResult);
+  }
+  Object.freeze(view.docs.selectedDocPaths);
+  for (const pack of view.docs.contextPacks) {
+    Object.freeze(pack.doc_paths);
+    Object.freeze(pack.linked_task_run_ids);
+    Object.freeze(pack.linked_agent_session_ids);
+    Object.freeze(pack);
+  }
+  Object.freeze(view.docs.contextPacks);
+  Object.freeze(view.docs);
   return Object.freeze(view);
 }
 
@@ -166,6 +196,18 @@ export function createWorkspaceViewStore() {
           views: {
             ...state.views,
             [key]: { ...current, git: update(current.git) },
+          },
+        };
+      }),
+    updateDocs: (workspaceId, update) =>
+      set((state) => {
+        const key = workspaceId ?? shellKey;
+        const current = state.views[key] ?? defaultView;
+
+        return {
+          views: {
+            ...state.views,
+            [key]: { ...current, docs: update(current.docs) },
           },
         };
       }),

@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { replaceDocsIndex } from "../features/docs/docs-model";
 import { upsertTaskRun } from "../features/tasks/task-model";
 import { upsertTerminal } from "../features/terminal/terminal-model";
 import { createWorkspaceViewStore } from "./workspace-view-state";
@@ -137,6 +138,26 @@ describe("createWorkspaceViewStore", () => {
     expect(store.getState().viewFor("workspace-b").task.runs).toEqual([]);
   });
 
+  test("docs state is restored per workspace", () => {
+    const store = createWorkspaceViewStore();
+
+    store.getState().updateDocs("workspace-a", (docs) =>
+      replaceDocsIndex(docs, [
+        {
+          path: "README.md",
+          title: "Readme",
+          section: "workspace",
+          modified_ms: 1,
+          size_bytes: 10,
+          stale: false,
+        },
+      ]),
+    );
+
+    expect(store.getState().viewFor("workspace-a").docs.index).toHaveLength(1);
+    expect(store.getState().viewFor("workspace-b").docs.index).toEqual([]);
+  });
+
   test("unknown workspace task defaults cannot be mutated across future defaults", () => {
     const store = createWorkspaceViewStore();
 
@@ -252,6 +273,56 @@ describe("createWorkspaceViewStore", () => {
         pendingFinishByRunId: {},
         customCommand: "",
       },
+      docs: {
+        index: [],
+        previewByPath: {},
+        searchQuery: "",
+        searchResult: null,
+        selectedDocPaths: {},
+        contextPacks: [],
+        activePackId: null,
+        packDraftName: "",
+        loading: false,
+        error: null,
+      },
+    });
+  });
+
+  test("unknown workspace docs defaults cannot be mutated across future defaults", () => {
+    const store = createWorkspaceViewStore();
+
+    const unknownView = store.getState().viewFor("unknown");
+
+    expect(() => {
+      unknownView.docs.packDraftName = "pack";
+    }).toThrow(TypeError);
+
+    expect(() => {
+      unknownView.docs.index.push({
+        path: "README.md",
+        title: "Readme",
+        section: "workspace",
+        modified_ms: 1,
+        size_bytes: 10,
+        stale: false,
+      });
+    }).toThrow(TypeError);
+
+    expect(() => {
+      unknownView.docs.selectedDocPaths["README.md"] = true;
+    }).toThrow(TypeError);
+
+    expect(store.getState().viewFor("other-unknown").docs).toMatchObject({
+      index: [],
+      previewByPath: {},
+      searchQuery: "",
+      searchResult: null,
+      selectedDocPaths: {},
+      contextPacks: [],
+      activePackId: null,
+      packDraftName: "",
+      loading: false,
+      error: null,
     });
   });
 });
