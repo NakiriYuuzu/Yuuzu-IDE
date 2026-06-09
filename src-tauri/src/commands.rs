@@ -586,22 +586,25 @@ impl AppState {
         }
     }
 
-    pub fn inspect_database_schema(
+    pub async fn inspect_database_schema(
         &self,
         profile_id: &str,
     ) -> Result<crate::database::DatabaseSchema, String> {
         let profile = self.database_profile_in_active_workspace(profile_id)?;
-
-        crate::database::inspect_database_schema(&profile, &self.database_secrets)
+        crate::database::inspect_database_schema_async(&profile, &self.database_secrets).await
     }
 
-    pub fn execute_database_query(
+    pub async fn execute_database_query(
         &self,
         request: crate::database::DatabaseQueryRequest,
     ) -> Result<crate::database::DatabaseQueryResult, String> {
         let profile = self.database_profile_in_active_workspace(&request.profile_id)?;
-        let mut result =
-            crate::database::execute_database_query(&profile, request, &self.database_secrets)?;
+        let mut result = crate::database::execute_database_query_async(
+            &profile,
+            request,
+            &self.database_secrets,
+        )
+        .await?;
 
         let affected_rows = result.affected_rows;
         let row_count = if matches!(result.classification.kind, crate::database::QueryKind::Read) {
@@ -922,7 +925,7 @@ pub async fn inspect_database_schema(
     state: State<'_, AppState>,
     profile_id: String,
 ) -> Result<crate::database::DatabaseSchema, String> {
-    state.inspect_database_schema(&profile_id)
+    state.inspect_database_schema(&profile_id).await
 }
 
 #[tauri::command]
@@ -930,7 +933,7 @@ pub async fn execute_database_query(
     state: State<'_, AppState>,
     request: crate::database::DatabaseQueryRequest,
 ) -> Result<crate::database::DatabaseQueryResult, String> {
-    state.execute_database_query(request)
+    state.execute_database_query(request).await
 }
 
 #[tauri::command]
@@ -1957,8 +1960,8 @@ mod tests {
         assert_flat_signature(super::export_database_query_result);
     }
 
-    #[test]
-    fn inspect_database_schema_rejects_profile_outside_active_workspace() {
+    #[tokio::test]
+    async fn inspect_database_schema_rejects_profile_outside_active_workspace() {
         let config = tempdir().expect("config dir");
         let workspace_a = config.path().join("workspace-a");
         let workspace_b = config.path().join("workspace-b");
@@ -2012,14 +2015,64 @@ mod tests {
             })
             .expect("switch workspace");
 
-        let result = state.inspect_database_schema(&profile.id);
+        let result = state.inspect_database_schema(&profile.id).await;
         assert!(result
             .expect_err("profile outside active workspace should be rejected")
             .contains("does not belong to active workspace"));
     }
 
-    #[test]
-    fn execute_database_query_records_history() {
+    #[tokio::test]
+    async fn inspect_database_schema_tcp_profile_uses_async_path_without_nested_block_on_panic() {
+        let config = tempdir().expect("config dir");
+        let workspace = config.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+
+        let state = AppState::new(config.path()).expect("state");
+        state
+            .open_workspace_path(workspace.clone())
+            .expect("open workspace");
+        let workspace_root = workspace
+            .canonicalize()
+            .expect("canonical workspace")
+            .to_string_lossy()
+            .to_string();
+        let profile = state
+            .save_database_profile(crate::database::DatabaseProfileInput {
+                id: Some("postgres-profile".to_string()),
+                workspace_root,
+                name: "PostgreSQL".to_string(),
+                kind: crate::database::DatabaseKind::PostgreSQL,
+                sqlite_path: None,
+                host: Some("127.0.0.1".to_string()),
+                port: Some(5432),
+                database: Some("does_not_exist".to_string()),
+                username: Some("yuuzu".to_string()),
+                password: None,
+                read_only: false,
+                production: false,
+            })
+            .expect("save profile");
+
+        let profile_id = profile.id.clone();
+        let joined = tokio::spawn(async move {
+            let result = state.inspect_database_schema(&profile_id).await;
+            (result, profile_id)
+        })
+        .await;
+
+        assert!(
+            joined.is_ok(),
+            "async command path should not panic with nested runtime"
+        );
+        let result = joined.unwrap().0;
+        assert!(
+            result.is_err(),
+            "TCP inspect should fail with connection error when server unavailable"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_database_query_records_history() {
         let config = tempdir().expect("config dir");
         let workspace = config.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
@@ -2065,6 +2118,7 @@ mod tests {
                 limit: 1,
                 confirmation: None,
             })
+            .await
             .expect("query");
 
         let history = state
@@ -2075,8 +2129,8 @@ mod tests {
         assert_eq!(history.len(), 1);
     }
 
-    #[test]
-    fn export_database_query_result_writes_csv_in_workspace_exports_dir() {
+    #[tokio::test]
+    async fn export_database_query_result_writes_csv_in_workspace_exports_dir() {
         let config = tempdir().expect("config dir");
         let workspace = config.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
@@ -2126,6 +2180,7 @@ mod tests {
                 limit: 100,
                 confirmation: None,
             })
+            .await
             .expect("query");
 
         let export = state
