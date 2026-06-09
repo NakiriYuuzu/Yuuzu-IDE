@@ -4,6 +4,7 @@ import {
   BookOpenText,
   ChevronDown,
   FileCode2,
+  Database,
   GitBranch,
   Globe,
   PanelLeft,
@@ -29,6 +30,32 @@ import { ActivityRail, type ActivityId } from "./activity-rail";
 import { CommandPalette } from "./CommandPalette";
 import { BrowserPanel } from "../features/browser/BrowserPanel";
 import { BrowserPreviewSurface } from "../features/browser/BrowserPreviewSurface";
+import {
+  DatabasePanel,
+} from "../features/database/DatabasePanel";
+import { DatabaseResultView } from "../features/database/DatabaseResultView";
+import {
+  beginDatabaseQuery,
+  databaseBadgeCount,
+  type DatabaseKind,
+  type DatabaseQueryHistoryEntry,
+  type DatabaseTable,
+  type QueryClassification,
+  replaceDatabaseProfiles,
+  requireDatabaseConfirmation,
+  selectDatabaseProfile,
+  storeDatabaseQueryResult,
+  storeDatabaseSchema,
+  updateDatabaseDraft,
+  type DatabaseViewState,
+} from "../features/database/database-model";
+import {
+  executeDatabaseQuery,
+  exportDatabaseQueryResult,
+  inspectDatabaseSchema,
+  listDatabaseProfiles,
+  listDatabaseQueryHistory,
+} from "../features/database/database-api";
 import {
   createContextPack,
   deleteContextPack,
@@ -711,6 +738,119 @@ function workspaceIdFromTaskRunId(runId: string): string | null {
   return markerIndex > 0 ? runId.slice(0, markerIndex) : null;
 }
 
+function quoteIdentifierDouble(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+function quoteIdentifierBracket(value: string): string {
+  return `[${value.replace(/\]/g, "]]")}]`;
+}
+
+export function databaseTableSql(
+  kind: DatabaseKind,
+  table: { schema: string | null; name: string },
+): string {
+  const escapedName = {
+    SQLite: quoteIdentifierDouble(table.name),
+    PostgreSQL: quoteIdentifierDouble(table.name),
+    MsSql: quoteIdentifierBracket(table.name),
+  }[kind];
+  if (kind === "MsSql") {
+    if (table.schema) {
+      return `SELECT TOP 100 * FROM ${quoteIdentifierBracket(table.schema)}.${escapedName}`;
+    }
+
+    return `SELECT TOP 100 * FROM ${escapedName}`;
+  }
+
+  if (table.schema) {
+    return `SELECT * FROM ${quoteIdentifierDouble(table.schema)}.${escapedName} LIMIT 100`;
+  }
+
+  return `SELECT * FROM ${escapedName} LIMIT 100`;
+}
+
+function stripDatabaseSqlComments(sql: string): string {
+  return sql
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/--.*(?=[\n\r]|$)/g, " ")
+    .trim();
+}
+
+export function classifyDatabaseSql(sql: string): QueryClassification {
+  const normalized = stripDatabaseSqlComments(sql).trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return {
+      kind: "Destructive",
+      requires_confirmation: true,
+      confirmation_text: "RUN DESTRUCTIVE SQL",
+      reason: "Empty SQL requires confirmation",
+    };
+  }
+
+  const firstStatement = normalized.split(";")[0]?.trim() ?? "";
+  if (!firstStatement) {
+    return {
+      kind: "Destructive",
+      requires_confirmation: true,
+      confirmation_text: "RUN DESTRUCTIVE SQL",
+      reason: "Empty SQL requires confirmation",
+    };
+  }
+
+  const firstToken = firstStatement
+    .split(/\s+/)[0]
+    ?.toUpperCase();
+  if (!firstToken) {
+    return {
+      kind: "Destructive",
+      requires_confirmation: true,
+      confirmation_text: "RUN DESTRUCTIVE SQL",
+      reason: "Unclear SQL requires confirmation",
+    };
+  }
+
+  if (["SELECT", "WITH", "SHOW", "PRAGMA", "EXPLAIN"].includes(firstToken)) {
+    return {
+      kind: "Read",
+      requires_confirmation: false,
+      confirmation_text: "",
+      reason: "Read-only statement",
+    };
+  }
+
+  if (
+    ["INSERT", "UPDATE", "DELETE", "UPSERT", "MERGE", "REPLACE"].includes(firstToken)
+  ) {
+    return {
+      kind: "Mutation",
+      requires_confirmation: true,
+      confirmation_text: "RUN MUTATION",
+      reason: `${firstToken} statements can modify data and require confirmation`,
+    };
+  }
+
+  if (
+    ["DROP", "ALTER", "TRUNCATE", "CREATE", "DETACH", "ATTACH"].includes(
+      firstToken,
+    )
+  ) {
+    return {
+      kind: "Destructive",
+      requires_confirmation: true,
+      confirmation_text: "RUN DESTRUCTIVE SQL",
+      reason: `${firstToken} statements are potentially destructive and require confirmation`,
+    };
+  }
+
+  return {
+    kind: "Destructive",
+    requires_confirmation: true,
+    confirmation_text: "RUN DESTRUCTIVE SQL",
+    reason: "Unknown statement type requires confirmation",
+  };
+}
+
 function knownWorkspaceIdForTerminal(sessionId: string): string | null {
   const { views } = workspaceViewStore.getState();
   const match = Object.entries(views).find(([, workspaceView]) =>
@@ -824,6 +964,17 @@ export function PanelBody({
   onBrowserCapture,
   onBrowserSelectScreenshot,
   languageState,
+  databaseState,
+  onDatabaseRefreshProfiles,
+  onDatabaseSelectProfile,
+  onDatabaseInspectProfile,
+  onDatabaseOpenTable,
+  onDatabaseDraftChange,
+  onDatabaseRunQuery,
+  onDatabaseConfirmQuery,
+  onDatabaseCancelConfirmation,
+  onDatabaseExportResult,
+  onDatabaseSelectHistory,
 }: {
   active: ActivityId;
   refreshKey: number;
@@ -904,6 +1055,17 @@ export function PanelBody({
   onBrowserCapture: () => void;
   onBrowserSelectScreenshot: (id: string) => void;
   languageState: LanguageViewState;
+  databaseState: DatabaseViewState;
+  onDatabaseRefreshProfiles: () => void;
+  onDatabaseSelectProfile: (profileId: string) => void;
+  onDatabaseInspectProfile: (profileId: string) => void;
+  onDatabaseOpenTable: (profileId: string, table: DatabaseTable) => void;
+  onDatabaseDraftChange: (query: string) => void;
+  onDatabaseRunQuery: () => void;
+  onDatabaseConfirmQuery: (input: string) => void;
+  onDatabaseCancelConfirmation: () => void;
+  onDatabaseExportResult: () => void;
+  onDatabaseSelectHistory: (entry: DatabaseQueryHistoryEntry) => void;
 }) {
   if (active === "git") {
     return (
@@ -1033,6 +1195,24 @@ export function PanelBody({
     );
   }
 
+  if (active === "database") {
+    return (
+      <DatabasePanel
+        state={databaseState}
+        onRefreshProfiles={onDatabaseRefreshProfiles}
+        onSelectProfile={onDatabaseSelectProfile}
+        onInspectSchema={onDatabaseInspectProfile}
+        onOpenTable={onDatabaseOpenTable}
+        onQueryDraftChange={onDatabaseDraftChange}
+        onRunQuery={onDatabaseRunQuery}
+        onConfirmQuery={onDatabaseConfirmQuery}
+        onCancelConfirmation={onDatabaseCancelConfirmation}
+        onExportResult={onDatabaseExportResult}
+        onSelectHistory={onDatabaseSelectHistory}
+      />
+    );
+  }
+
   if (active === "explorer") {
     return (
       <FileTreePanel
@@ -1070,6 +1250,7 @@ export function AppShell() {
   const [gitConfirmationInput, setGitConfirmationInput] = useState("");
   const savedContentByPathRef = useRef<Record<string, string>>({});
   const openRequestRef = useRef(0);
+  const databaseProfilesLoadRef = useRef<Record<string, number>>({});
   const docsLoadRequestRef = useRef<DocsLoadRequestState>({});
   const agentSessionsLoadRef = useRef<Record<string, number>>({});
   const languageRefreshRequestRef = useRef<LanguageRefreshRequestState>({});
@@ -1109,6 +1290,7 @@ export function AppShell() {
     ? (view.task.problemsByRunId[activeTaskRun.id] ?? [])
     : [];
   const languageDiagnosticBadge = selectDiagnosticBadge(view.language);
+  const databaseBadge = databaseBadgeCount(view.database);
   const contextPackNameById = useMemo(
     () =>
       Object.fromEntries(
@@ -1151,6 +1333,7 @@ export function AppShell() {
   const updateLanguage = useWorkspaceViewStore((state) => state.updateLanguage);
   const updateAgent = useWorkspaceViewStore((state) => state.updateAgent);
   const updateBrowser = useWorkspaceViewStore((state) => state.updateBrowser);
+  const updateDatabase = useWorkspaceViewStore((state) => state.updateDatabase);
 
   const activeWorkspace = useMemo(
     () =>
@@ -1255,6 +1438,14 @@ export function AppShell() {
     setGitConfirmation(null);
     setGitConfirmationInput("");
   }, [activeWorkspaceId]);
+
+  useEffect(() => {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    void refreshDatabaseProfilesForWorkspace(activeWorkspaceId, activeWorkspace.path);
+  }, [activeWorkspaceId, activeWorkspace?.path]);
 
   useEffect(() => {
     let disposed = false;
@@ -3891,13 +4082,366 @@ export function AppShell() {
     })
       .then(() => {
         void refreshLanguageData();
-      })
+    })
       .catch((error) => {
         updateLanguage(activeWorkspaceId, (language) => ({
           ...language,
           error: `Restart failed: ${terminalErrorMessage(error)}`,
         }));
       });
+  }
+
+  async function refreshDatabaseProfilesForWorkspace(
+    workspaceId: string,
+    workspaceRoot: string,
+  ): Promise<void> {
+    const requestId = (databaseProfilesLoadRef.current[workspaceId] ?? 0) + 1;
+    databaseProfilesLoadRef.current = {
+      ...databaseProfilesLoadRef.current,
+      [workspaceId]: requestId,
+    };
+
+    try {
+      const profiles = await listDatabaseProfiles(workspaceRoot);
+      const currentWorkspace = workspaceStore
+        .getState()
+        .registry.workspaces.find((workspace) => workspace.id === workspaceId);
+
+      if (
+        databaseProfilesLoadRef.current[workspaceId] !== requestId ||
+        !hasRegisteredWorkspace(workspaceId) ||
+        !currentWorkspace ||
+        currentWorkspace.path !== workspaceRoot ||
+        workspaceStore.getState().registry.active_workspace_id !== workspaceId
+      ) {
+        return;
+      }
+
+      updateDatabase(workspaceId, (database) =>
+        replaceDatabaseProfiles(database, profiles),
+      );
+    } catch (error) {
+      if (
+        databaseProfilesLoadRef.current[workspaceId] !== requestId ||
+        !hasRegisteredWorkspace(workspaceId) ||
+        workspaceStore.getState().registry.active_workspace_id !== workspaceId
+      ) {
+        return;
+      }
+
+      updateDatabase(workspaceId, (database) => ({
+        ...database,
+        error: `Load database profiles failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
+  function refreshDatabaseProfiles() {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    void refreshDatabaseProfilesForWorkspace(activeWorkspaceId, activeWorkspace.path);
+  }
+
+  function selectDatabaseProfileForWorkspace(profileId: string) {
+    if (!activeWorkspaceId) {
+      return;
+    }
+
+    updateDatabase(activeWorkspaceId, (database) =>
+      selectDatabaseProfile(database, profileId),
+    );
+  }
+
+  async function inspectDatabaseProfile(profileId: string) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    selectDatabaseProfileForWorkspace(profileId);
+    updateDatabase(workspaceId, (database) => ({
+      ...database,
+      error: null,
+      loading: true,
+      confirmation: null,
+    }));
+
+    try {
+      const schema = await inspectDatabaseSchema(profileId);
+      const currentWorkspace = workspaceStore
+        .getState()
+        .registry.workspaces.find((workspace) => workspace.id === workspaceId);
+      const isActiveWorkspace =
+        workspaceStore.getState().registry.active_workspace_id === workspaceId;
+
+      if (!hasRegisteredWorkspace(workspaceId) || !isActiveWorkspace) {
+        return;
+      }
+
+      if (!currentWorkspace || currentWorkspace.path !== workspaceRoot) {
+        return;
+      }
+
+      updateDatabase(workspaceId, (database) =>
+        storeDatabaseSchema(
+          { ...database, loading: false, error: null },
+          schema,
+        ),
+      );
+    } catch (error) {
+      const isActiveWorkspace =
+        workspaceStore.getState().registry.active_workspace_id === workspaceId;
+
+      if (!hasRegisteredWorkspace(workspaceId) || !isActiveWorkspace) {
+        return;
+      }
+
+      updateDatabase(workspaceId, (database) => ({
+        ...database,
+        loading: false,
+        error: `Inspect schema failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
+  function updateDatabaseDraftQuery(query: string) {
+    if (!activeWorkspaceId) {
+      return;
+    }
+
+    updateDatabase(activeWorkspaceId, (database) =>
+      updateDatabaseDraft(database, query),
+    );
+  }
+
+  async function refreshDatabaseHistory(profileId: string) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+
+    try {
+      const history = await listDatabaseQueryHistory(profileId);
+      if (
+        !hasRegisteredWorkspace(workspaceId) ||
+        workspaceStore.getState().registry.active_workspace_id !== workspaceId
+      ) {
+        return;
+      }
+
+      updateDatabase(workspaceId, (database) => ({
+        ...database,
+        history,
+      }));
+    } catch {
+      // History errors do not block query results.
+    }
+  }
+
+  async function executeDatabaseQueryRequest(
+    workspaceId: string,
+    profileId: string,
+    sql: string,
+    workspaceRoot: string,
+  ) {
+    const trimmed = sql.trim();
+    if (!trimmed) {
+      updateDatabase(workspaceId, (database) => ({
+        ...database,
+        loading: false,
+        error: "Database query is empty",
+        confirmation: null,
+      }));
+      return;
+    }
+
+    updateDatabase(workspaceId, beginDatabaseQuery);
+    try {
+      const result = await executeDatabaseQuery({
+        profile_id: profileId,
+        sql: trimmed,
+        limit: 500,
+      });
+
+      const currentWorkspace = workspaceStore
+        .getState()
+        .registry.workspaces.find((workspace) => workspace.id === workspaceId);
+      if (
+        !hasRegisteredWorkspace(workspaceId) ||
+        workspaceStore.getState().registry.active_workspace_id !== workspaceId ||
+        !currentWorkspace ||
+        currentWorkspace.path !== workspaceRoot
+      ) {
+        return;
+      }
+
+      updateDatabase(workspaceId, (database) =>
+        storeDatabaseQueryResult(database, result),
+      );
+      setActiveActivity("database");
+      setPanelOpen(true);
+      setSurface("database-result");
+      await refreshDatabaseHistory(profileId);
+    } catch (error) {
+      if (
+        !hasRegisteredWorkspace(workspaceId) ||
+        workspaceStore.getState().registry.active_workspace_id !== workspaceId
+      ) {
+        return;
+      }
+
+      updateDatabase(workspaceId, (database) => ({
+        ...database,
+        loading: false,
+        error: `Database query failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
+  function runDatabaseQuery() {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const database = workspaceViewStore.getState().viewFor(workspaceId).database;
+    const profileId = database.activeProfileId;
+
+    if (profileId === null) {
+      updateDatabase(workspaceId, (current) => ({
+        ...current,
+        error: "Select a database profile first",
+      }));
+      return;
+    }
+
+    const classification = classifyDatabaseSql(database.queryDraft);
+    if (classification.requires_confirmation) {
+      updateDatabase(workspaceId, (current) =>
+        requireDatabaseConfirmation(current, classification),
+      );
+      return;
+    }
+
+    updateDatabase(workspaceId, (current) => ({
+      ...current,
+      confirmation: null,
+      error: null,
+    }));
+    void executeDatabaseQueryRequest(workspaceId, profileId, database.queryDraft, workspaceRoot);
+  }
+
+  function openDatabaseTable(profileId: string, table: DatabaseTable) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const profile = workspaceViewStore
+      .getState()
+      .viewFor(workspaceId)
+      .database.profiles.find((item) => item.id === profileId);
+
+    if (!profile) {
+      updateDatabase(workspaceId, (current) => ({
+        ...current,
+        error: "Selected database profile not found",
+      }));
+      return;
+    }
+
+    const query = databaseTableSql(profile.kind, table);
+    updateDatabase(workspaceId, (database) =>
+      selectDatabaseProfile(updateDatabaseDraft(database, query), profileId),
+    );
+    void executeDatabaseQueryRequest(workspaceId, profileId, query, workspaceRoot);
+  }
+
+  function confirmDatabaseQuery(input: string) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const database = workspaceViewStore.getState().viewFor(workspaceId).database;
+    const confirmation = database.confirmation;
+    const profileId = database.activeProfileId;
+
+    if (!confirmation || !profileId) {
+      return;
+    }
+
+    if (input !== confirmation.confirmationText) {
+      return;
+    }
+
+    updateDatabase(workspaceId, (current) => ({
+      ...current,
+      confirmation: null,
+      error: null,
+    }));
+    void executeDatabaseQueryRequest(
+      workspaceId,
+      profileId,
+      database.queryDraft,
+      workspaceRoot,
+    );
+  }
+
+  function cancelDatabaseConfirmation() {
+    if (!activeWorkspaceId) {
+      return;
+    }
+
+    updateDatabase(activeWorkspaceId, (database) => ({
+      ...database,
+      confirmation: null,
+      loading: false,
+    }));
+  }
+
+  function selectDatabaseHistory(entry: DatabaseQueryHistoryEntry) {
+    if (!activeWorkspaceId) {
+      return;
+    }
+
+    updateDatabase(activeWorkspaceId, (database) =>
+      updateDatabaseDraft(database, entry.sql),
+    );
+  }
+
+  async function exportDatabaseResult() {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const database = workspaceViewStore.getState().viewFor(workspaceId).database;
+
+    if (!database.activeResult) {
+      return;
+    }
+
+    try {
+      const data = await exportDatabaseQueryResult(workspaceRoot, database.activeResult);
+      updateDatabase(workspaceId, (state) => ({
+        ...state,
+        export: data,
+      }));
+    } catch (error) {
+      updateDatabase(workspaceId, (state) => ({
+        ...state,
+        error: `Export failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
   }
 
   function runCommand(id: string) {
@@ -3977,6 +4521,13 @@ export function AppShell() {
         break;
       case "browser-capture-screenshot":
         captureBrowserScreenshot();
+        break;
+      case "open-database":
+        setActiveActivity("database");
+        setPanelOpen(true);
+        break;
+      case "database-refresh":
+        refreshDatabaseProfiles();
         break;
       case "agent-start-session": {
         if (!activeWorkspaceId) {
@@ -4063,6 +4614,7 @@ export function AppShell() {
             docs: docsBadgeCount(view.docs),
             agents: agentBadgeCount(view.agent),
             language: languageDiagnosticBadge,
+            database: databaseBadge,
           }}
           onSelect={setActiveActivity}
         />
@@ -4195,6 +4747,25 @@ export function AppShell() {
               onBrowserHardReload={() => hardReloadBrowserPreview()}
               onBrowserCapture={() => captureBrowserScreenshot()}
               onBrowserSelectScreenshot={(id) => selectBrowserScreenshot(id)}
+              databaseState={view.database}
+              onDatabaseRefreshProfiles={() => refreshDatabaseProfiles()}
+              onDatabaseSelectProfile={(profileId) =>
+                selectDatabaseProfileForWorkspace(profileId)
+              }
+              onDatabaseInspectProfile={(profileId) =>
+                void inspectDatabaseProfile(profileId)
+              }
+              onDatabaseOpenTable={(profileId, table) =>
+                openDatabaseTable(profileId, table)
+              }
+              onDatabaseDraftChange={(query) => updateDatabaseDraftQuery(query)}
+              onDatabaseRunQuery={() => runDatabaseQuery()}
+              onDatabaseConfirmQuery={(input) => confirmDatabaseQuery(input)}
+              onDatabaseCancelConfirmation={() =>
+                cancelDatabaseConfirmation()
+              }
+              onDatabaseExportResult={() => void exportDatabaseResult()}
+              onDatabaseSelectHistory={(entry) => selectDatabaseHistory(entry)}
               languageState={view.language}
             />
           </aside>
@@ -4329,6 +4900,27 @@ export function AppShell() {
                   </button>
                 </div>
               ) : null}
+              {surface === "database-result" ? (
+                <div
+                  className="tab active"
+                  title={view.database.activeResult?.sql ?? "Database result"}
+                >
+                  <Database className="ftype" aria-hidden="true" />
+                  <span className="tlabel mono">Database</span>
+                  <button
+                    type="button"
+                    className="close"
+                    title="Close database result"
+                    aria-label="Close database result"
+                    onClick={() => {
+                      setSurface("empty");
+                      setActiveActivity("database");
+                    }}
+                  >
+                    <X aria-hidden="true" />
+                  </button>
+                </div>
+              ) : null}
               <div className="tabstrip-tail">
                 <button
                   type="button"
@@ -4366,8 +4958,10 @@ export function AppShell() {
                       ? "terminal"
                       : surface === "browser-preview"
                         ? "browser"
-                        : surface === "docs-preview"
-                          ? "docs"
+                      : surface === "docs-preview"
+                        ? "docs"
+                        : surface === "database-result"
+                          ? "database"
                           : surface === "editor"
                             ? "editor"
                             : "workspace"}
@@ -4380,8 +4974,10 @@ export function AppShell() {
                       ? activeTerminalName
                       : surface === "browser-preview"
                         ? (view.browser.activeTitle ?? "Start")
-                        : surface === "docs-preview"
-                          ? docsPreviewPathLabel(view.docs, "Preview")
+                      : surface === "docs-preview"
+                        ? docsPreviewPathLabel(view.docs, "Preview")
+                        : surface === "database-result"
+                          ? "Database result"
                           : surface === "editor"
                             ? "No file open"
                             : "Start"}
@@ -4395,7 +4991,8 @@ export function AppShell() {
                   surface === "git-diff" ||
                   surface === "git-graph" ||
                   surface === "docs-preview" ||
-                  surface === "browser-preview"
+                  surface === "browser-preview" ||
+                  surface === "database-result"
                     ? " editor-content"
                     : ""
                 }`}
@@ -4625,6 +5222,12 @@ export function AppShell() {
                       }
                     />
                   }
+                />
+              ) : surface === "database-result" ? (
+                <DatabaseResultView
+                  result={view.database.activeResult}
+                  loading={view.database.loading}
+                  error={view.database.error}
                 />
               ) : (
                 <>

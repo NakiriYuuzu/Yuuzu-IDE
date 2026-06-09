@@ -16,6 +16,12 @@ import {
   type BrowserScreenshot,
 } from "../features/browser/browser-model";
 import {
+  createDatabaseState,
+  type DatabaseQueryHistoryEntry,
+  type DatabaseViewState,
+  type DatabaseTable,
+} from "../features/database/database-model";
+import {
   collectAgentAvailableContext,
   activeLoadedFileForWorkspace,
   PanelBody,
@@ -27,6 +33,8 @@ import {
   startBrowserCaptureRequest,
   isLatestBrowserCaptureRequest,
   captureBrowserPreviewWithValidation,
+  databaseTableSql,
+  classifyDatabaseSql,
   type BrowserCaptureRequestState,
   type BrowserValidationRequestState,
   type AgentAvailableContextSource,
@@ -56,6 +64,15 @@ function makeSession(id: string, path = "src/app/AppShell.tsx"): AgentSession {
     transcript: [],
     created_ms: 1,
     updated_ms: 2,
+  };
+}
+
+function databaseState(
+  overrides: Partial<DatabaseViewState> = {},
+): DatabaseViewState {
+  return {
+    ...createDatabaseState(),
+    ...overrides,
   };
 }
 
@@ -183,6 +200,17 @@ describe("AppShell AppShell helpers", () => {
         onBrowserHardReload={() => {}}
         onBrowserCapture={() => {}}
         onBrowserSelectScreenshot={() => {}}
+        databaseState={createDatabaseState()}
+        onDatabaseRefreshProfiles={() => {}}
+        onDatabaseSelectProfile={() => {}}
+        onDatabaseInspectProfile={() => {}}
+        onDatabaseOpenTable={() => {}}
+        onDatabaseDraftChange={() => {}}
+        onDatabaseRunQuery={() => {}}
+        onDatabaseConfirmQuery={() => {}}
+        onDatabaseCancelConfirmation={() => {}}
+        onDatabaseExportResult={() => {}}
+        onDatabaseSelectHistory={() => {}}
         languageState={createLanguageState()}
       />,
     );
@@ -305,6 +333,17 @@ describe("AppShell AppShell helpers", () => {
         onBrowserHardReload={() => {}}
         onBrowserCapture={() => {}}
         onBrowserSelectScreenshot={() => {}}
+        databaseState={createDatabaseState()}
+        onDatabaseRefreshProfiles={() => {}}
+        onDatabaseSelectProfile={() => {}}
+        onDatabaseInspectProfile={() => {}}
+        onDatabaseOpenTable={() => {}}
+        onDatabaseDraftChange={() => {}}
+        onDatabaseRunQuery={() => {}}
+        onDatabaseConfirmQuery={() => {}}
+        onDatabaseCancelConfirmation={() => {}}
+        onDatabaseExportResult={() => {}}
+        onDatabaseSelectHistory={() => {}}
         languageState={createLanguageState()}
       />,
     );
@@ -1063,6 +1102,17 @@ describe("AppShell AppShell helpers", () => {
         onBrowserHardReload={() => {}}
         onBrowserCapture={() => {}}
         onBrowserSelectScreenshot={() => {}}
+        databaseState={createDatabaseState()}
+        onDatabaseRefreshProfiles={() => {}}
+        onDatabaseSelectProfile={() => {}}
+        onDatabaseInspectProfile={() => {}}
+        onDatabaseOpenTable={() => {}}
+        onDatabaseDraftChange={() => {}}
+        onDatabaseRunQuery={() => {}}
+        onDatabaseConfirmQuery={() => {}}
+        onDatabaseCancelConfirmation={() => {}}
+        onDatabaseExportResult={() => {}}
+        onDatabaseSelectHistory={() => {}}
         languageState={createLanguageState()}
       />,
     );
@@ -1075,5 +1125,246 @@ describe("AppShell AppShell helpers", () => {
     expect(onAgentModeChange).toHaveBeenCalledWith("edit");
     fireEvent.click(renderResult.getByLabelText("Export prompt"));
     expect(onAgentExport).toHaveBeenCalledTimes(1);
+  });
+
+  test("PanelBody renders DatabasePanel and routes database callbacks", () => {
+    const onDatabaseRefreshProfiles = mock(() => {});
+    const onDatabaseSelectProfile = mock<(profileId: string) => void>(() => {});
+    const onDatabaseInspectProfile = mock<(profileId: string) => void>(() => {});
+    const onDatabaseOpenTable = mock<(profileId: string, table: DatabaseTable) => void>(() => {});
+    const onDatabaseDraftChange = mock<(query: string) => void>(() => {});
+    const onDatabaseRunQuery = mock(() => {});
+    const onDatabaseConfirmQuery = mock((_input: string) => {});
+    const onDatabaseCancelConfirmation = mock(() => {});
+    const onDatabaseExportResult = mock(() => {});
+    const onDatabaseSelectHistory = mock<(entry: DatabaseQueryHistoryEntry) => void>(() => {});
+
+    const renderResult = render(
+      <PanelBody
+        active="database"
+        refreshKey={0}
+        activeFilePath="src/app/AppShell.tsx"
+        terminalSessions={[]}
+        activeTerminalId={null}
+        terminalCwdInput=""
+        terminalError={null}
+        taskState={{
+          detectedTasks: [],
+          runs: [],
+          activeRunId: null,
+          outputByRunId: {},
+          problemsByRunId: {},
+          pendingOutputByRunId: {},
+          pendingFinishByRunId: {},
+          contextPackByRunId: {},
+          customCommand: "",
+        }}
+        taskError={null}
+        gitState={{
+          status: null,
+          loading: false,
+          error: null,
+          commitMessage: "",
+          selectedDiff: null,
+          diffByKey: {},
+          branches: [],
+          graph: [],
+        }}
+        docsState={createDocsState()}
+        contextPackNameById={{}}
+        gitDecorations={{}}
+        agentState={createAgentState()}
+        availableAgentContext={[]}
+        onAgentModeChange={() => {}}
+        onAgentPromptChange={() => {}}
+        onAgentToggleContext={() => {}}
+        onAgentStartSession={() => {}}
+        onAgentSelectSession={() => {}}
+        onAgentApprove={() => {}}
+        onAgentReject={() => {}}
+        onAgentExport={() => {}}
+        onOpenFile={() => Promise.resolve()}
+        onCreateFile={async () => {}}
+        onRenamePath={async () => {}}
+        onDeletePath={async () => {}}
+        onTerminalCwdInputChange={() => {}}
+        onNewTerminal={() => Promise.resolve()}
+        onActivateTerminal={() => {}}
+        onCloseTerminal={() => Promise.resolve()}
+        onRestartTerminal={() => Promise.resolve()}
+        onTaskCustomCommandChange={() => {}}
+        onRunTask={() => {}}
+        onRunCustomTask={() => {}}
+        onActivateTaskRun={() => {}}
+        onStopTaskRun={() => Promise.resolve()}
+        onRerunTaskRun={() => {}}
+        onGitRefresh={() => Promise.resolve()}
+        onGitCommitMessageChange={() => {}}
+        onGitCommit={() => {}}
+        onGitStage={() => {}}
+        onGitUnstage={() => {}}
+        onGitDiscard={() => {}}
+        onGitOpenDiff={() => {}}
+        onGitStash={() => {}}
+        onGitFetch={() => {}}
+        onGitPull={() => {}}
+        onGitPush={() => {}}
+        onGitCheckoutBranch={() => {}}
+        onGitCreateBranch={() => {}}
+        onGitOpenGraph={() => {}}
+        onDocsRefresh={() => Promise.resolve()}
+        onDocsSearch={() => {}}
+        onDocsOpenPreview={() => Promise.resolve()}
+        onDocsToggleSource={() => {}}
+        onDocsPackNameChange={() => {}}
+        onDocsCreatePack={() => Promise.resolve()}
+        onDocsSelectPack={() => {}}
+        onDocsDeletePack={() => Promise.resolve()}
+        onDocsUsePackForActiveTask={() => Promise.resolve()}
+        onDocsLinkPackToAgentSession={() => Promise.resolve()}
+        onLanguageOpenDiagnostic={() => {}}
+        onLanguageRefresh={() => Promise.resolve()}
+        onLanguageRestartServer={() => {}}
+        browserState={createBrowserState()}
+        browserTargets={[]}
+        browserCanCapture={false}
+        onBrowserUrlInputChange={() => {}}
+        onBrowserOpenUrl={() => {}}
+        onBrowserOpenTarget={() => {}}
+        onBrowserReload={() => {}}
+        onBrowserHardReload={() => {}}
+        onBrowserCapture={() => {}}
+        onBrowserSelectScreenshot={() => {}}
+        databaseState={databaseState({
+          profiles: [
+            {
+              id: "db-local",
+              workspace_root: "/repo",
+              name: "local",
+              kind: "SQLite",
+              source: { SQLite: { path: "/repo/local.db" } },
+              read_only: false,
+              production: false,
+              created_ms: 1,
+              updated_ms: 1,
+            },
+          ],
+          activeProfileId: "db-local",
+          queryDraft: "SELECT 1",
+          schemaByProfileId: {
+            "db-local": {
+              profile_id: "db-local",
+              refreshed_ms: 1,
+              tables: [
+                {
+                  schema: "main",
+                  name: "users",
+                  row_count: 3,
+                  columns: [],
+                },
+              ],
+            },
+          },
+          history: [
+            {
+              sql: "SELECT 1",
+              kind: "Read",
+              executed_ms: 5,
+              affected_rows: null,
+              row_count: 1,
+            },
+          ],
+        })}
+        onDatabaseRefreshProfiles={onDatabaseRefreshProfiles}
+        onDatabaseSelectProfile={onDatabaseSelectProfile}
+        onDatabaseInspectProfile={onDatabaseInspectProfile}
+        onDatabaseOpenTable={onDatabaseOpenTable}
+        onDatabaseDraftChange={onDatabaseDraftChange}
+        onDatabaseRunQuery={onDatabaseRunQuery}
+        onDatabaseConfirmQuery={onDatabaseConfirmQuery}
+        onDatabaseCancelConfirmation={onDatabaseCancelConfirmation}
+        onDatabaseExportResult={onDatabaseExportResult}
+        onDatabaseSelectHistory={onDatabaseSelectHistory}
+        languageState={createLanguageState()}
+      />,
+    );
+
+    expect(renderResult.getByText("Databases")).toBeTruthy();
+    fireEvent.click(
+      renderResult.getByRole("button", {
+        name: "Refresh database profiles",
+      }),
+    );
+    expect(onDatabaseRefreshProfiles).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(
+      renderResult.getByRole("button", {
+        name: "Select local",
+      }),
+    );
+    expect(onDatabaseSelectProfile).toHaveBeenCalledWith("db-local");
+
+    fireEvent.click(
+      renderResult.getByRole("button", {
+        name: "Inspect schema local",
+      }),
+    );
+    expect(onDatabaseInspectProfile).toHaveBeenCalledWith("db-local");
+
+    fireEvent.click(
+      renderResult.getByRole("button", {
+        name: "Open table main.users",
+      }),
+    );
+    expect(onDatabaseOpenTable).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(
+      renderResult.getByRole("button", {
+        name: "Run query",
+      }),
+    );
+    expect(onDatabaseRunQuery).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(renderResult.getByLabelText("Database SQL query"), {
+      target: { value: "SELECT * FROM audit_log" },
+    });
+    expect(onDatabaseDraftChange).toHaveBeenCalledWith("SELECT * FROM audit_log");
+
+    fireEvent.click(
+      renderResult.getByRole("button", {
+        name: /Read\s+SELECT 1/i,
+      }),
+    );
+    expect(onDatabaseSelectHistory).toHaveBeenCalledWith({
+      sql: "SELECT 1",
+      kind: "Read",
+      executed_ms: 5,
+      affected_rows: null,
+      row_count: 1,
+    });
+  });
+
+  test("databaseTableSql and classifyDatabaseSql return conservative SQL routing text", () => {
+    expect(databaseTableSql("SQLite", { schema: null, name: "users" })).toBe(
+      'SELECT * FROM "users" LIMIT 100',
+    );
+    expect(
+      databaseTableSql("SQLite", { schema: "main", name: "users" }),
+    ).toBe('SELECT * FROM "main"."users" LIMIT 100');
+    expect(
+      databaseTableSql("MsSql", { schema: "dbo", name: "audit_log" }),
+    ).toBe('SELECT TOP 100 * FROM [dbo].[audit_log]');
+
+    expect(classifyDatabaseSql("SELECT * FROM users").kind).toBe("Read");
+    expect(
+      classifyDatabaseSql("UPDATE users SET name = 'a'").confirmation_text,
+    ).toBe("RUN MUTATION");
+    expect(
+      classifyDatabaseSql("DROP TABLE users").confirmation_text,
+    ).toBe("RUN DESTRUCTIVE SQL");
+    expect(classifyDatabaseSql("").requires_confirmation).toBe(true);
+    expect(classifyDatabaseSql("").confirmation_text).toBe(
+      "RUN DESTRUCTIVE SQL",
+    );
   });
 });

@@ -89,12 +89,26 @@ export const node8Commands: CommandItem[] = [
   },
 ];
 
+export const node9Commands: CommandItem[] = [
+  {
+    id: "open-database",
+    label: "Database: Open panel",
+    group: "Database",
+  },
+  {
+    id: "database-refresh",
+    label: "Database: Refresh profiles",
+    group: "Database",
+  },
+];
+
 export const allCommands: CommandItem[] = [
   ...node1Commands,
   ...node5Commands,
   ...node6Commands,
   ...node7Commands,
   ...node8Commands,
+  ...node9Commands,
 ];
 
 export function filterCommands(

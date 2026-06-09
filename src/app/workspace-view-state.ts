@@ -18,6 +18,10 @@ import {
   type BrowserViewState,
 } from "../features/browser/browser-model";
 import {
+  createDatabaseState,
+  type DatabaseViewState,
+} from "../features/database/database-model";
+import {
   createGitState,
   type GitViewState,
 } from "../features/git/git-model";
@@ -38,7 +42,8 @@ export type Surface =
   | "git-diff"
   | "git-graph"
   | "docs-preview"
-  | "browser-preview";
+  | "browser-preview"
+  | "database-result";
 
 export type WorkspaceViewState = {
   activeActivity: ActivityId;
@@ -52,6 +57,7 @@ export type WorkspaceViewState = {
   docs: DocsViewState;
   language: LanguageViewState;
   browser: BrowserViewState;
+  database: DatabaseViewState;
 };
 
 type WorkspaceViewStore = {
@@ -93,6 +99,10 @@ type WorkspaceViewStore = {
     workspaceId: string | null,
     update: (browser: BrowserViewState) => BrowserViewState,
   ) => void;
+  updateDatabase: (
+    workspaceId: string | null,
+    update: (database: DatabaseViewState) => DatabaseViewState,
+  ) => void;
 };
 
 function defaultWorkspaceView(): WorkspaceViewState {
@@ -108,6 +118,7 @@ function defaultWorkspaceView(): WorkspaceViewState {
     docs: createDocsState(),
     language: createLanguageState(),
     browser: createBrowserState(),
+    database: createDatabaseState(),
   };
 }
 
@@ -183,6 +194,39 @@ function freezeWorkspaceView(view: WorkspaceViewState): WorkspaceViewState {
   Object.freeze(view.browser.screenshots);
   Object.freeze(view.browser.consoleErrors);
   Object.freeze(view.browser);
+  Object.freeze(view.database.profiles);
+  Object.freeze(view.database.history);
+  for (const entry of view.database.history) {
+    Object.freeze(entry);
+  }
+  Object.freeze(view.database.schemaByProfileId);
+  for (const schema of Object.values(view.database.schemaByProfileId)) {
+    Object.freeze(schema.tables);
+    for (const table of schema.tables) {
+      Object.freeze(table.columns);
+    }
+    Object.freeze(schema);
+  }
+  if (view.database.activeResult) {
+    Object.freeze(view.database.activeResult.columns);
+    Object.freeze(view.database.activeResult.rows);
+    for (const row of view.database.activeResult.rows) {
+      Object.freeze(row.cells);
+      for (const cell of row.cells) {
+        Object.freeze(cell);
+      }
+      Object.freeze(row);
+    }
+    Object.freeze(view.database.activeResult.classification);
+    Object.freeze(view.database.activeResult);
+  }
+  if (view.database.confirmation) {
+    Object.freeze(view.database.confirmation);
+  }
+  if (view.database.export) {
+    Object.freeze(view.database.export);
+  }
+  Object.freeze(view.database);
   Object.freeze(view.agent.selectedContextIds);
   for (const session of view.agent.sessions) {
     Object.freeze(session.context_items);
@@ -315,6 +359,18 @@ export function createWorkspaceViewStore() {
           views: {
             ...state.views,
             [key]: { ...current, browser: update(current.browser) },
+          },
+        };
+      }),
+    updateDatabase: (workspaceId, update) =>
+      set((state) => {
+        const key = workspaceId ?? shellKey;
+        const current = state.views[key] ?? defaultView;
+
+        return {
+          views: {
+            ...state.views,
+            [key]: { ...current, database: update(current.database) },
           },
         };
       }),

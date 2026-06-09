@@ -10,6 +10,10 @@ import {
   replaceServerStatuses,
 } from "../features/language/language-model";
 import { createBrowserState } from "../features/browser/browser-model";
+import {
+  createDatabaseState,
+  type DatabaseProfile,
+} from "../features/database/database-model";
 import { upsertTaskRun } from "../features/tasks/task-model";
 import { upsertTerminal } from "../features/terminal/terminal-model";
 import { createWorkspaceViewStore } from "./workspace-view-state";
@@ -226,6 +230,33 @@ describe("createWorkspaceViewStore", () => {
     );
   });
 
+  test("database state is restored per workspace", () => {
+    const store = createWorkspaceViewStore();
+    const profile: DatabaseProfile = {
+      id: "local",
+      workspace_root: "/repo",
+      name: "local",
+      kind: "SQLite",
+      source: { SQLite: { path: "/repo/local.db" } },
+      read_only: false,
+      production: false,
+      created_ms: 1,
+      updated_ms: 1,
+    };
+
+    store.getState().updateDatabase("workspace-a", (database) =>
+      ({
+        ...database,
+        profiles: [profile],
+      }),
+    );
+
+    expect(store.getState().viewFor("workspace-a").database.profiles).toEqual([
+      profile,
+    ]);
+    expect(store.getState().viewFor("workspace-b").database.profiles).toEqual([]);
+  });
+
   test("unknown workspace task defaults cannot be mutated across future defaults", () => {
     const store = createWorkspaceViewStore();
 
@@ -373,10 +404,58 @@ describe("createWorkspaceViewStore", () => {
         activePackId: null,
         packDraftName: "",
         loading: false,
-        error: null,
+      error: null,
       },
       browser: createBrowserState(),
     });
+  });
+
+  test("unknown workspace defaults cannot mutate database state", () => {
+    const store = createWorkspaceViewStore();
+
+    const unknownView = store.getState().viewFor("unknown");
+
+    expect(() => {
+      unknownView.database.profiles.push({
+        id: "local",
+        workspace_root: "/repo",
+        name: "local",
+        kind: "SQLite",
+        source: { SQLite: { path: "/repo/local.db" } },
+        read_only: false,
+        production: false,
+        created_ms: 1,
+        updated_ms: 1,
+      });
+    }).toThrow(TypeError);
+
+    expect(() => {
+      unknownView.database.schemaByProfileId.local = {
+        profile_id: "local",
+        tables: [],
+        refreshed_ms: 1,
+      };
+    }).toThrow(TypeError);
+
+    expect(() => {
+      unknownView.database.queryDraft = "SELECT 1";
+    }).toThrow(TypeError);
+
+    expect(() => {
+      unknownView.database.confirmation = {
+        confirmationText: "RUN DESTRUCTIVE SQL",
+        reason: "guard",
+        input: "",
+      };
+    }).toThrow(TypeError);
+
+    expect(Object.isFrozen(unknownView.database)).toBe(true);
+    expect(Object.isFrozen(unknownView.database.profiles)).toBe(true);
+    expect(Object.isFrozen(unknownView.database.schemaByProfileId)).toBe(true);
+
+    expect(store.getState().viewFor("other-unknown").database).toMatchObject(
+      createDatabaseState(),
+    );
   });
 
   test("unknown workspace docs defaults cannot be mutated across future defaults", () => {

@@ -10,6 +10,7 @@ import {
   node5Commands,
   node6Commands,
   node7Commands,
+  node9Commands,
 } from "./command-palette-model";
 
 describe("filterCommands", () => {
@@ -160,5 +161,38 @@ describe("filterCommands", () => {
     expect(ids).toContain("browser-reload");
     expect(ids).toContain("browser-hard-reload");
     expect(ids).toContain("browser-capture-screenshot");
+  });
+
+  test("includes database commands in palette", () => {
+    expect(node9Commands).toEqual([
+      {
+        id: "open-database",
+        label: "Database: Open panel",
+        group: "Database",
+      },
+      {
+        id: "database-refresh",
+        label: "Database: Refresh profiles",
+        group: "Database",
+      },
+    ]);
+    expect(allCommands).toContainEqual({
+      id: "open-database",
+      label: "Database: Open panel",
+      group: "Database",
+    });
+    expect(allCommands).toContainEqual({
+      id: "database-refresh",
+      label: "Database: Refresh profiles",
+      group: "Database",
+    });
+  });
+
+  test("searches database commands", () => {
+    const filtered = filterCommands(allCommands, "database");
+    const ids = filtered.map((command) => command.id);
+
+    expect(ids).toContain("open-database");
+    expect(ids).toContain("database-refresh");
   });
 });
