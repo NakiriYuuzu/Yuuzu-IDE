@@ -6,6 +6,7 @@ type TerminalPanelProps = {
   sessions: TerminalSessionInfo[];
   activeTerminalId: string | null;
   cwdInput: string;
+  error: string | null;
   onCwdInputChange: (value: string) => void;
   onNewTerminal: () => void;
   onActivateTerminal: (id: string) => void;
@@ -17,6 +18,7 @@ export function TerminalPanel({
   sessions,
   activeTerminalId,
   cwdInput,
+  error,
   onCwdInputChange,
   onNewTerminal,
   onActivateTerminal,
@@ -38,6 +40,11 @@ export function TerminalPanel({
           New
         </button>
       </div>
+      {error ? (
+        <div className="terminal-inline-error" role="alert">
+          {error}
+        </div>
+      ) : null}
 
       <div className="section-label">
         <span>Terminals</span>

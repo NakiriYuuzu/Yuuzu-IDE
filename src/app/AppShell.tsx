@@ -64,6 +64,7 @@ import { SearchPanel } from "../features/workspace/SearchPanel";
 import { TerminalPanel } from "../features/terminal/TerminalPanel";
 import {
   closeTerminalSession,
+  onTerminalExit,
   onTerminalOutput,
   spawnTerminalSession,
   writeTerminalSession,
@@ -71,7 +72,9 @@ import {
 import {
   activateTerminal,
   appendTerminalOutput,
+  bufferTerminalOutput,
   closeTerminal,
+  markTerminalExited,
   type TerminalSessionInfo,
   upsertTerminal,
 } from "../features/terminal/terminal-model";
@@ -191,6 +194,14 @@ function knownWorkspaceIdForTerminal(sessionId: string): string | null {
   return match?.[0] ?? workspaceIdFromTerminalSessionId(sessionId);
 }
 
+function terminalErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isMissingTerminalSessionError(error: unknown): boolean {
+  return terminalErrorMessage(error).includes("missing terminal session");
+}
+
 function PanelBody({
   active,
   refreshKey,
@@ -198,6 +209,7 @@ function PanelBody({
   terminalSessions,
   activeTerminalId,
   terminalCwdInput,
+  terminalError,
   onOpenFile,
   onCreateFile,
   onRenamePath,
@@ -214,6 +226,7 @@ function PanelBody({
   terminalSessions: TerminalSessionInfo[];
   activeTerminalId: string | null;
   terminalCwdInput: string;
+  terminalError: string | null;
   onOpenFile: (path: string) => void;
   onCreateFile: (relativePath: string) => Promise<void>;
   onRenamePath: (path: string, newName: string) => Promise<void>;
@@ -234,6 +247,7 @@ function PanelBody({
         sessions={terminalSessions}
         activeTerminalId={activeTerminalId}
         cwdInput={terminalCwdInput}
+        error={terminalError}
         onCwdInputChange={onTerminalCwdInputChange}
         onNewTerminal={onNewTerminal}
         onActivateTerminal={onActivateTerminal}
@@ -268,6 +282,7 @@ export function AppShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [loadedFile, setLoadedFile] = useState<LoadedFile | null>(null);
   const [editorError, setEditorError] = useState<string | null>(null);
+  const [terminalError, setTerminalError] = useState<string | null>(null);
   const [findOpen, setFindOpen] = useState(false);
   const [findFocusRequest, setFindFocusRequest] = useState(0);
   const [findQuery, setFindQuery] = useState("");
@@ -335,11 +350,49 @@ export function AppShell() {
     setFindOpen(false);
     setFindFocusRequest(0);
     setFindQuery("");
+    setTerminalError(null);
   }, [activeWorkspaceId]);
 
   useEffect(() => {
     let disposed = false;
-    const unlisten = onTerminalOutput((event) => {
+    const outputUnlisten = onTerminalOutput((event) => {
+      if (disposed) {
+        return;
+      }
+
+      const workspaceId = knownWorkspaceIdForTerminal(event.session_id);
+      if (!workspaceId) {
+        return;
+      }
+
+      const currentView = workspaceViewStore.getState().viewFor(workspaceId);
+      const hasSession = currentView.terminal.sessions.some(
+        (session) => session.id === event.session_id,
+      );
+      const derivedWorkspaceId = workspaceIdFromTerminalSessionId(
+        event.session_id,
+      );
+
+      if (hasSession) {
+        workspaceViewStore
+          .getState()
+          .updateTerminal(workspaceId, (terminal) =>
+            appendTerminalOutput(terminal, event.session_id, event.chunk),
+          );
+        return;
+      }
+
+      if (derivedWorkspaceId !== workspaceId) {
+        return;
+      }
+
+      workspaceViewStore
+        .getState()
+        .updateTerminal(workspaceId, (terminal) =>
+          bufferTerminalOutput(terminal, event.session_id, event.chunk),
+        );
+    });
+    const exitUnlisten = onTerminalExit((event) => {
       if (disposed) {
         return;
       }
@@ -361,13 +414,14 @@ export function AppShell() {
       workspaceViewStore
         .getState()
         .updateTerminal(workspaceId, (terminal) =>
-          appendTerminalOutput(terminal, event.session_id, event.chunk),
+          markTerminalExited(terminal, event.session_id),
         );
     });
 
     return () => {
       disposed = true;
-      void unlisten.then((dispose) => dispose()).catch(() => {});
+      void outputUnlisten.then((dispose) => dispose()).catch(() => {});
+      void exitUnlisten.then((dispose) => dispose()).catch(() => {});
     };
   }, []);
 
@@ -763,21 +817,39 @@ export function AppShell() {
         activeActivity: "terminal",
         surface: "terminal",
       });
+      setTerminalError(null);
     } catch (error) {
-      console.error("Failed to start terminal session", error);
+      setTerminalError(`Start failed: ${terminalErrorMessage(error)}`);
+    }
+  }
+
+  async function closeRemoteTerminalForLocalRemoval(
+    sessionId: string,
+    failureLabel: string,
+  ): Promise<boolean> {
+    try {
+      await closeTerminalSession(sessionId);
+      setTerminalError(null);
+      return true;
+    } catch (error) {
+      if (isMissingTerminalSessionError(error)) {
+        setTerminalError(null);
+        return true;
+      }
+
+      setTerminalError(`${failureLabel}: ${terminalErrorMessage(error)}`);
+      return false;
     }
   }
 
   async function closeTerminalById(sessionId: string) {
     const workspaceId = knownWorkspaceIdForTerminal(sessionId);
+    const canRemove = await closeRemoteTerminalForLocalRemoval(
+      sessionId,
+      "Close failed",
+    );
 
-    try {
-      await closeTerminalSession(sessionId);
-    } catch (error) {
-      console.error("Failed to close terminal session", error);
-    }
-
-    if (!workspaceId) {
+    if (!canRemove || !workspaceId) {
       return;
     }
 
@@ -807,10 +879,12 @@ export function AppShell() {
       return;
     }
 
-    try {
-      await closeTerminalSession(sessionId);
-    } catch (error) {
-      console.error("Failed to stop terminal session before restart", error);
+    const canRemove = await closeRemoteTerminalForLocalRemoval(
+      sessionId,
+      "Restart failed",
+    );
+    if (!canRemove) {
+      return;
     }
 
     updateTerminal(workspaceId, (terminal) =>
@@ -834,14 +908,15 @@ export function AppShell() {
         activeActivity: "terminal",
         surface: "terminal",
       });
+      setTerminalError(null);
     } catch (error) {
-      console.error("Failed to restart terminal session", error);
+      setTerminalError(`Restart failed: ${terminalErrorMessage(error)}`);
     }
   }
 
   function writeTerminalInput(sessionId: string, data: string) {
     void writeTerminalSession(sessionId, data).catch((error) => {
-      console.error("Failed to write terminal input", error);
+      setTerminalError(`Input failed: ${terminalErrorMessage(error)}`);
     });
   }
 
@@ -972,6 +1047,7 @@ export function AppShell() {
               terminalSessions={terminalSessions}
               activeTerminalId={activeTerminalId}
               terminalCwdInput={view.terminal.cwdInput}
+              terminalError={terminalError}
               onOpenFile={openFile}
               onCreateFile={createFileFromExplorer}
               onRenamePath={renamePathFromExplorer}
@@ -1202,6 +1278,11 @@ export function AppShell() {
                           <Plus aria-hidden="true" />
                         </button>
                       </div>
+                      {terminalError ? (
+                        <div className="terminal-inline-error" role="alert">
+                          {terminalError}
+                        </div>
+                      ) : null}
                       <Suspense
                         fallback={
                           <div className="editor-loading">
@@ -1221,6 +1302,11 @@ export function AppShell() {
                     <div className="terminal-empty-state">
                       <SquareTerminal aria-hidden="true" />
                       <span>No terminal sessions</span>
+                      {terminalError ? (
+                        <div className="terminal-inline-error" role="alert">
+                          {terminalError}
+                        </div>
+                      ) : null}
                       <button
                         type="button"
                         className="btn primary"

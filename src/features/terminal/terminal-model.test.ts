@@ -5,8 +5,10 @@ import { describe, expect, test } from "bun:test";
 import {
   activateTerminal,
   appendTerminalOutput,
+  bufferTerminalOutput,
   closeTerminal,
   createTerminalState,
+  markTerminalExited,
   upsertTerminal,
 } from "./terminal-model";
 
@@ -98,5 +100,45 @@ describe("terminal model", () => {
     expect(unchanged.outputBySessionId["w:terminal-1"]).toEndWith("tail");
     expect(unchanged.outputBySessionId["w:terminal-2"]).toBe("");
     expect(unchanged.outputBySessionId.missing).toBeUndefined();
+  });
+
+  test("buffered output before upsert is preserved and merged into the session", () => {
+    const buffered = bufferTerminalOutput(
+      createTerminalState(),
+      "w:terminal-1",
+      "boot\n",
+    );
+
+    const state = upsertTerminal(buffered, {
+      id: "w:terminal-1",
+      workspace_id: "w",
+      name: "zsh 1",
+      cwd: "/repo",
+      shell: "/bin/zsh",
+      running: true,
+    });
+
+    expect(state.outputBySessionId["w:terminal-1"]).toBe("boot\n");
+    expect(state.pendingOutputBySessionId["w:terminal-1"]).toBeUndefined();
+  });
+
+  test("terminal exit marks the session stopped while preserving output", () => {
+    const state = appendTerminalOutput(
+      upsertTerminal(createTerminalState(), {
+        id: "w:terminal-1",
+        workspace_id: "w",
+        name: "zsh 1",
+        cwd: "/repo",
+        shell: "/bin/zsh",
+        running: true,
+      }),
+      "w:terminal-1",
+      "last output\n",
+    );
+
+    const next = markTerminalExited(state, "w:terminal-1");
+
+    expect(next.sessions[0]?.running).toBe(false);
+    expect(next.outputBySessionId["w:terminal-1"]).toBe("last output\n");
   });
 });

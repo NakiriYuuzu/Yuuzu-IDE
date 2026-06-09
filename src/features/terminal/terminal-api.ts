@@ -8,6 +8,11 @@ export type TerminalOutputEvent = {
   chunk: string;
 };
 
+export type TerminalExitEvent = {
+  session_id: string;
+  exit_code: number | null;
+};
+
 export function listTerminalSessions(
   workspaceId: string,
 ): Promise<TerminalSessionInfo[]> {
@@ -42,6 +47,14 @@ export function onTerminalOutput(
   handler: (event: TerminalOutputEvent) => void,
 ): Promise<UnlistenFn> {
   return listen<TerminalOutputEvent>("workspace://terminal-output", (event) =>
+    handler(event.payload),
+  );
+}
+
+export function onTerminalExit(
+  handler: (event: TerminalExitEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<TerminalExitEvent>("workspace://terminal-exit", (event) =>
     handler(event.payload),
   );
 }

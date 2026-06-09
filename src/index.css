@@ -1191,6 +1191,20 @@ button {
   flex: 0 0 auto;
 }
 
+.terminal-inline-error {
+  flex: 0 0 auto;
+  margin: 0 10px 8px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--c-tag) 40%, var(--line));
+  border-radius: var(--radius-md);
+  color: var(--c-tag);
+  background: color-mix(in srgb, var(--c-tag) 10%, transparent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .terminal-row {
   position: relative;
   min-width: 0;
