@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod browser_preview;
 mod commands;
 pub mod docs;
 mod file_system;
@@ -95,6 +96,8 @@ pub fn run() {
             commands::lsp_rename,
             commands::lsp_restart_server,
             commands::lsp_server_logs,
+            commands::browser_validate_url,
+            commands::browser_capture_preview,
             commands::metric_snapshot,
             commands::read_text_file,
             commands::write_text_file,

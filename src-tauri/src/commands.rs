@@ -560,6 +560,22 @@ impl AppState {
         self.ensure_agent_session_in_active_workspace(&session_id)?;
         self.agent_store.export_prompt(&session_id)
     }
+
+    pub fn validate_browser_url(
+        &self,
+        value: &str,
+    ) -> Result<crate::browser_preview::BrowserUrl, String> {
+        crate::browser_preview::normalize_browser_url(value)
+    }
+
+    pub fn capture_browser_preview(
+        &self,
+        workspace_root: &str,
+        request: crate::browser_preview::BrowserCaptureRequest,
+    ) -> Result<crate::browser_preview::BrowserScreenshot, String> {
+        let workspace_root = self.trusted_workspace_root(workspace_root)?;
+        crate::browser_preview::capture_preview(workspace_root.to_string_lossy(), request)
+    }
 }
 
 #[tauri::command]
@@ -787,6 +803,23 @@ pub fn export_agent_prompt(
     session_id: String,
 ) -> Result<crate::agent::AgentPromptExport, String> {
     state.export_agent_prompt(session_id)
+}
+
+#[tauri::command]
+pub fn browser_validate_url(
+    state: State<'_, AppState>,
+    value: String,
+) -> Result<crate::browser_preview::BrowserUrl, String> {
+    state.validate_browser_url(&value)
+}
+
+#[tauri::command]
+pub fn browser_capture_preview(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    request: crate::browser_preview::BrowserCaptureRequest,
+) -> Result<crate::browser_preview::BrowserScreenshot, String> {
+    state.capture_browser_preview(&workspace_root, request)
 }
 
 #[tauri::command]
@@ -1650,6 +1683,12 @@ mod tests {
         fn assert_flat_signature(_command: FlatStartAgentSessionCommand) {}
 
         assert_flat_signature(start_agent_session);
+    }
+
+    #[test]
+    fn browser_validate_url_rejects_remote_hosts() {
+        assert!(crate::browser_preview::normalize_browser_url("http://example.com:3000").is_err());
+        assert!(crate::browser_preview::normalize_browser_url("localhost:3000").is_ok());
     }
 
     #[test]

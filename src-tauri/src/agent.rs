@@ -49,6 +49,7 @@ pub enum AgentContextKind {
     Diff,
     Diagnostic,
     Terminal,
+    Screenshot,
 }
 
 impl AgentContextKind {
@@ -59,6 +60,7 @@ impl AgentContextKind {
             AgentContextKind::Diff => "diff",
             AgentContextKind::Diagnostic => "diagnostic",
             AgentContextKind::Terminal => "terminal",
+            AgentContextKind::Screenshot => "screenshot",
         }
     }
 }
@@ -528,6 +530,31 @@ mod tests {
         assert!(exported.content.contains("Mode: plan"));
         assert!(exported.content.contains("roadmap.md"));
         assert!(exported.content.contains("src/app/AppShell.tsx"));
+    }
+
+    #[test]
+    fn export_prompt_labels_browser_screenshot_context() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = AgentSessionStore::new(temp.path().join("agent-sessions.json"));
+        let session = store
+            .start_session(
+                "/workspace",
+                AgentMode::Verify,
+                "Verify preview",
+                vec![context_item(
+                    AgentContextKind::Screenshot,
+                    "Browser screenshot: localhost:5173",
+                    "data:image/png;base64,iVBORw0KGgo=",
+                )],
+            )
+            .expect("start session");
+
+        let exported = store.export_prompt(&session.id).expect("export");
+
+        assert!(exported
+            .content
+            .contains("Browser screenshot: localhost:5173"));
+        assert!(exported.content.contains("screenshot"));
     }
 
     #[test]
