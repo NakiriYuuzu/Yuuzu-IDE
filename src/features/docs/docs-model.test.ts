@@ -14,6 +14,7 @@ import {
   selectedDocPaths,
   shouldApplyDocsResult,
   shouldApplyDocPreview,
+  staleReferenceCount,
   storeDocPreview,
   storeContextPack,
   updateContextPackDraftName,
@@ -146,6 +147,36 @@ describe("docs model", () => {
     const state = beginDocPreview(createDocsState(), "docs/queued.md");
 
     expect(docsPreviewPathLabel(state, "Preview")).toBe("docs/queued.md");
+  });
+
+  test("stores markdown preview by path and counts stale references", () => {
+    const state = storeDocPreview(createDocsState(), {
+      path: "docs/architecture.md",
+      title: "Architecture",
+      content: "# Architecture",
+      modified_ms: 1,
+      references: [
+        {
+          target_path: "src/app.ts",
+          exists: true,
+          stale: true,
+          reason: "Referenced file changed after this doc.",
+        },
+        {
+          target_path: "missing.ts",
+          exists: false,
+          stale: false,
+          reason: "Referenced file is missing.",
+        },
+      ],
+    });
+
+    expect(state.previewByPath["docs/architecture.md"]?.title).toBe(
+      "Architecture",
+    );
+    expect(
+      staleReferenceCount(state.previewByPath["docs/architecture.md"]),
+    ).toBe(1);
   });
 
   test("rejects stale async docs results", () => {

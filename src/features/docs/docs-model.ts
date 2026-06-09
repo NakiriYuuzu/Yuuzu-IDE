@@ -169,6 +169,12 @@ export function activeDocPreview(state: DocsViewState): DocPreview | null {
     : null;
 }
 
+export function staleReferenceCount(
+  preview: DocPreview | null | undefined,
+): number {
+  return preview?.references.filter((reference) => reference.stale).length ?? 0;
+}
+
 export function docsPreviewPathLabel(
   state: DocsViewState,
   fallback: string,

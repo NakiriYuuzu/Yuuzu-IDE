@@ -27,6 +27,7 @@ import {
   searchDocs,
 } from "../features/docs/docs-api";
 import { DocsPanel } from "../features/docs/DocsPanel";
+import { MarkdownPreview } from "../features/docs/MarkdownPreview";
 import {
   activeDocPreview,
   beginDocPreview,
@@ -2821,18 +2822,21 @@ export function AppShell() {
                   onRefresh={() => void loadGitGraph()}
                 />
               ) : surface === "docs-preview" ? (
-                <div className="docs-preview-placeholder">
-                  <div className="editor-toolbar">
-                    <span className="path-label mono">
-                      {activeDocsPreviewPathLabel}
-                    </span>
-                  </div>
-                  <div className="large-file-note">
-                    {activeDocsPreview
-                      ? "Markdown preview is queued for Task 5."
-                      : "Select a doc from the Docs panel."}
-                  </div>
-                </div>
+                <MarkdownPreview
+                  preview={activeDocsPreview}
+                  selectedPath={activeDocsPreviewPath}
+                  loading={
+                    activeDocsPreviewPath !== null &&
+                    activeDocsPreview === null &&
+                    view.docs.error === null
+                  }
+                  error={view.docs.error}
+                  onRefresh={() => {
+                    if (activeDocsPreviewPath) {
+                      void openDocsPreview(activeDocsPreviewPath);
+                    }
+                  }}
+                />
               ) : (
                 <>
                   <div className="workspace-hero">
