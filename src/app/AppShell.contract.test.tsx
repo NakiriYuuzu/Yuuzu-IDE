@@ -17,8 +17,11 @@ import {
 } from "../features/browser/browser-model";
 import {
   createDatabaseState,
+  type DatabaseQueryResult,
+  type DatabaseQueryRequest,
   type DatabaseQueryHistoryEntry,
   type DatabaseViewState,
+  type DatabaseSchema,
   type DatabaseTable,
 } from "../features/database/database-model";
 import {
@@ -35,11 +38,16 @@ import {
   captureBrowserPreviewWithValidation,
   databaseTableSql,
   classifyDatabaseSql,
+  executeDatabaseQueryRequest,
+  inspectDatabaseProfileRequest,
+  exportDatabaseQueryResultRequest,
   type BrowserCaptureRequestState,
   type BrowserValidationRequestState,
   type AgentAvailableContextSource,
 } from "./AppShell";
 import { ensureTestDom } from "./test-dom";
+import { workspaceStore } from "./workspace-store";
+import { workspaceViewStore } from "./workspace-view-state";
 
 ensureTestDom();
 
@@ -74,6 +82,75 @@ function databaseState(
     ...createDatabaseState(),
     ...overrides,
   };
+}
+
+type WorkspaceContext = {
+  workspaceId: string;
+  workspaceRoot: string;
+  profileId: string;
+};
+
+function setupWorkspace(
+  overrides: Partial<WorkspaceContext> = {},
+): WorkspaceContext {
+  const workspaceId = overrides.workspaceId ?? "ws-task5";
+  const workspaceRoot = overrides.workspaceRoot ?? "/repo";
+  const profileId = overrides.profileId ?? "db-local";
+
+  workspaceStore.getState().setRegistry({
+    active_workspace_id: workspaceId,
+    workspaces: [
+      {
+        id: workspaceId,
+        path: workspaceRoot,
+        name: workspaceId,
+        pinned: false,
+      },
+    ],
+  });
+  workspaceViewStore.getState().updateDatabase(workspaceId, () => ({
+    ...createDatabaseState(),
+    activeProfileId: profileId,
+    profiles: [
+      {
+        id: profileId,
+        workspace_root: workspaceRoot,
+        name: `${profileId}.db`,
+        kind: "SQLite",
+        source: { SQLite: { path: `${workspaceRoot}/${profileId}.db` } },
+        read_only: false,
+        production: false,
+        created_ms: 1,
+        updated_ms: 1,
+      },
+    ],
+  }));
+
+  return { workspaceId, workspaceRoot, profileId };
+}
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: Error) => void;
+};
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve: (value: T) => void = () => {};
+  let reject: (error: Error) => void = () => {};
+  const promise = new Promise<T>((resolveValue, rejectValue) => {
+    resolve = resolveValue;
+    reject = rejectValue;
+  });
+
+  return { promise, resolve, reject };
+}
+
+function setDatabase(
+  workspaceId: string,
+  update: (state: DatabaseViewState) => DatabaseViewState,
+): void {
+  workspaceViewStore.getState().updateDatabase(workspaceId, update);
 }
 
 afterEach(() => {
@@ -1344,6 +1421,269 @@ describe("AppShell AppShell helpers", () => {
     });
   });
 
+  test("executeDatabaseQueryRequest forwards exact confirmation text for confirmed SQL", async () => {
+    const { workspaceId, workspaceRoot, profileId } = setupWorkspace();
+    const calls: DatabaseQueryRequest[] = [];
+    const executeDatabaseQuery = mock(async (request: DatabaseQueryRequest) => {
+      calls.push(request);
+      return {
+        profile_id: profileId,
+        sql: request.sql,
+        classification: classifyDatabaseSql(request.sql),
+        columns: [],
+        rows: [],
+        affected_rows: null,
+        truncated: false,
+        executed_ms: 11,
+        history_id: "history-1",
+      };
+    });
+    const refreshHistory = mock(async () => {});
+    const onResultApplied = mock(() => {});
+    const hasRegisteredWorkspace = (currentWorkspaceId: string) =>
+      workspaceStore.getState().registry.workspaces.some(
+        (workspace) => workspace.id === currentWorkspaceId,
+      );
+    const getWorkspaceRoot = (currentWorkspaceId: string) =>
+      workspaceStore.getState().registry.workspaces.find(
+        (workspace) => workspace.id === currentWorkspaceId,
+      )?.path ?? null;
+
+    await executeDatabaseQueryRequest({
+      workspaceId,
+      workspaceRoot,
+      profileId,
+      sql: "DROP TABLE users",
+      requestId: 1,
+      confirmation: "RUN DESTRUCTIVE SQL",
+      hasRegisteredWorkspace,
+      getWorkspaceRoot,
+      isLatestDatabaseQuery: () => true,
+      updateDatabase: setDatabase,
+      executeDatabaseQuery,
+      isActiveWorkspace: () => true,
+      refreshHistory,
+      onResultApplied,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].confirmation).toBe("RUN DESTRUCTIVE SQL");
+    expect(refreshHistory).toHaveBeenCalledTimes(1);
+    expect(onResultApplied).toHaveBeenCalledTimes(1);
+  });
+
+  test("executeDatabaseQueryRequest ignores stale query result when active profile changed", async () => {
+    const { workspaceId, workspaceRoot, profileId } = setupWorkspace();
+    const deferred = createDeferred<DatabaseQueryResult>();
+    const executeDatabaseQuery = mock(() => deferred.promise);
+    const refreshHistory = mock(async () => {});
+    const onResultApplied = mock(() => {});
+    const hasRegisteredWorkspace = (currentWorkspaceId: string) =>
+      workspaceStore.getState().registry.workspaces.some(
+        (workspace) => workspace.id === currentWorkspaceId,
+      );
+    const getWorkspaceRoot = (currentWorkspaceId: string) =>
+      workspaceStore.getState().registry.workspaces.find(
+        (workspace) => workspace.id === currentWorkspaceId,
+      )?.path ?? null;
+
+    const request = executeDatabaseQueryRequest({
+      workspaceId,
+      workspaceRoot,
+      profileId,
+      sql: "UPDATE users SET name = 'next'",
+      requestId: 1,
+      confirmation: null,
+      hasRegisteredWorkspace,
+      getWorkspaceRoot,
+      isLatestDatabaseQuery: () => true,
+      updateDatabase: setDatabase,
+      executeDatabaseQuery,
+      isActiveWorkspace: () => true,
+      refreshHistory,
+      onResultApplied,
+    });
+    setDatabase(workspaceId, (database) => ({
+      ...database,
+      activeProfileId: `${profileId}-stale`,
+    }));
+
+    deferred.resolve({
+      profile_id: profileId,
+      sql: "UPDATE users SET name = 'next'",
+      classification: classifyDatabaseSql("UPDATE users SET name = 'next'"),
+      columns: [],
+      rows: [],
+      affected_rows: null,
+      truncated: false,
+      executed_ms: 9,
+      history_id: "history-1",
+    });
+
+    await request;
+
+    const database = workspaceViewStore.getState().viewFor(workspaceId).database;
+    expect(onResultApplied).toHaveBeenCalledTimes(0);
+    expect(refreshHistory).toHaveBeenCalledTimes(0);
+    expect(database.loading).toBe(false);
+    expect(database.activeResult).toBeNull();
+    expect(database.error).toBeNull();
+  });
+
+  test("executeDatabaseQueryRequest does not write stale errors after profile switch", async () => {
+    const { workspaceId, workspaceRoot, profileId } = setupWorkspace();
+    const executeDatabaseQuery = mock(async () => {
+      throw new Error("permission denied");
+    });
+    const hasRegisteredWorkspace = (currentWorkspaceId: string) =>
+      workspaceStore.getState().registry.workspaces.some(
+        (workspace) => workspace.id === currentWorkspaceId,
+      );
+    const getWorkspaceRoot = (currentWorkspaceId: string) =>
+      workspaceStore.getState().registry.workspaces.find(
+        (workspace) => workspace.id === currentWorkspaceId,
+      )?.path ?? null;
+
+    const request = executeDatabaseQueryRequest({
+      workspaceId,
+      workspaceRoot,
+      profileId,
+      sql: "UPDATE users SET name = 'next'",
+      requestId: 1,
+      confirmation: null,
+      hasRegisteredWorkspace,
+      getWorkspaceRoot,
+      isLatestDatabaseQuery: () => true,
+      updateDatabase: setDatabase,
+      executeDatabaseQuery,
+      isActiveWorkspace: () => true,
+      refreshHistory: async () => {},
+      onResultApplied: () => {},
+    });
+    setDatabase(workspaceId, (database) => ({
+      ...database,
+      activeProfileId: `${profileId}-stale`,
+    }));
+
+    await request;
+
+    const database = workspaceViewStore.getState().viewFor(workspaceId).database;
+    expect(database.loading).toBe(false);
+    expect(database.error).toBeNull();
+  });
+
+  test("inspectDatabaseProfileRequest clears loading on stale workspace path change", async () => {
+    const { workspaceId, workspaceRoot, profileId } = setupWorkspace();
+    const deferred = createDeferred<DatabaseSchema>();
+    const inspectDatabaseSchema = mock(async () => deferred.promise);
+    const updateDatabase = setDatabase;
+    const hasRegisteredWorkspace = (currentWorkspaceId: string) =>
+      workspaceStore.getState().registry.workspaces.some(
+        (workspace) => workspace.id === currentWorkspaceId,
+      );
+    const getWorkspaceRoot = (currentWorkspaceId: string) =>
+      workspaceStore.getState().registry.workspaces.find(
+        (workspace) => workspace.id === currentWorkspaceId,
+      )?.path ?? null;
+
+    const request = inspectDatabaseProfileRequest({
+      workspaceId,
+      workspaceRoot,
+      profileId,
+      requestId: 1,
+      hasRegisteredWorkspace,
+      getWorkspaceRoot,
+      isLatestInspectProfileRequest: () => true,
+      updateDatabase,
+      inspectDatabaseSchema,
+    });
+
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: workspaceId,
+      workspaces: [
+        {
+          id: workspaceId,
+          path: `${workspaceRoot}-switched`,
+          name: workspaceId,
+          pinned: false,
+        },
+      ],
+    });
+
+    deferred.resolve({
+      profile_id: profileId,
+      refreshed_ms: 1,
+      tables: [],
+    });
+
+    await request;
+
+    const database = workspaceViewStore.getState().viewFor(workspaceId).database;
+    expect(database.loading).toBe(false);
+    expect(database.error).toBeNull();
+    expect(database.schemaByProfileId[profileId]).toBeUndefined();
+  });
+
+  test("exportDatabaseQueryResultRequest does not write export when active result changed", async () => {
+    const { workspaceId, workspaceRoot, profileId } = setupWorkspace();
+    const initialResult = {
+      profile_id: profileId,
+      sql: "SELECT 1",
+      classification: classifyDatabaseSql("SELECT 1"),
+      columns: [],
+      rows: [],
+      affected_rows: null,
+      truncated: false,
+      executed_ms: 7,
+      history_id: "history-1",
+    };
+    const replacementResult = {
+      ...initialResult,
+      executed_ms: 8,
+      history_id: "history-2",
+    };
+    const deferred = createDeferred<{ path: string }>();
+    const exportDatabaseQueryResult = mock(async () => deferred.promise);
+    const hasRegisteredWorkspace = (currentWorkspaceId: string) =>
+      workspaceStore.getState().registry.workspaces.some(
+        (workspace) => workspace.id === currentWorkspaceId,
+      );
+    const getWorkspaceRoot = (currentWorkspaceId: string) =>
+      workspaceStore.getState().registry.workspaces.find(
+        (workspace) => workspace.id === currentWorkspaceId,
+      )?.path ?? null;
+    const isLatestDatabaseExportRequest = () => true;
+
+    setDatabase(workspaceId, (database) => ({
+      ...database,
+      activeResult: initialResult,
+      export: null,
+    }));
+
+    const request = exportDatabaseQueryResultRequest({
+      workspaceId,
+      workspaceRoot,
+      requestId: 1,
+      resultId: `${profileId}:history-1:7`,
+      activeResult: initialResult,
+      hasRegisteredWorkspace,
+      getWorkspaceRoot,
+      isLatestDatabaseExportRequest,
+      updateDatabase: setDatabase,
+      exportDatabaseQueryResult,
+    });
+
+    setDatabase(workspaceId, (database) => ({
+      ...database,
+      activeResult: replacementResult,
+    }));
+
+    deferred.resolve({ path: "/tmp/export.csv" });
+    await request;
+
+    expect(workspaceViewStore.getState().viewFor(workspaceId).database.export).toBeNull();
+  });
+
   test("databaseTableSql and classifyDatabaseSql return conservative SQL routing text", () => {
     expect(databaseTableSql("SQLite", { schema: null, name: "users" })).toBe(
       'SELECT * FROM "users" LIMIT 100',
@@ -1362,6 +1702,33 @@ describe("AppShell AppShell helpers", () => {
     expect(
       classifyDatabaseSql("DROP TABLE users").confirmation_text,
     ).toBe("RUN DESTRUCTIVE SQL");
+    expect(
+      classifyDatabaseSql("SELECT 1; DROP TABLE users").confirmation_text,
+    ).toBe("RUN DESTRUCTIVE SQL");
+    expect(classifyDatabaseSql("EXPLAIN ANALYZE DELETE FROM users").kind).toBe(
+      "Mutation",
+    );
+    expect(classifyDatabaseSql("EXPLAIN ANALYZE DELETE FROM users").confirmation_text).toBe(
+      "RUN MUTATION",
+    );
+    expect(classifyDatabaseSql("EXPLAIN SELECT 1").kind).toBe("Read");
+    expect(
+      classifyDatabaseSql("WITH cte AS (SELECT 1) DELETE FROM users").kind,
+    ).toBe("Mutation");
+    expect(
+      classifyDatabaseSql(
+        "WITH deleted AS (DELETE FROM users RETURNING *) SELECT * FROM deleted",
+      ).kind,
+    ).toBe("Mutation");
+    expect(
+      classifyDatabaseSql("WITH recent AS (SELECT 1) SELECT * FROM recent").kind,
+    ).toBe("Read");
+    expect(
+      classifyDatabaseSql("PRAGMA journal_mode = WAL").kind,
+    ).toBe("Destructive");
+    expect(
+      classifyDatabaseSql("UNKNOWN COMMAND something").kind,
+    ).toBe("Destructive");
     expect(classifyDatabaseSql("").requires_confirmation).toBe(true);
     expect(classifyDatabaseSql("").confirmation_text).toBe(
       "RUN DESTRUCTIVE SQL",

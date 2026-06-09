@@ -38,9 +38,15 @@ import {
   beginDatabaseQuery,
   databaseBadgeCount,
   type DatabaseKind,
+  MAX_DATABASE_ROWS,
+  type DatabaseExport,
+  type DatabaseQueryRequest,
+  type DatabaseQueryResult,
+  type DatabaseSchema,
   type DatabaseQueryHistoryEntry,
   type DatabaseTable,
   type QueryClassification,
+  type QueryKind,
   replaceDatabaseProfiles,
   requireDatabaseConfirmation,
   selectDatabaseProfile,
@@ -777,77 +783,732 @@ function stripDatabaseSqlComments(sql: string): string {
     .trim();
 }
 
+type DatabaseQueryRunResultContext = {
+  workspaceId: string;
+  workspaceRoot: string;
+  profileId: string;
+  sql: string;
+  requestId: number;
+  confirmation: string | null;
+  hasRegisteredWorkspace: (workspaceId: string) => boolean;
+  getWorkspaceRoot: (workspaceId: string) => string | null;
+  isLatestDatabaseQuery: (workspaceId: string, requestId: number) => boolean;
+  updateDatabase: (
+    workspaceId: string,
+    update: (database: DatabaseViewState) => DatabaseViewState,
+  ) => void;
+  executeDatabaseQuery: (request: DatabaseQueryRequest) => Promise<DatabaseQueryResult>;
+  isActiveWorkspace: (workspaceId: string) => boolean;
+  refreshHistory: (
+    workspaceId: string,
+    workspaceRoot: string,
+    profileId: string,
+  ) => Promise<void>;
+  onResultApplied: () => void;
+};
+
+export async function executeDatabaseQueryRequest({
+  workspaceId,
+  workspaceRoot,
+  profileId,
+  sql,
+  requestId,
+  confirmation,
+  hasRegisteredWorkspace,
+  getWorkspaceRoot,
+  isLatestDatabaseQuery,
+  updateDatabase,
+  executeDatabaseQuery: executeRequest,
+  isActiveWorkspace,
+  refreshHistory,
+  onResultApplied,
+}: DatabaseQueryRunResultContext): Promise<void> {
+  const trimmed = sql.trim();
+  if (!trimmed) {
+    updateDatabase(workspaceId, (database) => ({
+      ...database,
+      loading: false,
+      error: "Database query is empty",
+      confirmation: null,
+    }));
+    return;
+  }
+
+  const request: DatabaseQueryRequest = {
+    profile_id: profileId,
+    sql: trimmed,
+    limit: MAX_DATABASE_ROWS,
+    ...(confirmation ? { confirmation } : {}),
+  };
+
+  updateDatabase(workspaceId, beginDatabaseQuery);
+
+  const isActiveRequest = () =>
+    isLatestDatabaseQuery(workspaceId, requestId) &&
+    hasRegisteredWorkspace(workspaceId);
+
+  try {
+    const result = await executeRequest(request);
+
+    if (!isActiveRequest()) {
+      return;
+    }
+
+    if (getWorkspaceRoot(workspaceId) !== workspaceRoot) {
+      updateDatabase(workspaceId, (database) => ({
+        ...database,
+        loading: false,
+        error: null,
+      }));
+      return;
+    }
+
+    const currentDatabase = workspaceViewStore.getState().viewFor(workspaceId).database;
+    const shouldApplyResult =
+      currentDatabase.activeProfileId === profileId &&
+      currentDatabase.activeProfileId === result.profile_id;
+
+    if (!shouldApplyResult) {
+      updateDatabase(workspaceId, (database) => ({
+        ...database,
+        loading: false,
+        error: null,
+      }));
+      return;
+    }
+
+    updateDatabase(workspaceId, (database) =>
+      storeDatabaseQueryResult(database, result),
+    );
+    if (isActiveWorkspace(workspaceId)) {
+      onResultApplied();
+    }
+    await refreshHistory(workspaceId, workspaceRoot, profileId);
+  } catch (error) {
+    if (!isActiveRequest()) {
+      return;
+    }
+
+    if (getWorkspaceRoot(workspaceId) !== workspaceRoot) {
+      updateDatabase(workspaceId, (database) => ({
+        ...database,
+        loading: false,
+        error: null,
+      }));
+      return;
+    }
+
+    const currentDatabase = workspaceViewStore.getState().viewFor(workspaceId).database;
+    updateDatabase(workspaceId, (database) => ({
+      ...database,
+      loading: false,
+      error:
+        currentDatabase.activeProfileId === profileId
+          ? `Database query failed: ${terminalErrorMessage(error)}`
+          : null,
+    }));
+  }
+}
+
+type InspectDatabaseProfileRunContext = {
+  workspaceId: string;
+  workspaceRoot: string;
+  profileId: string;
+  requestId: number;
+  hasRegisteredWorkspace: (workspaceId: string) => boolean;
+  getWorkspaceRoot: (workspaceId: string) => string | null;
+  isLatestInspectProfileRequest: (workspaceId: string, requestId: number) => boolean;
+  updateDatabase: (
+    workspaceId: string,
+    update: (database: DatabaseViewState) => DatabaseViewState,
+  ) => void;
+  inspectDatabaseSchema: (profileId: string) => Promise<DatabaseSchema>;
+};
+
+export async function inspectDatabaseProfileRequest({
+  workspaceId,
+  workspaceRoot,
+  profileId,
+  requestId,
+  hasRegisteredWorkspace,
+  getWorkspaceRoot,
+  isLatestInspectProfileRequest,
+  updateDatabase,
+  inspectDatabaseSchema: inspectSchema,
+}: InspectDatabaseProfileRunContext): Promise<void> {
+  try {
+    const schema = await inspectSchema(profileId);
+
+    if (!isLatestInspectProfileRequest(workspaceId, requestId)) {
+      return;
+    }
+
+    const currentDatabase = workspaceViewStore.getState().viewFor(workspaceId).database;
+    if (
+      !hasRegisteredWorkspace(workspaceId) ||
+      getWorkspaceRoot(workspaceId) !== workspaceRoot ||
+      currentDatabase.activeProfileId !== profileId
+    ) {
+      updateDatabase(workspaceId, (database) => ({
+        ...database,
+        loading: false,
+        error: null,
+      }));
+      return;
+    }
+
+    updateDatabase(workspaceId, (database) =>
+      storeDatabaseSchema(
+        {
+          ...database,
+          loading: false,
+          error: null,
+        },
+        schema,
+      ),
+    );
+  } catch (error) {
+    if (!isLatestInspectProfileRequest(workspaceId, requestId)) {
+      return;
+    }
+
+    const currentDatabase = workspaceViewStore.getState().viewFor(workspaceId).database;
+    updateDatabase(workspaceId, (database) => ({
+      ...database,
+      loading: false,
+      error:
+        currentDatabase.activeProfileId === profileId
+          ? `Inspect schema failed: ${terminalErrorMessage(error)}`
+          : null,
+    }));
+  }
+}
+
+type ExportDatabaseResultRequestContext = {
+  workspaceId: string;
+  workspaceRoot: string;
+  requestId: number;
+  resultId: string;
+  activeResult: DatabaseQueryResult;
+  hasRegisteredWorkspace: (workspaceId: string) => boolean;
+  getWorkspaceRoot: (workspaceId: string) => string | null;
+  isLatestDatabaseExportRequest: (workspaceId: string, requestId: number) => boolean;
+  updateDatabase: (
+    workspaceId: string,
+    update: (database: DatabaseViewState) => DatabaseViewState,
+  ) => void;
+  exportDatabaseQueryResult: (
+    workspaceRoot: string,
+    result: DatabaseQueryResult,
+  ) => Promise<DatabaseExport>;
+};
+
+function databaseResultId(
+  result: Pick<DatabaseQueryResult, "profile_id" | "history_id" | "executed_ms"> | null,
+): string {
+  if (result === null) {
+    return ":(:):";
+  }
+
+  return `${result.profile_id}:${result.history_id}:${result.executed_ms}`;
+}
+
+export async function exportDatabaseQueryResultRequest({
+  workspaceId,
+  workspaceRoot,
+  requestId,
+  resultId,
+  activeResult,
+  hasRegisteredWorkspace,
+  getWorkspaceRoot,
+  isLatestDatabaseExportRequest,
+  updateDatabase,
+  exportDatabaseQueryResult: exportResult,
+}: ExportDatabaseResultRequestContext): Promise<void> {
+  try {
+    const data = await exportResult(workspaceRoot, activeResult);
+
+    if (!isLatestDatabaseExportRequest(workspaceId, requestId)) {
+      return;
+    }
+
+    const currentResult = workspaceViewStore.getState().viewFor(workspaceId).database
+      .activeResult;
+    if (
+      !hasRegisteredWorkspace(workspaceId) ||
+      getWorkspaceRoot(workspaceId) !== workspaceRoot ||
+      databaseResultId(currentResult) !== resultId
+    ) {
+      return;
+    }
+
+    updateDatabase(workspaceId, (state) => ({
+      ...state,
+      export: data,
+    }));
+  } catch (error) {
+    if (!isLatestDatabaseExportRequest(workspaceId, requestId)) {
+      return;
+    }
+
+    const currentResult = workspaceViewStore.getState().viewFor(workspaceId).database
+      .activeResult;
+    if (
+      !hasRegisteredWorkspace(workspaceId) ||
+      getWorkspaceRoot(workspaceId) !== workspaceRoot ||
+      databaseResultId(currentResult) !== resultId
+    ) {
+      return;
+    }
+
+    updateDatabase(workspaceId, (state) => ({
+      ...state,
+      error: `Export failed: ${terminalErrorMessage(error)}`,
+    }));
+  }
+}
+
+function combineQueryKinds(left: QueryKind, right: QueryKind): QueryKind {
+  if (left === "Destructive" || right === "Destructive") {
+    return "Destructive";
+  }
+
+  if (left === "Mutation" || right === "Mutation") {
+    return "Mutation";
+  }
+
+  return "Read";
+}
+
+function sqlTokenAt(sql: string, index: number): {
+  token: string;
+  nextIndex: number;
+} | null {
+  let cursor = index;
+  while (cursor < sql.length) {
+    const char = sql[cursor];
+    if (/\s/.test(char)) {
+      cursor += 1;
+      continue;
+    }
+
+    if (char === "-" && sql[cursor + 1] === "-") {
+      cursor += 2;
+      while (cursor < sql.length && sql[cursor] !== "\n") {
+        cursor += 1;
+      }
+      continue;
+    }
+
+    if (char === "/" && sql[cursor + 1] === "*") {
+      cursor += 2;
+      while (cursor < sql.length - 1) {
+        if (sql[cursor] === "*" && sql[cursor + 1] === "/") {
+          cursor += 2;
+          break;
+        }
+        cursor += 1;
+      }
+      continue;
+    }
+
+    break;
+  }
+
+  if (cursor >= sql.length) {
+    return null;
+  }
+
+  if (sql[cursor] === "'" || sql[cursor] === '"') {
+    return null;
+  }
+
+  const tokenStart = cursor;
+  while (cursor < sql.length) {
+    const char = sql[cursor];
+    if (
+      /[A-Za-z_]/.test(char) ||
+      /[0-9]/.test(char) ||
+      char === "." ||
+      char === "_"
+    ) {
+      cursor += 1;
+      continue;
+    }
+
+    break;
+  }
+
+  const token = sql.slice(tokenStart, cursor).trim().toUpperCase();
+  if (!token) {
+    return null;
+  }
+
+  return { token, nextIndex: cursor };
+}
+
+function skipSingleQuote(sql: string, index: number): number {
+  let cursor = index + 1;
+  while (cursor < sql.length) {
+    if (sql[cursor] === "'") {
+      if (sql[cursor + 1] === "'") {
+        cursor += 2;
+        continue;
+      }
+
+      return cursor + 1;
+    }
+
+    cursor += 1;
+  }
+
+  return sql.length;
+}
+
+function skipDoubleQuote(sql: string, index: number): number {
+  let cursor = index + 1;
+  while (cursor < sql.length) {
+    if (sql[cursor] === '"') {
+      if (sql[cursor + 1] === '"') {
+        cursor += 2;
+        continue;
+      }
+
+      return cursor + 1;
+    }
+
+    cursor += 1;
+  }
+
+  return sql.length;
+}
+
+function skipLineComment(sql: string, index: number): number {
+  let cursor = index + 2;
+  while (cursor < sql.length && sql[cursor] !== "\n") {
+    cursor += 1;
+  }
+
+  return cursor;
+}
+
+function skipBlockComment(sql: string, index: number): number {
+  let cursor = index + 2;
+  while (cursor < sql.length - 1) {
+    if (sql[cursor] === "*" && sql[cursor + 1] === "/") {
+      return cursor + 2;
+    }
+
+    cursor += 1;
+  }
+
+  return sql.length;
+}
+
+function skipSqlWhitespaceAndComments(sql: string, index: number): number {
+  let cursor = index;
+  while (cursor < sql.length) {
+    const char = sql[cursor];
+    if (/\s/.test(char)) {
+      cursor += 1;
+      continue;
+    }
+
+    if (char === "-" && sql[cursor + 1] === "-") {
+      cursor = skipLineComment(sql, cursor);
+      continue;
+    }
+
+    if (char === "/" && sql[cursor + 1] === "*") {
+      cursor = skipBlockComment(sql, cursor);
+      continue;
+    }
+
+    break;
+  }
+
+  return cursor;
+}
+
+function skipNestedParentheses(sql: string, index: number): number {
+  if (sql[index] !== "(") {
+    return -1;
+  }
+
+  let depth = 0;
+  let cursor = index;
+  while (cursor < sql.length) {
+    const char = sql[cursor];
+    if (char === "'") {
+      cursor = skipSingleQuote(sql, cursor);
+      continue;
+    }
+
+    if (char === '"') {
+      cursor = skipDoubleQuote(sql, cursor);
+      continue;
+    }
+
+    if (char === "-" && sql[cursor + 1] === "-") {
+      cursor = skipLineComment(sql, cursor);
+      continue;
+    }
+
+    if (char === "/" && sql[cursor + 1] === "*") {
+      cursor = skipBlockComment(sql, cursor);
+      continue;
+    }
+
+    if (char === "(") {
+      depth += 1;
+    } else if (char === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return cursor + 1;
+      }
+    }
+
+    cursor += 1;
+  }
+
+  return -1;
+}
+
+function splitSqlStatements(sql: string): string[] {
+  const statements: string[] = [];
+  let cursor = 0;
+  let statementStart = 0;
+
+  while (cursor < sql.length) {
+    const char = sql[cursor];
+    if (char === "'") {
+      cursor = skipSingleQuote(sql, cursor);
+      continue;
+    }
+
+    if (char === '"') {
+      cursor = skipDoubleQuote(sql, cursor);
+      continue;
+    }
+
+    if (char === "-" && sql[cursor + 1] === "-") {
+      cursor = skipLineComment(sql, cursor);
+      continue;
+    }
+
+    if (char === "/" && sql[cursor + 1] === "*") {
+      cursor = skipBlockComment(sql, cursor);
+      continue;
+    }
+
+    if (char === ";") {
+      const statement = sql.slice(statementStart, cursor).trim();
+      if (statement) {
+        statements.push(statement);
+      }
+      cursor += 1;
+      statementStart = cursor;
+      continue;
+    }
+
+    cursor += 1;
+  }
+
+  const trailing = sql.slice(statementStart).trim();
+  if (trailing) {
+    statements.push(trailing);
+  }
+
+  return statements;
+}
+
+function classifyQueryToken(token: string): QueryKind {
+  if (token === "SELECT" || token === "SHOW" || token === "DESCRIBE") {
+    return "Read";
+  }
+
+  if (token === "INSERT" || token === "UPDATE" || token === "DELETE" || token === "MERGE" || token === "CALL") {
+    return "Mutation";
+  }
+
+  if (
+    token === "DROP" ||
+    token === "TRUNCATE" ||
+    token === "ALTER" ||
+    token === "CREATE" ||
+    token === "REINDEX" ||
+    token === "VACUUM"
+  ) {
+    return "Destructive";
+  }
+
+  return "Destructive";
+}
+
+function queryKindAfterExplain(sql: string, index: number): QueryKind {
+  let cursor = index;
+  while (true) {
+    const tokenResult = sqlTokenAt(sql, cursor);
+    if (!tokenResult) {
+      return "Destructive";
+    }
+
+    const token = tokenResult.token;
+    cursor = skipSqlWhitespaceAndComments(sql, tokenResult.nextIndex);
+
+    if (
+      token === "ANALYZE" ||
+      token === "FORMAT" ||
+      token === "COSTS" ||
+      token === "BUFFERS" ||
+      token === "SETTINGS" ||
+      token === "TIMING" ||
+      token === "SUMMARY"
+    ) {
+      continue;
+    }
+
+    if (token === "WITH") {
+      return queryKindWithStatement(sql, cursor);
+    }
+
+    return classifyQueryToken(token);
+  }
+}
+
+function queryKindWithStatement(sql: string, index: number): QueryKind {
+  let cursor = skipSqlWhitespaceAndComments(sql, index);
+  if (sql.slice(cursor, cursor + 9).toUpperCase() === "RECURSIVE") {
+    cursor = skipSqlWhitespaceAndComments(
+      sql,
+      cursor + 9,
+    );
+  }
+
+  let kind: QueryKind = "Read";
+  while (true) {
+    cursor = skipSqlWhitespaceAndComments(sql, cursor);
+    const name = sqlTokenAt(sql, cursor);
+    if (!name) {
+      return "Destructive";
+    }
+
+    cursor = skipSqlWhitespaceAndComments(sql, name.nextIndex);
+    if (sql[cursor] === "(") {
+      const close = skipNestedParentheses(sql, cursor);
+      if (close < 0) {
+        return "Destructive";
+      }
+
+      cursor = skipSqlWhitespaceAndComments(sql, close);
+    }
+
+    const asToken = sqlTokenAt(sql, cursor);
+    if (!asToken || asToken.token !== "AS") {
+      return "Destructive";
+    }
+
+    cursor = skipSqlWhitespaceAndComments(sql, asToken.nextIndex);
+    if (sql[cursor] !== "(") {
+      return "Destructive";
+    }
+
+    const close = skipNestedParentheses(sql, cursor);
+    if (close < 0) {
+      return "Destructive";
+    }
+
+    const bodySql = sql.slice(cursor + 1, close - 1).trim();
+    if (!bodySql) {
+      return "Destructive";
+    }
+
+    kind = combineQueryKinds(kind, statementQueryKind(bodySql));
+    cursor = skipSqlWhitespaceAndComments(sql, close);
+
+    if (sql[cursor] === ",") {
+      cursor = cursor + 1;
+      continue;
+    }
+
+    break;
+  }
+
+  const outer = sqlTokenAt(sql, cursor);
+  if (!outer) {
+    return kind;
+  }
+
+  if (outer.token === "WITH") {
+    return combineQueryKinds(kind, queryKindWithStatement(sql, outer.nextIndex));
+  }
+
+  return combineQueryKinds(kind, classifyQueryToken(outer.token));
+}
+
+function statementQueryKind(statement: string): QueryKind {
+  const first = sqlTokenAt(statement, 0);
+  if (!first) {
+    return "Destructive";
+  }
+
+  if (first.token === "WITH") {
+    return queryKindWithStatement(statement, first.nextIndex);
+  }
+
+  if (first.token === "EXPLAIN") {
+    return queryKindAfterExplain(statement, first.nextIndex);
+  }
+
+  return classifyQueryToken(first.token);
+}
+
 export function classifyDatabaseSql(sql: string): QueryClassification {
-  const normalized = stripDatabaseSqlComments(sql).trim().replace(/\s+/g, " ");
+  const normalized = stripDatabaseSqlComments(sql).trim();
   if (!normalized) {
     return {
       kind: "Destructive",
       requires_confirmation: true,
       confirmation_text: "RUN DESTRUCTIVE SQL",
-      reason: "Empty SQL requires confirmation",
+      reason: "destructive or unknown SQL requires explicit confirmation",
     };
   }
 
-  const firstStatement = normalized.split(";")[0]?.trim() ?? "";
-  if (!firstStatement) {
-    return {
-      kind: "Destructive",
-      requires_confirmation: true,
-      confirmation_text: "RUN DESTRUCTIVE SQL",
-      reason: "Empty SQL requires confirmation",
-    };
+  const normalizedSql = normalized.replace(/\s+/g, " ");
+  const statements = splitSqlStatements(normalizedSql);
+
+  let queryKind: QueryKind = "Read";
+  for (const statement of statements) {
+    queryKind = combineQueryKinds(queryKind, statementQueryKind(statement));
   }
 
-  const firstToken = firstStatement
-    .split(/\s+/)[0]
-    ?.toUpperCase();
-  if (!firstToken) {
-    return {
-      kind: "Destructive",
-      requires_confirmation: true,
-      confirmation_text: "RUN DESTRUCTIVE SQL",
-      reason: "Unclear SQL requires confirmation",
-    };
+  if (statements.length === 0) {
+    queryKind = "Destructive";
   }
 
-  if (["SELECT", "WITH", "SHOW", "PRAGMA", "EXPLAIN"].includes(firstToken)) {
+  if (queryKind === "Read") {
     return {
-      kind: "Read",
+      kind: queryKind,
       requires_confirmation: false,
       confirmation_text: "",
-      reason: "Read-only statement",
+      reason: "read-only statement",
     };
   }
 
-  if (
-    ["INSERT", "UPDATE", "DELETE", "UPSERT", "MERGE", "REPLACE"].includes(firstToken)
-  ) {
+  if (queryKind === "Mutation") {
     return {
-      kind: "Mutation",
+      kind: queryKind,
       requires_confirmation: true,
       confirmation_text: "RUN MUTATION",
-      reason: `${firstToken} statements can modify data and require confirmation`,
-    };
-  }
-
-  if (
-    ["DROP", "ALTER", "TRUNCATE", "CREATE", "DETACH", "ATTACH"].includes(
-      firstToken,
-    )
-  ) {
-    return {
-      kind: "Destructive",
-      requires_confirmation: true,
-      confirmation_text: "RUN DESTRUCTIVE SQL",
-      reason: `${firstToken} statements are potentially destructive and require confirmation`,
+      reason: "mutating SQL requires visible confirmation",
     };
   }
 
   return {
-    kind: "Destructive",
+    kind: queryKind,
     requires_confirmation: true,
     confirmation_text: "RUN DESTRUCTIVE SQL",
-    reason: "Unknown statement type requires confirmation",
+    reason: "destructive or unknown SQL requires explicit confirmation",
   };
 }
 
@@ -1251,6 +1912,9 @@ export function AppShell() {
   const savedContentByPathRef = useRef<Record<string, string>>({});
   const openRequestRef = useRef(0);
   const databaseProfilesLoadRef = useRef<Record<string, number>>({});
+  const databaseInspectProfileRequestRef = useRef<Record<string, number>>({});
+  const databaseQueryRequestRef = useRef<Record<string, number>>({});
+  const databaseExportRequestRef = useRef<Record<string, number>>({});
   const docsLoadRequestRef = useRef<DocsLoadRequestState>({});
   const agentSessionsLoadRef = useRef<Record<string, number>>({});
   const languageRefreshRequestRef = useRef<LanguageRefreshRequestState>({});
@@ -4154,6 +4818,32 @@ export function AppShell() {
     );
   }
 
+  function getWorkspaceRoot(workspaceId: string): string | null {
+    return (
+      workspaceStore
+        .getState()
+        .registry.workspaces.find((workspace) => workspace.id === workspaceId)
+        ?.path ?? null
+    );
+  }
+
+  function isLatestDatabaseInspectProfileRequest(
+    workspaceId: string,
+    requestId: number,
+  ) {
+    return (
+      databaseInspectProfileRequestRef.current[workspaceId] === requestId
+    );
+  }
+
+  function isLatestDatabaseQueryRequest(workspaceId: string, requestId: number) {
+    return databaseQueryRequestRef.current[workspaceId] === requestId;
+  }
+
+  function isLatestDatabaseExportRequest(workspaceId: string, requestId: number) {
+    return databaseExportRequestRef.current[workspaceId] === requestId;
+  }
+
   async function inspectDatabaseProfile(profileId: string) {
     if (!activeWorkspace || !activeWorkspaceId) {
       return;
@@ -4161,6 +4851,12 @@ export function AppShell() {
 
     const workspaceId = activeWorkspaceId;
     const workspaceRoot = activeWorkspace.path;
+    const requestId = (databaseInspectProfileRequestRef.current[workspaceId] ?? 0) + 1;
+    databaseInspectProfileRequestRef.current = {
+      ...databaseInspectProfileRequestRef.current,
+      [workspaceId]: requestId,
+    };
+
     selectDatabaseProfileForWorkspace(profileId);
     updateDatabase(workspaceId, (database) => ({
       ...database,
@@ -4169,42 +4865,17 @@ export function AppShell() {
       confirmation: null,
     }));
 
-    try {
-      const schema = await inspectDatabaseSchema(profileId);
-      const currentWorkspace = workspaceStore
-        .getState()
-        .registry.workspaces.find((workspace) => workspace.id === workspaceId);
-      const isActiveWorkspace =
-        workspaceStore.getState().registry.active_workspace_id === workspaceId;
-
-      if (!hasRegisteredWorkspace(workspaceId) || !isActiveWorkspace) {
-        return;
-      }
-
-      if (!currentWorkspace || currentWorkspace.path !== workspaceRoot) {
-        return;
-      }
-
-      updateDatabase(workspaceId, (database) =>
-        storeDatabaseSchema(
-          { ...database, loading: false, error: null },
-          schema,
-        ),
-      );
-    } catch (error) {
-      const isActiveWorkspace =
-        workspaceStore.getState().registry.active_workspace_id === workspaceId;
-
-      if (!hasRegisteredWorkspace(workspaceId) || !isActiveWorkspace) {
-        return;
-      }
-
-      updateDatabase(workspaceId, (database) => ({
-        ...database,
-        loading: false,
-        error: `Inspect schema failed: ${terminalErrorMessage(error)}`,
-      }));
-    }
+    await inspectDatabaseProfileRequest({
+      workspaceId,
+      workspaceRoot,
+      profileId,
+      requestId,
+      hasRegisteredWorkspace,
+      getWorkspaceRoot,
+      isLatestInspectProfileRequest: isLatestDatabaseInspectProfileRequest,
+      updateDatabase,
+      inspectDatabaseSchema,
+    });
   }
 
   function updateDatabaseDraftQuery(query: string) {
@@ -4217,19 +4888,33 @@ export function AppShell() {
     );
   }
 
-  async function refreshDatabaseHistory(profileId: string) {
-    if (!activeWorkspace || !activeWorkspaceId) {
+  async function refreshDatabaseHistory(
+    workspaceId: string,
+    workspaceRoot: string,
+    profileId: string,
+  ) {
+    if (!workspaceId || !workspaceRoot || !profileId) {
       return;
     }
 
-    const workspaceId = activeWorkspaceId;
-
     try {
       const history = await listDatabaseQueryHistory(profileId);
-      if (
-        !hasRegisteredWorkspace(workspaceId) ||
-        workspaceStore.getState().registry.active_workspace_id !== workspaceId
-      ) {
+
+      if (!hasRegisteredWorkspace(workspaceId)) {
+        return;
+      }
+
+      const currentWorkspace = workspaceStore
+        .getState()
+        .registry.workspaces.find((workspace) => workspace.id === workspaceId);
+      if (!currentWorkspace || currentWorkspace.path !== workspaceRoot) {
+        return;
+      }
+
+      const currentProfile = workspaceViewStore
+        .getState()
+        .viewFor(workspaceId).database.activeProfileId;
+      if (currentProfile !== profileId) {
         return;
       }
 
@@ -4239,66 +4924,6 @@ export function AppShell() {
       }));
     } catch {
       // History errors do not block query results.
-    }
-  }
-
-  async function executeDatabaseQueryRequest(
-    workspaceId: string,
-    profileId: string,
-    sql: string,
-    workspaceRoot: string,
-  ) {
-    const trimmed = sql.trim();
-    if (!trimmed) {
-      updateDatabase(workspaceId, (database) => ({
-        ...database,
-        loading: false,
-        error: "Database query is empty",
-        confirmation: null,
-      }));
-      return;
-    }
-
-    updateDatabase(workspaceId, beginDatabaseQuery);
-    try {
-      const result = await executeDatabaseQuery({
-        profile_id: profileId,
-        sql: trimmed,
-        limit: 500,
-      });
-
-      const currentWorkspace = workspaceStore
-        .getState()
-        .registry.workspaces.find((workspace) => workspace.id === workspaceId);
-      if (
-        !hasRegisteredWorkspace(workspaceId) ||
-        workspaceStore.getState().registry.active_workspace_id !== workspaceId ||
-        !currentWorkspace ||
-        currentWorkspace.path !== workspaceRoot
-      ) {
-        return;
-      }
-
-      updateDatabase(workspaceId, (database) =>
-        storeDatabaseQueryResult(database, result),
-      );
-      setActiveActivity("database");
-      setPanelOpen(true);
-      setSurface("database-result");
-      await refreshDatabaseHistory(profileId);
-    } catch (error) {
-      if (
-        !hasRegisteredWorkspace(workspaceId) ||
-        workspaceStore.getState().registry.active_workspace_id !== workspaceId
-      ) {
-        return;
-      }
-
-      updateDatabase(workspaceId, (database) => ({
-        ...database,
-        loading: false,
-        error: `Database query failed: ${terminalErrorMessage(error)}`,
-      }));
     }
   }
 
@@ -4333,7 +4958,32 @@ export function AppShell() {
       confirmation: null,
       error: null,
     }));
-    void executeDatabaseQueryRequest(workspaceId, profileId, database.queryDraft, workspaceRoot);
+    const requestId = (databaseQueryRequestRef.current[workspaceId] ?? 0) + 1;
+    databaseQueryRequestRef.current = {
+      ...databaseQueryRequestRef.current,
+      [workspaceId]: requestId,
+    };
+    void executeDatabaseQueryRequest({
+      workspaceId,
+      workspaceRoot,
+      profileId,
+      sql: database.queryDraft,
+      requestId,
+      confirmation: null,
+      hasRegisteredWorkspace,
+      getWorkspaceRoot,
+      isLatestDatabaseQuery: isLatestDatabaseQueryRequest,
+      updateDatabase,
+      executeDatabaseQuery,
+      isActiveWorkspace: (currentWorkspaceId) =>
+        workspaceStore.getState().registry.active_workspace_id === currentWorkspaceId,
+      refreshHistory: refreshDatabaseHistory,
+      onResultApplied: () => {
+        setActiveActivity("database");
+        setPanelOpen(true);
+        setSurface("database-result");
+      },
+    });
   }
 
   function openDatabaseTable(profileId: string, table: DatabaseTable) {
@@ -4360,7 +5010,32 @@ export function AppShell() {
     updateDatabase(workspaceId, (database) =>
       selectDatabaseProfile(updateDatabaseDraft(database, query), profileId),
     );
-    void executeDatabaseQueryRequest(workspaceId, profileId, query, workspaceRoot);
+    const requestId = (databaseQueryRequestRef.current[workspaceId] ?? 0) + 1;
+    databaseQueryRequestRef.current = {
+      ...databaseQueryRequestRef.current,
+      [workspaceId]: requestId,
+    };
+    void executeDatabaseQueryRequest({
+      workspaceId,
+      workspaceRoot,
+      profileId,
+      sql: query,
+      requestId,
+      confirmation: null,
+      hasRegisteredWorkspace,
+      getWorkspaceRoot,
+      isLatestDatabaseQuery: isLatestDatabaseQueryRequest,
+      updateDatabase,
+      executeDatabaseQuery,
+      isActiveWorkspace: (currentWorkspaceId) =>
+        workspaceStore.getState().registry.active_workspace_id === currentWorkspaceId,
+      refreshHistory: refreshDatabaseHistory,
+      onResultApplied: () => {
+        setActiveActivity("database");
+        setPanelOpen(true);
+        setSurface("database-result");
+      },
+    });
   }
 
   function confirmDatabaseQuery(input: string) {
@@ -4387,12 +5062,32 @@ export function AppShell() {
       confirmation: null,
       error: null,
     }));
-    void executeDatabaseQueryRequest(
+    const requestId = (databaseQueryRequestRef.current[workspaceId] ?? 0) + 1;
+    databaseQueryRequestRef.current = {
+      ...databaseQueryRequestRef.current,
+      [workspaceId]: requestId,
+    };
+    void executeDatabaseQueryRequest({
       workspaceId,
-      profileId,
-      database.queryDraft,
       workspaceRoot,
-    );
+      profileId,
+      sql: database.queryDraft,
+      requestId,
+      confirmation: confirmation.confirmationText,
+      hasRegisteredWorkspace,
+      getWorkspaceRoot,
+      isLatestDatabaseQuery: isLatestDatabaseQueryRequest,
+      updateDatabase,
+      executeDatabaseQuery,
+      isActiveWorkspace: (currentWorkspaceId) =>
+        workspaceStore.getState().registry.active_workspace_id === currentWorkspaceId,
+      refreshHistory: refreshDatabaseHistory,
+      onResultApplied: () => {
+        setActiveActivity("database");
+        setPanelOpen(true);
+        setSurface("database-result");
+      },
+    });
   }
 
   function cancelDatabaseConfirmation() {
@@ -4430,18 +5125,25 @@ export function AppShell() {
       return;
     }
 
-    try {
-      const data = await exportDatabaseQueryResult(workspaceRoot, database.activeResult);
-      updateDatabase(workspaceId, (state) => ({
-        ...state,
-        export: data,
-      }));
-    } catch (error) {
-      updateDatabase(workspaceId, (state) => ({
-        ...state,
-        error: `Export failed: ${terminalErrorMessage(error)}`,
-      }));
-    }
+    const requestId = (databaseExportRequestRef.current[workspaceId] ?? 0) + 1;
+    databaseExportRequestRef.current = {
+      ...databaseExportRequestRef.current,
+      [workspaceId]: requestId,
+    };
+    const resultId = databaseResultId(database.activeResult);
+
+    void exportDatabaseQueryResultRequest({
+      workspaceId,
+      workspaceRoot,
+      requestId,
+      resultId,
+      activeResult: database.activeResult,
+      hasRegisteredWorkspace,
+      getWorkspaceRoot,
+      isLatestDatabaseExportRequest,
+      updateDatabase,
+      exportDatabaseQueryResult,
+    });
   }
 
   function runCommand(id: string) {
