@@ -2638,6 +2638,10 @@ button {
     padding: 14px 16px 22px;
   }
 
+  .markdown-preview .badge2 {
+    display: inline-flex;
+  }
+
   .doc-reference-reason {
     display: none;
   }
