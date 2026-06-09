@@ -996,11 +996,7 @@ fn normalize_lsp_document_path(path: &str) -> Result<String, String> {
                 parts.push(part.to_string());
             }
             Component::CurDir => {}
-            Component::ParentDir => {
-                if parts.pop().is_none() {
-                    return Err("document path escapes workspace".to_string());
-                }
-            }
+            Component::ParentDir => return Err("document path escapes workspace".to_string()),
             Component::RootDir | Component::Prefix(_) => {
                 return Err("document path escapes workspace".to_string());
             }
@@ -1669,7 +1665,7 @@ mod tests {
             .to_string_lossy()
             .to_string();
 
-        for path in ["../outside.rs", "/tmp/outside.rs"] {
+        for path in ["../outside.rs", "/tmp/outside.rs", "src/../main.rs"] {
             let result = state.lsp_open_document(
                 &lsp_state,
                 &workspace_root,
