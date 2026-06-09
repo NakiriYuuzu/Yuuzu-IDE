@@ -2,6 +2,10 @@ import { create, type StoreApi, useStore } from "zustand";
 
 import type { EditorFileState } from "../features/files/file-model";
 import {
+  createGitState,
+  type GitViewState,
+} from "../features/git/git-model";
+import {
   createTaskState,
   type TaskViewState,
 } from "../features/tasks/task-model";
@@ -11,7 +15,12 @@ import {
 } from "../features/terminal/terminal-model";
 import type { ActivityId } from "./activity-rail";
 
-export type Surface = "empty" | "editor" | "terminal";
+export type Surface =
+  | "empty"
+  | "editor"
+  | "terminal"
+  | "git-diff"
+  | "git-graph";
 
 export type WorkspaceViewState = {
   activeActivity: ActivityId;
@@ -20,6 +29,7 @@ export type WorkspaceViewState = {
   editor: EditorFileState;
   terminal: TerminalViewState;
   task: TaskViewState;
+  git: GitViewState;
 };
 
 type WorkspaceViewStore = {
@@ -41,6 +51,10 @@ type WorkspaceViewStore = {
     workspaceId: string | null,
     update: (task: TaskViewState) => TaskViewState,
   ) => void;
+  updateGit: (
+    workspaceId: string | null,
+    update: (git: GitViewState) => GitViewState,
+  ) => void;
 };
 
 function defaultWorkspaceView(): WorkspaceViewState {
@@ -51,6 +65,7 @@ function defaultWorkspaceView(): WorkspaceViewState {
     editor: { tabs: [], activePath: null },
     terminal: createTerminalState(),
     task: createTaskState(),
+    git: createGitState(),
   };
 }
 
@@ -70,6 +85,17 @@ function freezeWorkspaceView(view: WorkspaceViewState): WorkspaceViewState {
   Object.freeze(view.task.pendingOutputByRunId);
   Object.freeze(view.task.pendingFinishByRunId);
   Object.freeze(view.task);
+  if (view.git.status) {
+    Object.freeze(view.git.status.changes);
+    Object.freeze(view.git.status);
+  }
+  Object.freeze(view.git.diffsByKey);
+  Object.freeze(view.git.branches);
+  for (const commit of view.git.graph) {
+    Object.freeze(commit.refs);
+  }
+  Object.freeze(view.git.graph);
+  Object.freeze(view.git);
   return Object.freeze(view);
 }
 
@@ -128,6 +154,18 @@ export function createWorkspaceViewStore() {
           views: {
             ...state.views,
             [key]: { ...current, task: update(current.task) },
+          },
+        };
+      }),
+    updateGit: (workspaceId, update) =>
+      set((state) => {
+        const key = workspaceId ?? shellKey;
+        const current = state.views[key] ?? defaultView;
+
+        return {
+          views: {
+            ...state.views,
+            [key]: { ...current, git: update(current.git) },
           },
         };
       }),
