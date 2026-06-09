@@ -41,6 +41,26 @@ import {
   saveDraft,
 } from "../features/files/draft-store";
 import {
+  commitGit,
+  discardGitPaths,
+  getGitStatus,
+  stageGitPaths,
+  stashGit,
+  unstageGitPaths,
+} from "../features/git/git-api";
+import { GitPanel } from "../features/git/GitPanel";
+import {
+  changeBadgeCount,
+  confirmationTextForGitAction,
+  replaceGitStatus,
+  selectDiff,
+  setGitError,
+  setGitLoading,
+  updateGitCommitMessage,
+  type GitRepositoryStatus,
+  type GitViewState,
+} from "../features/git/git-model";
+import {
   applySavedVersion,
   closeFileTab,
   markExternalChangeFromDisk,
@@ -262,6 +282,7 @@ function PanelBody({
   terminalError,
   taskState,
   taskError,
+  gitState,
   onOpenFile,
   onCreateFile,
   onRenamePath,
@@ -277,6 +298,15 @@ function PanelBody({
   onActivateTaskRun,
   onStopTaskRun,
   onRerunTaskRun,
+  onGitRefresh,
+  onGitCommitMessageChange,
+  onGitCommit,
+  onGitStage,
+  onGitUnstage,
+  onGitDiscard,
+  onGitOpenDiff,
+  onGitStash,
+  onGitOpenGraph,
 }: {
   active: ActivityId;
   refreshKey: number;
@@ -287,6 +317,7 @@ function PanelBody({
   terminalError: string | null;
   taskState: TaskViewState;
   taskError: string | null;
+  gitState: GitViewState;
   onOpenFile: (path: string) => void;
   onCreateFile: (relativePath: string) => Promise<void>;
   onRenamePath: (path: string, newName: string) => Promise<void>;
@@ -302,7 +333,33 @@ function PanelBody({
   onActivateTaskRun: (runId: string) => void;
   onStopTaskRun: (runId: string) => void;
   onRerunTaskRun: (run: TaskRun) => void;
+  onGitRefresh: () => void;
+  onGitCommitMessageChange: (message: string) => void;
+  onGitCommit: (options: { amend: boolean; pushAfter: boolean }) => void;
+  onGitStage: (path: string) => void;
+  onGitUnstage: (path: string) => void;
+  onGitDiscard: (path: string) => void;
+  onGitOpenDiff: (path: string, staged: boolean) => void;
+  onGitStash: () => void;
+  onGitOpenGraph: () => void;
 }) {
+  if (active === "git") {
+    return (
+      <GitPanel
+        state={gitState}
+        onRefresh={onGitRefresh}
+        onCommitMessageChange={onGitCommitMessageChange}
+        onCommit={onGitCommit}
+        onStage={onGitStage}
+        onUnstage={onGitUnstage}
+        onDiscard={onGitDiscard}
+        onOpenDiff={onGitOpenDiff}
+        onStash={onGitStash}
+        onOpenGraph={onGitOpenGraph}
+      />
+    );
+  }
+
   if (active === "search") {
     return <SearchPanel onOpenFile={onOpenFile} />;
   }
@@ -433,6 +490,7 @@ export function AppShell() {
     (state) => state.updateTerminal,
   );
   const updateTask = useWorkspaceViewStore((state) => state.updateTask);
+  const updateGit = useWorkspaceViewStore((state) => state.updateGit);
 
   const activeWorkspace = useMemo(
     () =>
@@ -686,6 +744,38 @@ export function AppShell() {
       disposed = true;
     };
   }, [activeWorkspaceId, activeWorkspace?.path, updateTask]);
+
+  useEffect(() => {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    let disposed = false;
+
+    updateGit(workspaceId, (git) => setGitLoading(setGitError(git, null), true));
+
+    void getGitStatus(workspaceRoot)
+      .then((status) => {
+        if (disposed) {
+          return;
+        }
+
+        updateGit(workspaceId, (git) => replaceGitStatus(git, status));
+      })
+      .catch((error) => {
+        if (!disposed) {
+          updateGit(workspaceId, (git) =>
+            setGitError(git, `Status failed: ${terminalErrorMessage(error)}`),
+          );
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [activeWorkspaceId, activeWorkspace?.path, updateGit]);
 
   useEffect(() => {
     if (!activeWorkspace || !activeWorkspaceId) {
@@ -1335,6 +1425,113 @@ export function AppShell() {
     void stopTaskRunById(run.id);
   }
 
+  function updateGitMessage(message: string) {
+    updateGit(activeWorkspaceId, (git) =>
+      updateGitCommitMessage(git, message),
+    );
+  }
+
+  async function refreshGitStatus(label = "Refresh") {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    updateGit(workspaceId, (git) => setGitLoading(setGitError(git, null), true));
+
+    try {
+      const status = await getGitStatus(workspaceRoot);
+      updateGit(workspaceId, (git) => replaceGitStatus(git, status));
+    } catch (error) {
+      updateGit(workspaceId, (git) =>
+        setGitError(git, `${label} failed: ${terminalErrorMessage(error)}`),
+      );
+    }
+  }
+
+  async function runGitStatusMutation(
+    label: string,
+    mutation: (workspaceRoot: string) => Promise<GitRepositoryStatus>,
+  ) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    updateGit(workspaceId, (git) => setGitLoading(setGitError(git, null), true));
+
+    try {
+      const status = await mutation(workspaceRoot);
+      updateGit(workspaceId, (git) => replaceGitStatus(git, status));
+    } catch (error) {
+      updateGit(workspaceId, (git) =>
+        setGitError(git, `${label} failed: ${terminalErrorMessage(error)}`),
+      );
+    }
+  }
+
+  function stageGitPath(path: string) {
+    void runGitStatusMutation("Stage", (workspaceRoot) =>
+      stageGitPaths(workspaceRoot, [path]),
+    );
+  }
+
+  function unstageGitPath(path: string) {
+    void runGitStatusMutation("Unstage", (workspaceRoot) =>
+      unstageGitPaths(workspaceRoot, [path]),
+    );
+  }
+
+  function discardGitPath(path: string) {
+    void runGitStatusMutation("Discard", (workspaceRoot) =>
+      discardGitPaths(
+        workspaceRoot,
+        [path],
+        confirmationTextForGitAction({ kind: "discard", paths: [path] }),
+      ),
+    );
+  }
+
+  function commitFromGitPanel(options: { amend: boolean; pushAfter: boolean }) {
+    const message = workspaceViewStore
+      .getState()
+      .viewFor(activeWorkspaceId)
+      .git.commitMessage.trim();
+
+    if (!message) {
+      return;
+    }
+
+    const label = options.amend
+      ? "Amend"
+      : options.pushAfter
+        ? "Commit & Push"
+        : "Commit";
+
+    void runGitStatusMutation(label, (workspaceRoot) =>
+      commitGit(workspaceRoot, message, options.amend, options.pushAfter),
+    );
+  }
+
+  function stashFromGitPanel() {
+    void runGitStatusMutation("Stash", (workspaceRoot) =>
+      stashGit(workspaceRoot, "", true),
+    );
+  }
+
+  function openGitDiff(path: string, staged: boolean) {
+    updateGit(activeWorkspaceId, (git) => selectDiff(git, { path, staged }));
+    setSurface("git-diff");
+    setActiveActivity("git");
+  }
+
+  function openGitGraph() {
+    setSurface("git-graph");
+    setActiveActivity("git");
+  }
+
   function runCommand(id: string) {
     switch (id) {
       case "save-file":
@@ -1427,46 +1624,52 @@ export function AppShell() {
       </header>
 
       <div className="body">
-        <ActivityRail active={activeActivity} onSelect={setActiveActivity} />
+        <ActivityRail
+          active={activeActivity}
+          badges={{ git: changeBadgeCount(view.git.status) }}
+          onSelect={setActiveActivity}
+        />
         {panelOpen ? (
           <aside className="panel">
-            <div className="panel-head">
-              <span className="panel-title">{panelTitles[activeActivity]}</span>
-              <div className="panel-acts">
-                {activeActivity === "explorer" ? (
-                  <>
-                    <button
-                      type="button"
-                      className="iconbtn"
-                      title={`New file in ${activeWorkspace?.name ?? "workspace"}`}
-                      aria-label={`New file in ${
-                        activeWorkspace?.name ?? "workspace"
-                      }`}
-                      disabled={!activeWorkspace}
-                      onClick={() => void promptCreateFileAtWorkspaceRoot()}
-                    >
-                      <Plus aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="iconbtn"
-                      title={`Refresh ${
-                        activeWorkspace?.name ?? "workspace"
-                      } explorer`}
-                      aria-label={`Refresh ${
-                        activeWorkspace?.name ?? "workspace"
-                      } explorer`}
-                      disabled={!activeWorkspace}
-                      onClick={() =>
-                        setFileTreeRefreshKey((value) => value + 1)
-                      }
-                    >
-                      <RotateCw aria-hidden="true" />
-                    </button>
-                  </>
-                ) : null}
+            {activeActivity === "git" ? null : (
+              <div className="panel-head">
+                <span className="panel-title">{panelTitles[activeActivity]}</span>
+                <div className="panel-acts">
+                  {activeActivity === "explorer" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="iconbtn"
+                        title={`New file in ${activeWorkspace?.name ?? "workspace"}`}
+                        aria-label={`New file in ${
+                          activeWorkspace?.name ?? "workspace"
+                        }`}
+                        disabled={!activeWorkspace}
+                        onClick={() => void promptCreateFileAtWorkspaceRoot()}
+                      >
+                        <Plus aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        className="iconbtn"
+                        title={`Refresh ${
+                          activeWorkspace?.name ?? "workspace"
+                        } explorer`}
+                        aria-label={`Refresh ${
+                          activeWorkspace?.name ?? "workspace"
+                        } explorer`}
+                        disabled={!activeWorkspace}
+                        onClick={() =>
+                          setFileTreeRefreshKey((value) => value + 1)
+                        }
+                      >
+                        <RotateCw aria-hidden="true" />
+                      </button>
+                    </>
+                  ) : null}
+                </div>
               </div>
-            </div>
+            )}
             <PanelBody
               active={activeActivity}
               refreshKey={fileTreeRefreshKey}
@@ -1477,6 +1680,7 @@ export function AppShell() {
               terminalError={terminalError}
               taskState={view.task}
               taskError={taskError}
+              gitState={view.git}
               onOpenFile={openFile}
               onCreateFile={createFileFromExplorer}
               onRenamePath={renamePathFromExplorer}
@@ -1492,6 +1696,15 @@ export function AppShell() {
               onActivateTaskRun={activateTaskRunById}
               onStopTaskRun={(id) => void stopTaskRunById(id)}
               onRerunTaskRun={rerunTaskRun}
+              onGitRefresh={() => void refreshGitStatus()}
+              onGitCommitMessageChange={updateGitMessage}
+              onGitCommit={commitFromGitPanel}
+              onGitStage={stageGitPath}
+              onGitUnstage={unstageGitPath}
+              onGitDiscard={discardGitPath}
+              onGitOpenDiff={openGitDiff}
+              onGitStash={stashFromGitPanel}
+              onGitOpenGraph={openGitGraph}
             />
           </aside>
         ) : null}
@@ -1753,6 +1966,16 @@ export function AppShell() {
                     </div>
                   )}
                 </div>
+              ) : surface === "git-diff" ? (
+                <div className="large-file-note">
+                  {view.git.selectedDiff
+                    ? `${
+                        view.git.selectedDiff.staged ? "Staged" : "Changes"
+                      } diff selected: ${view.git.selectedDiff.path}`
+                    : "No Git diff selected"}
+                </div>
+              ) : surface === "git-graph" ? (
+                <div className="large-file-note">Git graph view</div>
               ) : (
                 <>
                   <div className="workspace-hero">

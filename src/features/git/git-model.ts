@@ -73,6 +73,8 @@ export type GitConfirmationAction =
   | { kind: "reset-hard" }
   | { kind: "rebase"; target: string };
 
+export type GitAction = "commit" | "commit-push" | "amend" | "stash";
+
 export type GitViewState = {
   status: GitRepositoryStatus | null;
   loading: boolean;
@@ -125,6 +127,13 @@ export function setCommitMessage(
   commitMessage: string,
 ): GitViewState {
   return { ...state, commitMessage };
+}
+
+export function updateGitCommitMessage(
+  state: GitViewState,
+  commitMessage: string,
+): GitViewState {
+  return setCommitMessage(state, commitMessage);
 }
 
 export function selectDiff(
@@ -184,6 +193,27 @@ export function changeBadgeCount(
 ): string | null {
   const count = status?.changes.length ?? 0;
   return count > 0 ? String(count) : null;
+}
+
+export function canCommit(state: GitViewState): boolean {
+  if (!state.status || state.commitMessage.trim().length === 0) {
+    return false;
+  }
+
+  return groupGitChanges(state.status.changes).staged.length > 0;
+}
+
+export function gitActionLabel(action: GitAction): string {
+  switch (action) {
+    case "commit":
+      return "Commit";
+    case "commit-push":
+      return "Commit & Push";
+    case "amend":
+      return "Amend";
+    case "stash":
+      return "Stash";
+  }
 }
 
 export function statusBranchLabel(status: GitRepositoryStatus | null): string {

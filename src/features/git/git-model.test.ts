@@ -1,15 +1,18 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  canCommit,
   changeBadgeCount,
   confirmationTextForGitAction,
   createGitState,
   decorationMapFromStatus,
+  gitActionLabel,
   groupGitChanges,
   replaceGitStatus,
   selectDiff,
   statusBranchLabel,
   storeDiff,
+  updateGitCommitMessage,
 } from "./git-model";
 import type { GitRepositoryStatus } from "./git-model";
 
@@ -132,5 +135,29 @@ describe("git-model", () => {
 
     expect(state.status?.branch).toBe("main");
     expect(state.commitMessage).toBe("feat: ui");
+  });
+
+  test("commit is enabled only when staged changes and a message exist", () => {
+    const withStatus = replaceGitStatus(createGitState(), status);
+
+    expect(canCommit(withStatus)).toBe(false);
+    expect(
+      canCommit(updateGitCommitMessage(withStatus, "feat: git panel")),
+    ).toBe(true);
+    expect(
+      canCommit(
+        updateGitCommitMessage(
+          replaceGitStatus(createGitState(), { ...status, changes: [] }),
+          "feat: none",
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  test("git action labels match the Source Control panel commands", () => {
+    expect(gitActionLabel("commit")).toBe("Commit");
+    expect(gitActionLabel("commit-push")).toBe("Commit & Push");
+    expect(gitActionLabel("amend")).toBe("Amend");
+    expect(gitActionLabel("stash")).toBe("Stash");
   });
 });

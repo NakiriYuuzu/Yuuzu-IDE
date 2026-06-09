@@ -1,0 +1,281 @@
+import {
+  Archive,
+  Check,
+  GitGraph,
+  Minus,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Upload,
+} from "lucide-react";
+
+import {
+  canCommit,
+  gitActionLabel,
+  groupGitChanges,
+  statusBranchLabel,
+  type GitFileStatus,
+  type GitViewState,
+} from "./git-model";
+
+export type GitPanelProps = {
+  state: GitViewState;
+  onRefresh: () => void;
+  onCommitMessageChange: (message: string) => void;
+  onCommit: (options: { amend: boolean; pushAfter: boolean }) => void;
+  onStage: (path: string) => void;
+  onUnstage: (path: string) => void;
+  onDiscard: (path: string) => void;
+  onOpenDiff: (path: string, staged: boolean) => void;
+  onStash: () => void;
+  onOpenGraph: () => void;
+};
+
+type GitChangeRowProps = {
+  change: GitFileStatus;
+  staged: boolean;
+  disabled: boolean;
+  onStage: (path: string) => void;
+  onUnstage: (path: string) => void;
+  onDiscard: (path: string) => void;
+  onOpenDiff: (path: string, staged: boolean) => void;
+};
+
+export function GitPanel({
+  state,
+  onRefresh,
+  onCommitMessageChange,
+  onCommit,
+  onStage,
+  onUnstage,
+  onDiscard,
+  onOpenDiff,
+  onStash,
+  onOpenGraph,
+}: GitPanelProps) {
+  const grouped = state.status
+    ? groupGitChanges(state.status.changes)
+    : { staged: [], unstaged: [], conflicts: [] };
+  const branchLabel = statusBranchLabel(state.status) || "No repository";
+  const commitEnabled = canCommit(state) && !state.loading;
+  const amendEnabled =
+    Boolean(state.status) && state.commitMessage.trim().length > 0 && !state.loading;
+  const stashEnabled =
+    Boolean(state.status && state.status.changes.length > 0) && !state.loading;
+
+  return (
+    <div className="git-panel">
+      <div className="git-panel-header">
+        <span>Source Control</span>
+        <div className="git-panel-actions">
+          <button
+            type="button"
+            className="iconbtn"
+            title={gitActionLabel("commit")}
+            aria-label={gitActionLabel("commit")}
+            disabled={!commitEnabled}
+            onClick={() => onCommit({ amend: false, pushAfter: false })}
+          >
+            <Check aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="iconbtn"
+            title="Refresh"
+            aria-label="Refresh"
+            disabled={state.loading}
+            onClick={onRefresh}
+          >
+            <RefreshCw aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="iconbtn"
+            title="View graph"
+            aria-label="View graph"
+            onClick={onOpenGraph}
+          >
+            <GitGraph aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+
+      <div className="git-commit-region">
+        <textarea
+          className="input2 git-message"
+          aria-label="Commit message"
+          placeholder="Message"
+          value={state.commitMessage}
+          onChange={(event) => onCommitMessageChange(event.currentTarget.value)}
+        />
+        <button
+          type="button"
+          className="btn primary git-commit-push"
+          disabled={!commitEnabled}
+          onClick={() => onCommit({ amend: false, pushAfter: true })}
+        >
+          <Upload aria-hidden="true" />
+          <span>{gitActionLabel("commit-push")}</span>
+          <span className="mono git-branch-label">{branchLabel}</span>
+        </button>
+        <div className="git-secondary-actions">
+          <button
+            type="button"
+            className="btn"
+            disabled={!amendEnabled}
+            onClick={() => onCommit({ amend: true, pushAfter: false })}
+          >
+            <Check aria-hidden="true" />
+            {gitActionLabel("amend")}
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={!stashEnabled}
+            onClick={onStash}
+          >
+            <Archive aria-hidden="true" />
+            {gitActionLabel("stash")}
+          </button>
+        </div>
+        {state.error ? (
+          <div className="git-error" role="alert">
+            {state.error}
+          </div>
+        ) : null}
+      </div>
+
+      {state.loading && !state.status ? (
+        <div className="git-empty">Loading source control</div>
+      ) : null}
+      {!state.loading && !state.status ? (
+        <div className="git-empty">No Git status available</div>
+      ) : null}
+
+      <section aria-label="Staged Changes">
+        <div className="section-label">
+          <span>Staged Changes</span>
+          <span className="git-count">{grouped.staged.length}</span>
+        </div>
+        {grouped.staged.length > 0 ? (
+          grouped.staged.map((change) => (
+            <GitChangeRow
+              key={`staged:${change.path}`}
+              change={change}
+              staged={true}
+              disabled={state.loading}
+              onStage={onStage}
+              onUnstage={onUnstage}
+              onDiscard={onDiscard}
+              onOpenDiff={onOpenDiff}
+            />
+          ))
+        ) : (
+          <div className="git-empty-row">No staged changes</div>
+        )}
+      </section>
+
+      <section aria-label="Changes">
+        <div className="section-label">
+          <span>Changes</span>
+          <span className="git-count">{grouped.unstaged.length}</span>
+        </div>
+        {grouped.unstaged.length > 0 ? (
+          grouped.unstaged.map((change) => (
+            <GitChangeRow
+              key={`unstaged:${change.path}`}
+              change={change}
+              staged={false}
+              disabled={state.loading}
+              onStage={onStage}
+              onUnstage={onUnstage}
+              onDiscard={onDiscard}
+              onOpenDiff={onOpenDiff}
+            />
+          ))
+        ) : (
+          <div className="git-empty-row">No changes</div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function GitChangeRow({
+  change,
+  staged,
+  disabled,
+  onStage,
+  onUnstage,
+  onDiscard,
+  onOpenDiff,
+}: GitChangeRowProps) {
+  const token = gitStatusToken(change);
+
+  return (
+    <div className="git-change-row">
+      <span className={`git-token git-token-${token}`}>{token}</span>
+      <button
+        type="button"
+        className="git-change-path mono"
+        title={change.path}
+        onClick={() => onOpenDiff(change.path, staged)}
+      >
+        {change.path}
+      </button>
+      <div className="git-row-actions">
+        {staged ? (
+          <button
+            type="button"
+            className="iconbtn"
+            title={`Unstage ${change.path}`}
+            aria-label={`Unstage ${change.path}`}
+            disabled={disabled}
+            onClick={() => onUnstage(change.path)}
+          >
+            <Minus aria-hidden="true" />
+          </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="iconbtn"
+              title={`Stage ${change.path}`}
+              aria-label={`Stage ${change.path}`}
+              disabled={disabled}
+              onClick={() => onStage(change.path)}
+            >
+              <Plus aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="iconbtn"
+              title={`Discard ${change.path}`}
+              aria-label={`Discard ${change.path}`}
+              disabled={disabled}
+              onClick={() => onDiscard(change.path)}
+            >
+              <RotateCcw aria-hidden="true" />
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function gitStatusToken(change: GitFileStatus): "A" | "D" | "M" | "U" {
+  switch (change.kind) {
+    case "added":
+    case "untracked":
+      return "A";
+    case "deleted":
+      return "D";
+    case "conflict":
+      return "U";
+    case "modified":
+    case "renamed":
+    case "copied":
+      return "M";
+  }
+}

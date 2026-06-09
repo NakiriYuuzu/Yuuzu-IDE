@@ -22,13 +22,12 @@ type ActivityItem = {
   id: ActivityId;
   label: string;
   icon: LucideIcon;
-  badge?: string;
 };
 
 const activities: ActivityItem[] = [
   { id: "explorer", label: "Explorer", icon: Files },
   { id: "search", label: "Search", icon: Search },
-  { id: "git", label: "Git", icon: GitBranch, badge: "3" },
+  { id: "git", label: "Git", icon: GitBranch },
   { id: "terminal", label: "Terminal", icon: SquareTerminal },
   { id: "tasks", label: "Tasks", icon: ClipboardList },
   { id: "database", label: "Database", icon: Database },
@@ -37,14 +36,17 @@ const activities: ActivityItem[] = [
 
 type ActivityRailProps = {
   active: ActivityId;
+  badges?: Partial<Record<ActivityId, string | null>>;
   onSelect: (activity: ActivityId) => void;
 };
 
-export function ActivityRail({ active, onSelect }: ActivityRailProps) {
+export function ActivityRail({ active, badges, onSelect }: ActivityRailProps) {
   return (
     <nav className="rail" aria-label="Primary workspace tools">
       {activities.map((activity) => {
         const Icon = activity.icon;
+        const badge = badges?.[activity.id] ?? null;
+
         return (
           <button
             type="button"
@@ -56,7 +58,7 @@ export function ActivityRail({ active, onSelect }: ActivityRailProps) {
             onClick={() => onSelect(activity.id)}
           >
             <Icon aria-hidden="true" />
-            {activity.badge ? <span className="badge">{activity.badge}</span> : null}
+            {badge ? <span className="badge">{badge}</span> : null}
           </button>
         );
       })}
