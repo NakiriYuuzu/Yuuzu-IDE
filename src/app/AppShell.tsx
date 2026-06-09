@@ -466,18 +466,43 @@ export function BrowserPreviewSplitSurface({
 }
 
 type OpenBrowserPreviewParams = {
+  workspaceId: string;
   value: string;
-  hasWorkspace: boolean;
+  requestId: number;
+  isLatestRequest: (workspaceId: string, requestId: number) => boolean;
   onOpenPanel: () => void;
   onSetSurface: (surface: Surface) => void;
   onOpenUrl: (parsed: BrowserUrl) => void;
   onValidationError: (error: unknown) => void;
 };
 
+export type BrowserValidationRequestState = {
+  [workspaceId: string]: number;
+};
+
+export function startBrowserValidationRequest(
+  state: BrowserValidationRequestState,
+  workspaceId: string,
+): number {
+  const next = (state[workspaceId] ?? 0) + 1;
+  state[workspaceId] = next;
+  return next;
+}
+
+export function isLatestBrowserValidationRequest(
+  state: BrowserValidationRequestState,
+  workspaceId: string,
+  requestId: number,
+): boolean {
+  return state[workspaceId] === requestId;
+}
+
 export function openBrowserPreviewWithValidation(
   {
+    workspaceId,
     value,
-    hasWorkspace,
+    requestId,
+    isLatestRequest,
     onOpenPanel,
     onSetSurface,
     onOpenUrl,
@@ -485,7 +510,7 @@ export function openBrowserPreviewWithValidation(
   }: OpenBrowserPreviewParams,
   validate: (value: string) => Promise<BrowserUrl>,
 ): Promise<void> {
-  if (!hasWorkspace) {
+  if (!workspaceId) {
     onOpenPanel();
     return Promise.resolve();
   }
@@ -499,11 +524,91 @@ export function openBrowserPreviewWithValidation(
   onOpenPanel();
   return validate(trimmed)
     .then((parsedUrl) => {
+      if (!isLatestRequest(workspaceId, requestId)) {
+        return;
+      }
+
       onOpenUrl(parsedUrl);
       onSetSurface("browser-preview");
     })
     .catch((error) => {
+      if (!isLatestRequest(workspaceId, requestId)) {
+        return;
+      }
+
       onValidationError(error);
+    });
+}
+
+export type BrowserCaptureRequestState = {
+  [workspaceId: string]: number;
+};
+
+export function startBrowserCaptureRequest(
+  state: BrowserCaptureRequestState,
+  workspaceId: string,
+): number {
+  const next = (state[workspaceId] ?? 0) + 1;
+  state[workspaceId] = next;
+  return next;
+}
+
+export function isLatestBrowserCaptureRequest(
+  state: BrowserCaptureRequestState,
+  workspaceId: string,
+  requestId: number,
+): boolean {
+  return state[workspaceId] === requestId;
+}
+
+type CaptureBrowserPreviewResultParams = {
+  workspaceId: string;
+  requestId: number;
+  isLatestRequest: (workspaceId: string, requestId: number) => boolean;
+  request: {
+    workspaceRoot: string;
+    request: {
+      url: string;
+      title: string;
+      bounds: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      };
+    };
+  };
+  onSuccess: (screenshot: BrowserScreenshot) => void;
+  onFailure: (error: unknown) => void;
+};
+
+export function captureBrowserPreviewWithValidation(
+  {
+    workspaceId,
+    requestId,
+    isLatestRequest,
+    request,
+    onSuccess,
+    onFailure,
+  }: CaptureBrowserPreviewResultParams,
+  capture: (
+    args: CaptureBrowserPreviewResultParams["request"],
+  ) => Promise<BrowserScreenshot>,
+) {
+  void capture(request)
+    .then((screenshot) => {
+      if (!isLatestRequest(workspaceId, requestId)) {
+        return;
+      }
+
+      onSuccess(screenshot);
+    })
+    .catch((error) => {
+      if (!isLatestRequest(workspaceId, requestId)) {
+        return;
+      }
+
+      onFailure(error);
     });
 }
 
@@ -968,6 +1073,8 @@ export function AppShell() {
   const docsLoadRequestRef = useRef<DocsLoadRequestState>({});
   const agentSessionsLoadRef = useRef<Record<string, number>>({});
   const languageRefreshRequestRef = useRef<LanguageRefreshRequestState>({});
+  const browserValidationRequestRef = useRef<BrowserValidationRequestState>({});
+  const browserCaptureRequestRef = useRef<BrowserCaptureRequestState>({});
   const docsSearchRequestRef = useRef<DocsRequestIdentity>({
     requestId: 0,
     workspaceId: null,
@@ -3069,28 +3176,42 @@ export function AppShell() {
   }
 
   function openBrowserPreview(value: string) {
+    const workspaceId = activeWorkspaceId ?? "";
+    const requestId =
+      workspaceId.length > 0
+        ? startBrowserValidationRequest(
+            browserValidationRequestRef.current,
+            workspaceId,
+          )
+        : 0;
+
     openBrowserPreviewWithValidation(
       {
+        workspaceId,
         value,
-        hasWorkspace: Boolean(activeWorkspace && activeWorkspaceId),
         onOpenPanel: openBrowserPanel,
         onSetSurface: setSurface,
+        requestId,
+        isLatestRequest: (targetWorkspaceId, targetRequestId) =>
+          isLatestBrowserValidationRequest(
+            browserValidationRequestRef.current,
+            targetWorkspaceId,
+            targetRequestId,
+          ),
         onOpenUrl: (parsedUrl) => {
-          if (!activeWorkspaceId) {
+          if (!workspaceId) {
             return;
           }
 
-          const workspaceId = activeWorkspaceId;
           updateBrowser(workspaceId, (browser) =>
             openBrowserUrl(browser, parsedUrl),
           );
         },
         onValidationError: (error) => {
-          if (!activeWorkspaceId) {
+          if (!workspaceId) {
             return;
           }
 
-          const workspaceId = activeWorkspaceId;
           updateBrowser(
             workspaceId,
             (browser) => setBrowserError(browser, terminalErrorMessage(error)),
@@ -3134,40 +3255,58 @@ export function AppShell() {
 
     const workspaceId = activeWorkspaceId;
     const state = workspaceViewStore.getState().viewFor(workspaceId).browser;
-
     if (!state.activeUrl || !state.bounds) {
       updateBrowser(
         workspaceId,
         (browser) =>
           setBrowserError(
             browser,
-            state.bounds ? "No active browser URL" : "Browser preview bounds are not ready",
+            state.bounds
+              ? "No active browser URL"
+              : "Browser preview bounds are not ready",
           ),
       );
       return;
     }
+    const requestId = startBrowserCaptureRequest(
+      browserCaptureRequestRef.current,
+      workspaceId,
+    );
 
-    void captureBrowserPreview({
+    const request = {
       workspaceRoot: activeWorkspace.path,
       request: {
         url: state.activeUrl,
         title: state.activeTitle ?? state.activeUrl,
         bounds: state.bounds,
       },
-    })
-      .then((screenshot) => {
-        updateBrowser(
-          workspaceId,
-          (browser) => storeBrowserScreenshot(browser, screenshot),
-        );
-      })
-      .catch((error) => {
-        updateBrowser(
-          workspaceId,
-          (browser) =>
-            setBrowserError(browser, `Capture failed: ${terminalErrorMessage(error)}`),
-        );
-      });
+    };
+
+    captureBrowserPreviewWithValidation(
+      {
+        workspaceId,
+        requestId,
+        isLatestRequest: (targetWorkspaceId, targetRequestId) =>
+          isLatestBrowserCaptureRequest(
+            browserCaptureRequestRef.current,
+            targetWorkspaceId,
+            targetRequestId,
+          ),
+        request,
+        onSuccess: (screenshot) =>
+          updateBrowser(workspaceId, (browser) =>
+            storeBrowserScreenshot(browser, screenshot),
+          ),
+        onFailure: (error) =>
+          updateBrowser(workspaceId, (browser) =>
+            setBrowserError(
+              browser,
+              `Capture failed: ${terminalErrorMessage(error)}`,
+            ),
+          ),
+      },
+      captureBrowserPreview,
+    );
   }
 
   function selectBrowserScreenshot(id: string) {

@@ -10,7 +10,11 @@ import {
 } from "../features/agents/agent-model";
 import { createLanguageState } from "../features/language/language-model";
 import { createDocsState } from "../features/docs/docs-model";
-import { createBrowserState } from "../features/browser/browser-model";
+import {
+  createBrowserState,
+  type BrowserUrl,
+  type BrowserScreenshot,
+} from "../features/browser/browser-model";
 import {
   collectAgentAvailableContext,
   activeLoadedFileForWorkspace,
@@ -18,6 +22,13 @@ import {
   BrowserPreviewSplitSurface,
   shouldShowBrowserSplitEditor,
   openBrowserPreviewWithValidation,
+  startBrowserValidationRequest,
+  isLatestBrowserValidationRequest,
+  startBrowserCaptureRequest,
+  isLatestBrowserCaptureRequest,
+  captureBrowserPreviewWithValidation,
+  type BrowserCaptureRequestState,
+  type BrowserValidationRequestState,
   type AgentAvailableContextSource,
 } from "./AppShell";
 import { ensureTestDom } from "./test-dom";
@@ -361,11 +372,16 @@ describe("AppShell AppShell helpers", () => {
     const onSetSurface = mock(() => {});
     const onOpenUrl = mock(() => {});
     const onValidationError = mock(() => {});
+    const requestState: BrowserValidationRequestState = {};
+    const requestId = startBrowserValidationRequest(requestState, "w:1");
 
     await openBrowserPreviewWithValidation(
       {
+        workspaceId: "w:1",
         value: "not-a-valid-url",
-        hasWorkspace: true,
+        requestId,
+        isLatestRequest: (workspaceId, id) =>
+          isLatestBrowserValidationRequest(requestState, workspaceId, id),
         onOpenPanel,
         onSetSurface,
         onOpenUrl,
@@ -392,11 +408,16 @@ describe("AppShell AppShell helpers", () => {
     const onSetSurface = mock(() => {});
     const onOpenUrl = mock(() => {});
     const onValidationError = mock(() => {});
+    const requestState: BrowserValidationRequestState = {};
+    const requestId = startBrowserValidationRequest(requestState, "w:1");
 
     await openBrowserPreviewWithValidation(
       {
+        workspaceId: "w:1",
         value: " http://localhost:5173 ",
-        hasWorkspace: true,
+        requestId,
+        isLatestRequest: (workspaceId, id) =>
+          isLatestBrowserValidationRequest(requestState, workspaceId, id),
         onOpenPanel,
         onSetSurface,
         onOpenUrl,
@@ -416,11 +437,16 @@ describe("AppShell AppShell helpers", () => {
     const onSetSurface = mock(() => {});
     const onOpenUrl = mock(() => {});
     const onValidationError = mock(() => {});
+    const requestState: BrowserValidationRequestState = {};
+    const requestId = startBrowserValidationRequest(requestState, "w:1");
 
     await openBrowserPreviewWithValidation(
       {
+        workspaceId: "w:1",
         value: "   ",
-        hasWorkspace: true,
+        requestId,
+        isLatestRequest: (workspaceId, id) =>
+          isLatestBrowserValidationRequest(requestState, workspaceId, id),
         onOpenPanel,
         onSetSurface,
         onOpenUrl,
@@ -435,6 +461,342 @@ describe("AppShell AppShell helpers", () => {
     expect(onSetSurface).not.toHaveBeenCalled();
     expect(onOpenUrl).not.toHaveBeenCalled();
     expect(onValidationError).not.toHaveBeenCalled();
+  });
+
+  test("openBrowserPreviewWithValidation applies only latest validation result", async () => {
+    const requestState: BrowserValidationRequestState = {};
+    const onOpenPanel = mock(() => {});
+    const onSetSurface = mock(() => {});
+    const onOpenUrl = mock<(url: BrowserUrl) => void>(() => {});
+    const onValidationError = mock<(error: unknown) => void>(() => {});
+
+    const parsedFirst = {
+      url: "http://localhost:5173",
+      host: "localhost",
+      port: 5173,
+    };
+    const parsedSecond = {
+      url: "http://localhost:5174",
+      host: "localhost",
+      port: 5174,
+    };
+    let resolveFirst: (value: BrowserUrl | PromiseLike<BrowserUrl>) => void = () => {};
+    let resolveSecond: (value: BrowserUrl | PromiseLike<BrowserUrl>) => void = () => {};
+    const validateFirst = mock(() => {
+      return new Promise<BrowserUrl>((resolve) => {
+        resolveFirst = resolve;
+      });
+    });
+    const validateSecond = mock(() => {
+      return new Promise<BrowserUrl>((resolve) => {
+        resolveSecond = resolve;
+      });
+    });
+
+    const firstRequestId = startBrowserValidationRequest(requestState, "workspace-1");
+    const secondRequestId = startBrowserValidationRequest(
+      requestState,
+      "workspace-1",
+    );
+
+    const first = openBrowserPreviewWithValidation(
+      {
+        workspaceId: "workspace-1",
+        value: "http://localhost:5173",
+        requestId: firstRequestId,
+        isLatestRequest: (workspaceId, requestId) =>
+          isLatestBrowserValidationRequest(requestState, workspaceId, requestId),
+        onOpenPanel,
+        onSetSurface,
+        onOpenUrl,
+        onValidationError,
+      },
+      validateFirst,
+    );
+
+    const second = openBrowserPreviewWithValidation(
+      {
+        workspaceId: "workspace-1",
+        value: "http://localhost:5174",
+        requestId: secondRequestId,
+        isLatestRequest: (workspaceId, requestId) =>
+          isLatestBrowserValidationRequest(requestState, workspaceId, requestId),
+        onOpenPanel,
+        onSetSurface,
+        onOpenUrl,
+        onValidationError,
+      },
+      validateSecond,
+    );
+
+    expect(onOpenPanel).toHaveBeenCalledTimes(2);
+
+    resolveSecond(parsedSecond);
+    await second;
+
+    expect(onOpenUrl).toHaveBeenCalledTimes(1);
+    expect(onSetSurface).toHaveBeenCalledTimes(1);
+    expect(onOpenUrl).toHaveBeenCalledWith(parsedSecond);
+    expect(onValidationError).not.toHaveBeenCalled();
+
+    resolveFirst(parsedFirst);
+    await first;
+
+    expect(onOpenUrl).toHaveBeenCalledTimes(1);
+    expect(onSetSurface).toHaveBeenCalledTimes(1);
+    expect(onOpenUrl).toHaveBeenCalledWith(parsedSecond);
+    expect(onValidationError).not.toHaveBeenCalled();
+  });
+
+  test("openBrowserPreviewWithValidation ignores stale validation failure after newer success", async () => {
+    const requestState: BrowserValidationRequestState = {};
+    const onOpenPanel = mock(() => {});
+    const onSetSurface = mock(() => {});
+    const onOpenUrl = mock<(url: BrowserUrl) => void>(() => {});
+    const onValidationError = mock<(error: unknown) => void>(() => {});
+    const parsed = {
+      url: "http://localhost:5174",
+      host: "localhost",
+      port: 5174,
+    };
+    let rejectFirst: (reason?: unknown) => void = () => {};
+    const validateFirst = mock(() => {
+      return new Promise<BrowserUrl>((_resolve, reject) => {
+        rejectFirst = reject;
+      });
+    });
+    const validateSecond = mock(async () => parsed);
+
+    const firstRequestId = startBrowserValidationRequest(requestState, "workspace-1");
+    const secondRequestId = startBrowserValidationRequest(
+      requestState,
+      "workspace-1",
+    );
+
+    const first = openBrowserPreviewWithValidation(
+      {
+        workspaceId: "workspace-1",
+        value: "bad-url",
+        requestId: firstRequestId,
+        isLatestRequest: (workspaceId, requestId) =>
+          isLatestBrowserValidationRequest(requestState, workspaceId, requestId),
+        onOpenPanel,
+        onSetSurface,
+        onOpenUrl,
+        onValidationError,
+      },
+      validateFirst,
+    );
+
+    const second = openBrowserPreviewWithValidation(
+      {
+        workspaceId: "workspace-1",
+        value: "http://localhost:5174",
+        requestId: secondRequestId,
+        isLatestRequest: (workspaceId, requestId) =>
+          isLatestBrowserValidationRequest(requestState, workspaceId, requestId),
+        onOpenPanel,
+        onSetSurface,
+        onOpenUrl,
+        onValidationError,
+      },
+      validateSecond,
+    );
+
+    await second;
+
+    rejectFirst(new Error("stale failure"));
+    await first;
+
+    expect(onOpenUrl).toHaveBeenCalledTimes(1);
+    expect(onOpenUrl).toHaveBeenCalledWith(parsed);
+    expect(onSetSurface).toHaveBeenCalledTimes(1);
+    expect(onSetSurface).toHaveBeenCalledWith("browser-preview");
+    expect(onValidationError).toHaveBeenCalledTimes(0);
+  });
+
+  test("captureBrowserPreviewWithValidation ignores stale capture success", async () => {
+    const requestState: BrowserCaptureRequestState = {};
+    const onSuccess = mock<(screenshot: BrowserScreenshot) => void>(() => {});
+    const onFailure = mock<(error: unknown) => void>(() => {});
+    let resolveFirst: (
+      value: BrowserScreenshot | PromiseLike<BrowserScreenshot>,
+    ) => void = () => {};
+    let resolveSecond: (
+      value: BrowserScreenshot | PromiseLike<BrowserScreenshot>,
+    ) => void = () => {};
+
+    const first = {
+      id: "s1",
+      workspace_root: "/repo",
+      url: "http://localhost:5173",
+      title: "localhost:5173",
+      data_url: "data:image/png;base64,a",
+      width: 1200,
+      height: 700,
+      captured_ms: 1,
+    };
+    const second = {
+      id: "s2",
+      workspace_root: "/repo",
+      url: "http://localhost:5174",
+      title: "localhost:5174",
+      data_url: "data:image/png;base64,b",
+      width: 1200,
+      height: 700,
+      captured_ms: 2,
+    };
+
+    const request = {
+      workspaceRoot: "/repo",
+      request: {
+        url: "http://localhost:5173",
+        title: "localhost:5173",
+        bounds: { x: 0, y: 0, width: 1280, height: 720 },
+      },
+    };
+    const requestDifferent = {
+      workspaceRoot: "/repo",
+      request: {
+        url: "http://localhost:5174",
+        title: "localhost:5174",
+        bounds: { x: 0, y: 0, width: 1280, height: 720 },
+      },
+    };
+
+    const firstRequestId = startBrowserCaptureRequest(requestState, "workspace-1");
+    const secondRequestId = startBrowserCaptureRequest(requestState, "workspace-1");
+
+    captureBrowserPreviewWithValidation(
+      {
+        workspaceId: "workspace-1",
+        requestId: firstRequestId,
+        isLatestRequest: (workspaceId, requestId) =>
+          isLatestBrowserCaptureRequest(requestState, workspaceId, requestId),
+        request,
+        onSuccess,
+        onFailure,
+      },
+      () =>
+        new Promise<BrowserScreenshot>((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+
+    captureBrowserPreviewWithValidation(
+      {
+        workspaceId: "workspace-1",
+        requestId: secondRequestId,
+        isLatestRequest: (workspaceId, requestId) =>
+          isLatestBrowserCaptureRequest(requestState, workspaceId, requestId),
+        request: requestDifferent,
+        onSuccess,
+        onFailure,
+      },
+      () =>
+        new Promise<BrowserScreenshot>((resolve) => {
+          resolveSecond = resolve;
+        }),
+    );
+
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(onFailure).not.toHaveBeenCalled();
+
+    resolveSecond(second);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+    expect(onSuccess).toHaveBeenCalledWith(second);
+    expect(onFailure).not.toHaveBeenCalled();
+
+    resolveFirst(first);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+    expect(onFailure).not.toHaveBeenCalled();
+  });
+
+  test("captureBrowserPreviewWithValidation ignores stale capture failure after newer success", async () => {
+    const requestState: BrowserCaptureRequestState = {};
+    const onSuccess = mock<(screenshot: BrowserScreenshot) => void>(() => {});
+    const onFailure = mock<(error: unknown) => void>(() => {});
+    let rejectFirst: (reason?: unknown) => void = () => {};
+
+    const request = {
+      workspaceRoot: "/repo",
+      request: {
+        url: "http://localhost:5173",
+        title: "localhost:5173",
+        bounds: { x: 0, y: 0, width: 1280, height: 720 },
+      },
+    };
+    const requestDifferent = {
+      workspaceRoot: "/repo",
+      request: {
+        url: "http://localhost:5174",
+        title: "localhost:5174",
+        bounds: { x: 0, y: 0, width: 1280, height: 720 },
+      },
+    };
+
+    const firstRequestId = startBrowserCaptureRequest(requestState, "workspace-1");
+    const secondRequestId = startBrowserCaptureRequest(requestState, "workspace-1");
+
+    let secondSuccessComplete = false;
+
+    captureBrowserPreviewWithValidation(
+      {
+        workspaceId: "workspace-1",
+        requestId: firstRequestId,
+        isLatestRequest: (workspaceId, requestId) =>
+          isLatestBrowserCaptureRequest(requestState, workspaceId, requestId),
+        request,
+        onSuccess,
+        onFailure,
+      },
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectFirst = reject;
+        }),
+    );
+
+    const screenshot = {
+      id: "s2",
+      workspace_root: "/repo",
+      url: "http://localhost:5174",
+      title: "localhost:5174",
+      data_url: "data:image/png;base64,b",
+      width: 1200,
+      height: 700,
+      captured_ms: 2,
+    };
+    captureBrowserPreviewWithValidation(
+      {
+        workspaceId: "workspace-1",
+        requestId: secondRequestId,
+        isLatestRequest: (workspaceId, requestId) =>
+          isLatestBrowserCaptureRequest(requestState, workspaceId, requestId),
+        request: requestDifferent,
+        onSuccess: (value) => {
+          secondSuccessComplete = true;
+          onSuccess(value);
+        },
+        onFailure,
+      },
+      async () => screenshot,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(secondSuccessComplete).toBe(true);
+    expect(onSuccess).toHaveBeenCalledWith(screenshot);
+    expect(onSuccess).toHaveBeenCalledTimes(1);
+    expect(onFailure).not.toHaveBeenCalled();
+
+    rejectFirst(new Error("stale failure"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(onFailure).toHaveBeenCalledTimes(0);
   });
 
   test("collects all bounded agent context pieces", () => {
