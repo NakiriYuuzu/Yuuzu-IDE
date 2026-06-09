@@ -41,21 +41,36 @@ import {
   saveDraft,
 } from "../features/files/draft-store";
 import {
+  checkoutGitBranch,
   commitGit,
+  createGitBranch,
   discardGitPaths,
+  fetchGit,
+  getGitCommitGraph,
+  getGitDiffFile,
   getGitStatus,
+  listGitBranches,
+  pullGit,
+  pushGit,
   stageGitPaths,
   stashGit,
   unstageGitPaths,
 } from "../features/git/git-api";
+import { GitDiffView } from "../features/git/GitDiffView";
+import { GitGraphView } from "../features/git/GitGraphView";
 import { GitPanel } from "../features/git/GitPanel";
 import {
+  branchCheckoutConfirmation,
   changeBadgeCount,
   confirmationTextForGitAction,
   replaceGitStatus,
   selectDiff,
   setGitError,
   setGitLoading,
+  statusBranchLabel,
+  storeBranches,
+  storeDiff,
+  storeGraph,
   updateGitCommitMessage,
   type GitRepositoryStatus,
   type GitViewState,
@@ -258,6 +273,10 @@ function knownWorkspaceIdForTaskRun(runId: string): string | null {
   return match?.[0] ?? workspaceIdFromTaskRunId(runId);
 }
 
+function gitDiffCacheKey(path: string, staged: boolean): string {
+  return `${staged ? "staged" : "unstaged"}:${path}`;
+}
+
 function hasRegisteredWorkspace(workspaceId: string): boolean {
   return workspaceStore
     .getState()
@@ -306,6 +325,11 @@ function PanelBody({
   onGitDiscard,
   onGitOpenDiff,
   onGitStash,
+  onGitFetch,
+  onGitPull,
+  onGitPush,
+  onGitCheckoutBranch,
+  onGitCreateBranch,
   onGitOpenGraph,
 }: {
   active: ActivityId;
@@ -341,6 +365,11 @@ function PanelBody({
   onGitDiscard: (path: string) => void;
   onGitOpenDiff: (path: string, staged: boolean) => void;
   onGitStash: () => void;
+  onGitFetch: () => void;
+  onGitPull: () => void;
+  onGitPush: () => void;
+  onGitCheckoutBranch: (branch: string) => void;
+  onGitCreateBranch: (name: string) => void;
   onGitOpenGraph: () => void;
 }) {
   if (active === "git") {
@@ -355,6 +384,11 @@ function PanelBody({
         onDiscard={onGitDiscard}
         onOpenDiff={onGitOpenDiff}
         onStash={onGitStash}
+        onFetch={onGitFetch}
+        onPull={onGitPull}
+        onPush={onGitPush}
+        onCheckoutBranch={onGitCheckoutBranch}
+        onCreateBranch={onGitCreateBranch}
         onOpenGraph={onGitOpenGraph}
       />
     );
@@ -512,6 +546,11 @@ export function AppShell() {
     activePath: view.editor.activePath,
     loadedFile,
   });
+  const selectedGitDiff = view.git.selectedDiff
+    ? (view.git.diffByKey[
+        gitDiffCacheKey(view.git.selectedDiff.path, view.git.selectedDiff.staged)
+      ] ?? null)
+    : null;
 
   useEffect(() => {
     setFindOpen(false);
@@ -763,6 +802,24 @@ export function AppShell() {
         }
 
         updateGit(workspaceId, (git) => replaceGitStatus(git, status));
+        void listGitBranches(workspaceRoot)
+          .then((branches) => {
+            if (disposed) {
+              return;
+            }
+
+            updateGit(workspaceId, (git) => storeBranches(git, branches));
+          })
+          .catch((error) => {
+            if (!disposed) {
+              updateGit(workspaceId, (git) =>
+                setGitError(
+                  git,
+                  `Branches failed: ${terminalErrorMessage(error)}`,
+                ),
+              );
+            }
+          });
       })
       .catch((error) => {
         if (!disposed) {
@@ -1431,6 +1488,23 @@ export function AppShell() {
     );
   }
 
+  async function refreshGitBranchesForWorkspace(
+    workspaceId: string,
+    workspaceRoot: string,
+    label = "Branches",
+  ): Promise<boolean> {
+    try {
+      const branches = await listGitBranches(workspaceRoot);
+      updateGit(workspaceId, (git) => storeBranches(git, branches));
+      return true;
+    } catch (error) {
+      updateGit(workspaceId, (git) =>
+        setGitError(git, `${label} failed: ${terminalErrorMessage(error)}`),
+      );
+      return false;
+    }
+  }
+
   async function refreshGitStatus(label = "Refresh") {
     if (!activeWorkspace || !activeWorkspaceId) {
       return;
@@ -1443,6 +1517,7 @@ export function AppShell() {
     try {
       const status = await getGitStatus(workspaceRoot);
       updateGit(workspaceId, (git) => replaceGitStatus(git, status));
+      await refreshGitBranchesForWorkspace(workspaceId, workspaceRoot);
     } catch (error) {
       updateGit(workspaceId, (git) =>
         setGitError(git, `${label} failed: ${terminalErrorMessage(error)}`),
@@ -1453,9 +1528,9 @@ export function AppShell() {
   async function runGitStatusMutation(
     label: string,
     mutation: (workspaceRoot: string) => Promise<GitRepositoryStatus>,
-  ) {
+  ): Promise<boolean> {
     if (!activeWorkspace || !activeWorkspaceId) {
-      return;
+      return false;
     }
 
     const workspaceId = activeWorkspaceId;
@@ -1465,10 +1540,13 @@ export function AppShell() {
     try {
       const status = await mutation(workspaceRoot);
       updateGit(workspaceId, (git) => replaceGitStatus(git, status));
+      await refreshGitBranchesForWorkspace(workspaceId, workspaceRoot);
+      return true;
     } catch (error) {
       updateGit(workspaceId, (git) =>
         setGitError(git, `${label} failed: ${terminalErrorMessage(error)}`),
       );
+      return false;
     }
   }
 
@@ -1521,15 +1599,147 @@ export function AppShell() {
     );
   }
 
+  async function loadGitDiff(path: string, staged: boolean) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    updateGit(workspaceId, (git) => setGitLoading(setGitError(git, null), true));
+
+    try {
+      const diff = await getGitDiffFile(workspaceRoot, path, staged);
+      updateGit(workspaceId, (git) => setGitLoading(storeDiff(git, diff), false));
+    } catch (error) {
+      updateGit(workspaceId, (git) =>
+        setGitError(git, `Diff failed: ${terminalErrorMessage(error)}`),
+      );
+    }
+  }
+
+  async function loadGitGraph(label = "Graph") {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    updateGit(workspaceId, (git) => setGitLoading(setGitError(git, null), true));
+
+    try {
+      const graph = await getGitCommitGraph(workspaceRoot, 120);
+      updateGit(workspaceId, (git) =>
+        setGitLoading(storeGraph(git, graph), false),
+      );
+    } catch (error) {
+      updateGit(workspaceId, (git) =>
+        setGitError(git, `${label} failed: ${terminalErrorMessage(error)}`),
+      );
+    }
+  }
+
+  async function refreshGraphAfterStatusMutation(
+    label: string,
+    mutation: (workspaceRoot: string) => Promise<GitRepositoryStatus>,
+  ) {
+    const changed = await runGitStatusMutation(label, mutation);
+
+    if (
+      changed &&
+      workspaceViewStore.getState().viewFor(activeWorkspaceId).surface ===
+        "git-graph"
+    ) {
+      await loadGitGraph();
+    }
+  }
+
+  function fetchFromGitPanel() {
+    void refreshGraphAfterStatusMutation("Fetch", fetchGit);
+  }
+
+  function pullFromGitPanel() {
+    void refreshGraphAfterStatusMutation("Pull", pullGit);
+  }
+
+  function pushFromGitPanel() {
+    void refreshGraphAfterStatusMutation("Push", pushGit);
+  }
+
+  async function createBranchFromGitPanel(name: string) {
+    const branchName = name.trim();
+
+    if (!activeWorkspace || !activeWorkspaceId || branchName.length === 0) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    updateGit(workspaceId, (git) => setGitLoading(setGitError(git, null), true));
+
+    try {
+      await createGitBranch(workspaceRoot, branchName);
+      const refreshed = await refreshGitBranchesForWorkspace(
+        workspaceId,
+        workspaceRoot,
+      );
+
+      if (refreshed) {
+        updateGit(workspaceId, (git) => setGitLoading(git, false));
+      }
+    } catch (error) {
+      updateGit(workspaceId, (git) =>
+        setGitError(
+          git,
+          `Create branch failed: ${terminalErrorMessage(error)}`,
+        ),
+      );
+    }
+  }
+
+  async function checkoutBranchFromGitPanel(branch: string) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const currentBranch = workspaceViewStore
+      .getState()
+      .viewFor(activeWorkspaceId).git.status?.branch;
+
+    if (branch === currentBranch) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    updateGit(workspaceId, (git) => setGitLoading(setGitError(git, null), true));
+
+    try {
+      const status = await checkoutGitBranch(
+        workspaceRoot,
+        branch,
+        branchCheckoutConfirmation(branch),
+      );
+      updateGit(workspaceId, (git) => replaceGitStatus(git, status));
+      await refreshGitBranchesForWorkspace(workspaceId, workspaceRoot);
+    } catch (error) {
+      updateGit(workspaceId, (git) =>
+        setGitError(git, `Checkout failed: ${terminalErrorMessage(error)}`),
+      );
+    }
+  }
+
   function openGitDiff(path: string, staged: boolean) {
     updateGit(activeWorkspaceId, (git) => selectDiff(git, { path, staged }));
     setSurface("git-diff");
     setActiveActivity("git");
+    void loadGitDiff(path, staged);
   }
 
   function openGitGraph() {
     setSurface("git-graph");
     setActiveActivity("git");
+    void loadGitGraph();
   }
 
   function runCommand(id: string) {
@@ -1704,6 +1914,13 @@ export function AppShell() {
               onGitDiscard={discardGitPath}
               onGitOpenDiff={openGitDiff}
               onGitStash={stashFromGitPanel}
+              onGitFetch={fetchFromGitPanel}
+              onGitPull={pullFromGitPanel}
+              onGitPush={pushFromGitPanel}
+              onGitCheckoutBranch={(branch) =>
+                void checkoutBranchFromGitPanel(branch)
+              }
+              onGitCreateBranch={(name) => void createBranchFromGitPanel(name)}
               onGitOpenGraph={openGitGraph}
             />
           </aside>
@@ -1967,15 +2184,30 @@ export function AppShell() {
                   )}
                 </div>
               ) : surface === "git-diff" ? (
-                <div className="large-file-note">
-                  {view.git.selectedDiff
-                    ? `${
-                        view.git.selectedDiff.staged ? "Staged" : "Changes"
-                      } diff selected: ${view.git.selectedDiff.path}`
-                    : "No Git diff selected"}
-                </div>
+                <GitDiffView
+                  diff={selectedGitDiff}
+                  selectedPath={view.git.selectedDiff?.path ?? null}
+                  loading={view.git.loading}
+                  error={view.git.error}
+                  onRefresh={() => {
+                    const selection = workspaceViewStore
+                      .getState()
+                      .viewFor(activeWorkspaceId).git.selectedDiff;
+
+                    if (selection) {
+                      void loadGitDiff(selection.path, selection.staged);
+                    }
+                  }}
+                />
               ) : surface === "git-graph" ? (
-                <div className="large-file-note">Git graph view</div>
+                <GitGraphView
+                  graph={view.git.graph}
+                  branchLabel={statusBranchLabel(view.git.status)}
+                  loading={view.git.loading}
+                  error={view.git.error}
+                  onFetch={fetchFromGitPanel}
+                  onRefresh={() => void loadGitGraph()}
+                />
               ) : (
                 <>
                   <div className="workspace-hero">

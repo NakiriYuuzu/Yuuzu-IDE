@@ -157,14 +157,29 @@ export function storeBranches(
   state: GitViewState,
   branches: GitBranch[],
 ): GitViewState {
-  return { ...state, branches };
+  return {
+    ...state,
+    branches: [...branches].sort((left, right) => {
+      if (left.current === right.current) {
+        return 0;
+      }
+
+      return left.current ? -1 : 1;
+    }),
+  };
 }
 
 export function storeGraph(
   state: GitViewState,
   graph: GitCommitSummary[],
 ): GitViewState {
-  return { ...state, graph: graph.slice(0, MAX_GRAPH_COMMITS) };
+  return { ...state, graph: boundedGraph(graph) };
+}
+
+export function boundedGraph(
+  graph: GitCommitSummary[],
+): GitCommitSummary[] {
+  return graph.slice(0, MAX_GRAPH_COMMITS);
 }
 
 export function groupGitChanges(changes: GitFileStatus[]): GitGroupedChanges {
@@ -263,6 +278,10 @@ export function confirmationTextForGitAction(
     case "rebase":
       return `REBASE ${action.target}`;
   }
+}
+
+export function branchCheckoutConfirmation(branch: string): string {
+  return confirmationTextForGitAction({ kind: "checkout", branch });
 }
 
 export function decorationMapFromStatus(

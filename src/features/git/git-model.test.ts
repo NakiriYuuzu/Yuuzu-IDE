@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  boundedGraph,
+  branchCheckoutConfirmation,
   canAmend,
   canCommit,
   canStash,
@@ -12,8 +14,10 @@ import {
   groupGitChanges,
   replaceGitStatus,
   selectDiff,
+  storeBranches,
   statusBranchLabel,
   storeDiff,
+  storeGraph,
   updateGitCommitMessage,
 } from "./git-model";
 import type { GitRepositoryStatus } from "./git-model";
@@ -203,5 +207,54 @@ describe("git-model", () => {
     expect(gitActionLabel("commit-push")).toBe("Commit & Push");
     expect(gitActionLabel("amend")).toBe("Amend");
     expect(gitActionLabel("stash")).toBe("Stash");
+  });
+
+  test("stores loaded diff by path and staged flag", () => {
+    const state = storeDiff(createGitState(), {
+      path: "README.md",
+      original_path: null,
+      staged: false,
+      binary: false,
+      truncated: false,
+      raw: "diff --git a/README.md b/README.md\n+changed\n",
+    });
+
+    expect(state.diffByKey["unstaged:README.md"]?.raw).toContain("+changed");
+  });
+
+  test("keeps current branch first in branch controls", () => {
+    const branches = [
+      { name: "topic", current: false, remote: false, upstream: null },
+      { name: "main", current: true, remote: false, upstream: "origin/main" },
+    ];
+    const state = storeBranches(createGitState(), branches);
+
+    expect(state.branches.map((branch) => branch.name)).toEqual([
+      "main",
+      "topic",
+    ]);
+    expect(branches.map((branch) => branch.name)).toEqual(["topic", "main"]);
+  });
+
+  test("bounds graph rows to 120 commits", () => {
+    const graph = Array.from({ length: 125 }, (_, index) => ({
+      hash: `${index}`,
+      short_hash: `${index}`,
+      subject: `commit ${index}`,
+      author: "Yuuzu",
+      when: "1 minute ago",
+      refs: [],
+      lane: 0,
+      merge: false,
+    }));
+
+    expect(boundedGraph(graph)).toHaveLength(120);
+    expect(storeGraph(createGitState(), graph).graph).toHaveLength(120);
+  });
+
+  test("formats checkout confirmation text from target branch", () => {
+    expect(branchCheckoutConfirmation("feature/git")).toBe(
+      "CHECKOUT feature/git",
+    );
   });
 });

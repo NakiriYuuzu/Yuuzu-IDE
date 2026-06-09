@@ -1,6 +1,8 @@
 import {
   Archive,
   Check,
+  Download,
+  GitBranch,
   GitGraph,
   Minus,
   Plus,
@@ -8,6 +10,7 @@ import {
   RotateCcw,
   Upload,
 } from "lucide-react";
+import { useState, type FormEvent } from "react";
 
 import {
   canAmend,
@@ -30,6 +33,11 @@ export type GitPanelProps = {
   onDiscard: (path: string) => void;
   onOpenDiff: (path: string, staged: boolean) => void;
   onStash: () => void;
+  onFetch: () => void;
+  onPull: () => void;
+  onPush: () => void;
+  onCheckoutBranch: (branch: string) => void;
+  onCreateBranch: (name: string) => void;
   onOpenGraph: () => void;
 };
 
@@ -53,15 +61,43 @@ export function GitPanel({
   onDiscard,
   onOpenDiff,
   onStash,
+  onFetch,
+  onPull,
+  onPush,
+  onCheckoutBranch,
+  onCreateBranch,
   onOpenGraph,
 }: GitPanelProps) {
+  const [newBranchName, setNewBranchName] = useState("");
   const grouped = state.status
     ? groupGitChanges(state.status.changes)
     : { staged: [], unstaged: [], conflicts: [] };
   const branchLabel = statusBranchLabel(state.status) || "No repository";
+  const currentBranch =
+    state.branches.find((branch) => branch.current)?.name ??
+    state.status?.branch ??
+    "";
+  const branchSelectValue = state.branches.some(
+    (branch) => branch.name === currentBranch,
+  )
+    ? currentBranch
+    : "";
   const commitEnabled = canCommit(state) && !state.loading;
   const amendEnabled = canAmend(state) && !state.loading;
   const stashEnabled = canStash(state) && !state.loading;
+  const canCreateBranch = newBranchName.trim().length > 0 && !state.loading;
+
+  function submitCreateBranch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const branchName = newBranchName.trim();
+
+    if (!branchName) {
+      return;
+    }
+
+    onCreateBranch(branchName);
+    setNewBranchName("");
+  }
 
   return (
     <div className="git-panel">
@@ -96,6 +132,90 @@ export function GitPanel({
             onClick={onOpenGraph}
           >
             <GitGraph aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+
+      <div className="git-branch-region">
+        <label className="git-branch-select">
+          <GitBranch aria-hidden="true" />
+          <select
+            className="input2"
+            aria-label="Checkout branch"
+            value={branchSelectValue}
+            disabled={state.loading || state.branches.length === 0}
+            onChange={(event) => {
+              const nextBranch = event.currentTarget.value;
+
+              if (nextBranch && nextBranch !== currentBranch) {
+                onCheckoutBranch(nextBranch);
+              }
+            }}
+          >
+            {branchSelectValue === "" ? (
+              <option value="">{currentBranch || "Select branch"}</option>
+            ) : null}
+            {state.branches.length > 0 ? (
+              state.branches.map((branch) => (
+                <option value={branch.name} key={branch.name}>
+                  {branch.name}
+                  {branch.remote ? " (remote)" : ""}
+                </option>
+              ))
+            ) : (
+              <option value={currentBranch}>{currentBranch || "No branch"}</option>
+            )}
+          </select>
+        </label>
+
+        <form className="git-create-branch" onSubmit={submitCreateBranch}>
+          <input
+            className="input2"
+            type="text"
+            value={newBranchName}
+            placeholder="New branch"
+            aria-label="New branch name"
+            disabled={state.loading}
+            onChange={(event) => setNewBranchName(event.currentTarget.value)}
+          />
+          <button
+            type="submit"
+            className="iconbtn"
+            title="Create branch"
+            aria-label="Create branch"
+            disabled={!canCreateBranch}
+          >
+            <Plus aria-hidden="true" />
+          </button>
+        </form>
+
+        <div className="git-remote-actions">
+          <button
+            type="button"
+            className="btn"
+            disabled={state.loading}
+            onClick={onFetch}
+          >
+            <RefreshCw aria-hidden="true" />
+            Fetch
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={state.loading}
+            onClick={onPull}
+          >
+            <Download aria-hidden="true" />
+            Pull
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={state.loading}
+            onClick={onPush}
+          >
+            <Upload aria-hidden="true" />
+            Push
           </button>
         </div>
       </div>
