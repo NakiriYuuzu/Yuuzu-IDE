@@ -1992,6 +1992,125 @@ button {
   background: var(--yuzu);
 }
 
+.docs-panel {
+  display: flex;
+  min-width: 0;
+  height: 100%;
+  flex-direction: column;
+}
+
+.docs-search {
+  padding: 10px;
+}
+
+.docs-row {
+  min-width: 0;
+  height: auto;
+  min-height: 30px;
+  padding-right: 6px;
+}
+
+.docs-row-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.15;
+}
+
+.docs-row-title,
+.docs-row-path,
+.docs-match-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docs-row-title {
+  color: var(--txt);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.docs-row-path,
+.docs-match-line {
+  color: var(--txt-faint);
+  font-size: 10.5px;
+}
+
+.docs-row .badge2 {
+  max-width: 68px;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docs-row input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  accent-color: var(--yuzu);
+}
+
+.docs-row-action {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  opacity: 0;
+}
+
+.docs-row:hover .docs-row-action,
+.docs-row:focus-within .docs-row-action {
+  opacity: 1;
+}
+
+.docs-row-action svg {
+  width: 12px;
+  height: 12px;
+}
+
+.docs-search-match {
+  width: 100%;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+}
+
+.docs-pack-create {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 10px 8px;
+}
+
+.docs-pack-create .btn {
+  flex: 0 0 auto;
+}
+
+.docs-source-list {
+  min-width: 0;
+}
+
+.docs-pack-select {
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+}
+
+.docs-preview-placeholder {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  background: var(--editor);
+}
+
 .menu {
   position: absolute;
   z-index: 20;

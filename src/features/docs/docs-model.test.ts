@@ -4,6 +4,7 @@ import {
   type ContextPack,
   createDocsState,
   docsBadgeCount,
+  docsSearchSummary,
   replaceDocsIndex,
   selectDocSource,
   selectedDocPaths,
@@ -101,5 +102,27 @@ describe("docs model", () => {
         { requestId: 3, workspaceId: "a", workspacePath: "/a", query: "docs" },
       ),
     ).toBe(false);
+  });
+
+  test("summarizes docs search matches by unique docs", () => {
+    expect(
+      docsSearchSummary({
+        truncated: false,
+        matches: [
+          {
+            path: "README.md",
+            title: "Readme",
+            line_number: 1,
+            line: "agent context",
+          },
+          {
+            path: "docs/architecture.md",
+            title: "Architecture",
+            line_number: 4,
+            line: "agent context",
+          },
+        ],
+      }),
+    ).toBe("2 matches in 2 docs");
   });
 });

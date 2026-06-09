@@ -2,7 +2,11 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { filterCommands, node1Commands } from "./command-palette-model";
+import {
+  filterCommands,
+  node1Commands,
+  node5Commands,
+} from "./command-palette-model";
 
 describe("filterCommands", () => {
   test("filters commands by label and group", () => {
@@ -32,5 +36,17 @@ describe("filterCommands", () => {
         "stop-task",
       ]),
     );
+  });
+
+  test("includes node 5 docs commands", () => {
+    expect(node5Commands).toEqual([
+      { id: "open-docs", label: "Docs: Open docs panel", group: "Docs" },
+      { id: "refresh-docs-index", label: "Docs: Refresh index", group: "Docs" },
+      {
+        id: "create-context-pack",
+        label: "Docs: Create context pack",
+        group: "Docs",
+      },
+    ]);
   });
 });

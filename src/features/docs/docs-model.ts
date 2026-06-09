@@ -111,6 +111,15 @@ export function docsBadgeCount(state: DocsViewState): string | null {
   return count > 0 ? String(count) : null;
 }
 
+export function docsSearchSummary(result: DocSearchResult): string {
+  const matchCount = result.matches.length;
+  const docCount = new Set(result.matches.map((match) => match.path)).size;
+  const matchLabel = matchCount === 1 ? "match" : "matches";
+  const docLabel = docCount === 1 ? "doc" : "docs";
+
+  return `${matchCount} ${matchLabel} in ${docCount} ${docLabel}`;
+}
+
 export function replaceDocsIndex(
   state: DocsViewState,
   index: DocIndexEntry[],

@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import {
   Bell,
+  BookOpenText,
   ChevronDown,
   FileCode2,
   GitBranch,
@@ -17,6 +18,27 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import { ActivityRail, type ActivityId } from "./activity-rail";
 import { CommandPalette } from "./CommandPalette";
+import {
+  createContextPack,
+  deleteContextPack,
+  getDocPreview,
+  getDocsIndex,
+  listContextPacks,
+  searchDocs,
+} from "../features/docs/docs-api";
+import { DocsPanel } from "../features/docs/DocsPanel";
+import {
+  createDocsRequestIdentity,
+  docsBadgeCount,
+  replaceDocsIndex,
+  selectDocSource,
+  selectedDocPaths,
+  shouldApplyDocsResult,
+  storeContextPack,
+  updateContextPackDraftName,
+  type DocsRequestIdentity,
+  type DocsViewState,
+} from "../features/docs/docs-model";
 import {
   createLoadedFileKey,
   isLoadedEditorForActiveFile,
@@ -187,6 +209,7 @@ const panelTitles: Record<ActivityId, string> = {
   git: "Source Control",
   terminal: "Terminal",
   tasks: "Tasks",
+  docs: "Docs",
   database: "Database",
   settings: "Settings",
 };
@@ -316,6 +339,7 @@ function PanelBody({
   taskState,
   taskError,
   gitState,
+  docsState,
   gitDecorations,
   onOpenFile,
   onCreateFile,
@@ -346,6 +370,14 @@ function PanelBody({
   onGitCheckoutBranch,
   onGitCreateBranch,
   onGitOpenGraph,
+  onDocsRefresh,
+  onDocsSearch,
+  onDocsOpenPreview,
+  onDocsToggleSource,
+  onDocsPackNameChange,
+  onDocsCreatePack,
+  onDocsSelectPack,
+  onDocsDeletePack,
 }: {
   active: ActivityId;
   refreshKey: number;
@@ -357,6 +389,7 @@ function PanelBody({
   taskState: TaskViewState;
   taskError: string | null;
   gitState: GitViewState;
+  docsState: DocsViewState;
   gitDecorations: ReturnType<typeof decorationMapFromStatus>;
   onOpenFile: (path: string) => void;
   onCreateFile: (relativePath: string) => Promise<void>;
@@ -387,6 +420,14 @@ function PanelBody({
   onGitCheckoutBranch: (branch: string) => void;
   onGitCreateBranch: (name: string) => void;
   onGitOpenGraph: () => void;
+  onDocsRefresh: () => void;
+  onDocsSearch: (query: string) => void;
+  onDocsOpenPreview: (path: string) => void;
+  onDocsToggleSource: (path: string, selected: boolean) => void;
+  onDocsPackNameChange: (name: string) => void;
+  onDocsCreatePack: () => void;
+  onDocsSelectPack: (id: string) => void;
+  onDocsDeletePack: (id: string) => void;
 }) {
   if (active === "git") {
     return (
@@ -450,6 +491,22 @@ function PanelBody({
     );
   }
 
+  if (active === "docs") {
+    return (
+      <DocsPanel
+        state={docsState}
+        onRefresh={onDocsRefresh}
+        onSearch={onDocsSearch}
+        onOpenPreview={onDocsOpenPreview}
+        onToggleSource={onDocsToggleSource}
+        onPackNameChange={onDocsPackNameChange}
+        onCreatePack={onDocsCreatePack}
+        onSelectPack={onDocsSelectPack}
+        onDeletePack={onDocsDeletePack}
+      />
+    );
+  }
+
   if (active !== "explorer") {
     return (
       <div className="panel-empty">
@@ -487,6 +544,13 @@ export function AppShell() {
   const [gitConfirmationInput, setGitConfirmationInput] = useState("");
   const savedContentByPathRef = useRef<Record<string, string>>({});
   const openRequestRef = useRef(0);
+  const docsLoadRequestRef = useRef(0);
+  const docsSearchRequestRef = useRef<DocsRequestIdentity>({
+    requestId: 0,
+    workspaceId: null,
+    workspacePath: null,
+    query: "",
+  });
   const registry = useWorkspaceStore((state) => state.registry);
   const activeWorkspaceId = registry.active_workspace_id;
   const view = useWorkspaceViewStore((state) => state.viewFor(activeWorkspaceId));
@@ -545,6 +609,7 @@ export function AppShell() {
   );
   const updateTask = useWorkspaceViewStore((state) => state.updateTask);
   const updateGit = useWorkspaceViewStore((state) => state.updateGit);
+  const updateDocs = useWorkspaceViewStore((state) => state.updateDocs);
 
   const activeWorkspace = useMemo(
     () =>
@@ -580,6 +645,8 @@ export function AppShell() {
     : "";
   const gitConfirmationReady =
     gitConfirmation !== null && gitConfirmationInput === gitConfirmationText;
+  const docsPreviews = Object.values(view.docs.previewByPath);
+  const activeDocsPreview = docsPreviews[docsPreviews.length - 1] ?? null;
 
   useEffect(() => {
     setFindOpen(false);
@@ -897,6 +964,58 @@ export function AppShell() {
       disposed = true;
     };
   }, [activeWorkspaceId, activeWorkspace?.path, updateGit]);
+
+  useEffect(() => {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const requestId = docsLoadRequestRef.current + 1;
+    docsLoadRequestRef.current = requestId;
+
+    updateDocs(workspaceId, (docs) => ({
+      ...docs,
+      loading: true,
+      error: null,
+    }));
+
+    void Promise.all([getDocsIndex(workspaceRoot), listContextPacks(workspaceRoot)])
+      .then(([index, contextPacks]) => {
+        const currentWorkspace =
+          workspaceStore
+            .getState()
+            .registry.workspaces.find((workspace) => workspace.id === workspaceId) ??
+          null;
+
+        if (
+          docsLoadRequestRef.current !== requestId ||
+          workspaceStore.getState().registry.active_workspace_id !== workspaceId ||
+          currentWorkspace?.path !== workspaceRoot
+        ) {
+          return;
+        }
+
+        updateDocs(workspaceId, (docs) => ({
+          ...replaceDocsIndex(docs, index),
+          contextPacks,
+          loading: false,
+          error: null,
+        }));
+      })
+      .catch((error) => {
+        if (docsLoadRequestRef.current !== requestId) {
+          return;
+        }
+
+        updateDocs(workspaceId, (docs) => ({
+          ...docs,
+          loading: false,
+          error: `Docs failed: ${terminalErrorMessage(error)}`,
+        }));
+      });
+  }, [activeWorkspaceId, activeWorkspace?.path, updateDocs]);
 
   useEffect(() => {
     if (!activeWorkspace || !activeWorkspaceId) {
@@ -1925,6 +2044,228 @@ export function AppShell() {
     void loadGitGraph();
   }
 
+  function openDocsPanel() {
+    setActiveActivity("docs");
+    setPanelOpen(true);
+  }
+
+  async function refreshDocsIndex() {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const requestId = docsLoadRequestRef.current + 1;
+    docsLoadRequestRef.current = requestId;
+
+    updateDocs(workspaceId, (docs) => ({
+      ...docs,
+      loading: true,
+      error: null,
+    }));
+
+    try {
+      const [index, contextPacks] = await Promise.all([
+        getDocsIndex(workspaceRoot),
+        listContextPacks(workspaceRoot),
+      ]);
+
+      if (
+        docsLoadRequestRef.current !== requestId ||
+        workspaceStore.getState().registry.active_workspace_id !== workspaceId
+      ) {
+        return;
+      }
+
+      updateDocs(workspaceId, (docs) => ({
+        ...replaceDocsIndex(docs, index),
+        contextPacks,
+        loading: false,
+        error: null,
+      }));
+    } catch (error) {
+      if (docsLoadRequestRef.current !== requestId) {
+        return;
+      }
+
+      updateDocs(workspaceId, (docs) => ({
+        ...docs,
+        loading: false,
+        error: `Refresh failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
+  function searchDocsPanel(query: string) {
+    updateDocs(activeWorkspaceId, (docs) => ({
+      ...docs,
+      searchQuery: query,
+      searchResult: query.trim() ? docs.searchResult : null,
+      error: null,
+    }));
+
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const trimmedQuery = query.trim();
+    const request = createDocsRequestIdentity({
+      requestId: docsSearchRequestRef.current.requestId + 1,
+      workspaceId: activeWorkspaceId,
+      workspacePath: activeWorkspace.path,
+      query: trimmedQuery,
+    });
+    docsSearchRequestRef.current = request;
+
+    if (!trimmedQuery) {
+      return;
+    }
+
+    void searchDocs(activeWorkspace.path, trimmedQuery)
+      .then((result) => {
+        const currentWorkspace =
+          workspaceStore
+            .getState()
+            .registry.workspaces.find(
+              (workspace) => workspace.id === request.workspaceId,
+            ) ?? null;
+        const current = createDocsRequestIdentity({
+          requestId: docsSearchRequestRef.current.requestId,
+          workspaceId: workspaceStore.getState().registry.active_workspace_id,
+          workspacePath: currentWorkspace?.path ?? null,
+          query: workspaceViewStore
+            .getState()
+            .viewFor(request.workspaceId).docs.searchQuery,
+        });
+
+        if (!shouldApplyDocsResult(request, current)) {
+          return;
+        }
+
+        updateDocs(request.workspaceId, (docs) => ({
+          ...docs,
+          searchResult: result,
+          error: null,
+        }));
+      })
+      .catch((error) => {
+        if (docsSearchRequestRef.current.requestId !== request.requestId) {
+          return;
+        }
+
+        updateDocs(request.workspaceId, (docs) => ({
+          ...docs,
+          error: `Search failed: ${terminalErrorMessage(error)}`,
+        }));
+      });
+  }
+
+  async function openDocsPreview(path: string) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    openDocsPanel();
+    setSurface("docs-preview");
+
+    try {
+      const preview = await getDocPreview(workspaceRoot, path);
+      if (workspaceStore.getState().registry.active_workspace_id !== workspaceId) {
+        return;
+      }
+
+      updateDocs(workspaceId, (docs) => ({
+        ...docs,
+        previewByPath: {
+          ...docs.previewByPath,
+          [preview.path]: preview,
+        },
+        error: null,
+      }));
+    } catch (error) {
+      updateDocs(workspaceId, (docs) => ({
+        ...docs,
+        error: `Preview failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
+  function toggleDocsSource(path: string, selected: boolean) {
+    updateDocs(activeWorkspaceId, (docs) =>
+      selectDocSource(docs, path, selected),
+    );
+  }
+
+  function updateDocsPackName(name: string) {
+    updateDocs(activeWorkspaceId, (docs) =>
+      updateContextPackDraftName(docs, name),
+    );
+  }
+
+  async function createDocsContextPack() {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const docs = workspaceViewStore.getState().viewFor(workspaceId).docs;
+    const name = docs.packDraftName.trim();
+    const docPaths = selectedDocPaths(docs);
+
+    if (!name || docPaths.length === 0) {
+      openDocsPanel();
+      return;
+    }
+
+    try {
+      const pack = await createContextPack({
+        workspaceRoot: activeWorkspace.path,
+        name,
+        docPaths,
+      });
+      updateDocs(workspaceId, (state) => storeContextPack(state, pack));
+      openDocsPanel();
+    } catch (error) {
+      updateDocs(workspaceId, (state) => ({
+        ...state,
+        error: `Create pack failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
+  function selectDocsContextPack(id: string) {
+    updateDocs(activeWorkspaceId, (docs) => ({
+      ...docs,
+      activePackId: id,
+    }));
+  }
+
+  async function deleteDocsContextPack(id: string) {
+    if (!activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+
+    try {
+      await deleteContextPack(id);
+      updateDocs(workspaceId, (docs) => ({
+        ...docs,
+        contextPacks: docs.contextPacks.filter((pack) => pack.id !== id),
+        activePackId: docs.activePackId === id ? null : docs.activePackId,
+        error: null,
+      }));
+    } catch (error) {
+      updateDocs(workspaceId, (docs) => ({
+        ...docs,
+        error: `Delete pack failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
   function runCommand(id: string) {
     switch (id) {
       case "save-file":
@@ -1969,6 +2310,15 @@ export function AppShell() {
         break;
       case "open-settings":
         setActiveActivity("settings");
+        break;
+      case "open-docs":
+        openDocsPanel();
+        break;
+      case "refresh-docs-index":
+        void refreshDocsIndex();
+        break;
+      case "create-context-pack":
+        void createDocsContextPack();
         break;
       case "open-workspace":
       case "switch-workspace":
@@ -2025,12 +2375,15 @@ export function AppShell() {
       <div className="body">
         <ActivityRail
           active={activeActivity}
-          badges={{ git: changeBadgeCount(view.git.status) }}
+          badges={{
+            git: changeBadgeCount(view.git.status),
+            docs: docsBadgeCount(view.docs),
+          }}
           onSelect={setActiveActivity}
         />
         {panelOpen ? (
           <aside className="panel">
-            {activeActivity === "git" ? null : (
+            {activeActivity === "git" || activeActivity === "docs" ? null : (
               <div className="panel-head">
                 <span className="panel-title">{panelTitles[activeActivity]}</span>
                 <div className="panel-acts">
@@ -2080,6 +2433,7 @@ export function AppShell() {
               taskState={view.task}
               taskError={taskError}
               gitState={view.git}
+              docsState={view.docs}
               gitDecorations={gitDecorations}
               onOpenFile={openFile}
               onCreateFile={createFileFromExplorer}
@@ -2112,6 +2466,14 @@ export function AppShell() {
               }
               onGitCreateBranch={(name) => void createBranchFromGitPanel(name)}
               onGitOpenGraph={openGitGraph}
+              onDocsRefresh={() => void refreshDocsIndex()}
+              onDocsSearch={searchDocsPanel}
+              onDocsOpenPreview={(path) => void openDocsPreview(path)}
+              onDocsToggleSource={toggleDocsSource}
+              onDocsPackNameChange={updateDocsPackName}
+              onDocsCreatePack={() => void createDocsContextPack()}
+              onDocsSelectPack={selectDocsContextPack}
+              onDocsDeletePack={(id) => void deleteDocsContextPack(id)}
             />
           </aside>
         ) : null}
@@ -2203,6 +2565,26 @@ export function AppShell() {
                   </button>
                 </div>
               ) : null}
+              {surface === "docs-preview" ? (
+                <div
+                  className="tab active"
+                  title={activeDocsPreview?.path ?? "Docs preview"}
+                >
+                  <BookOpenText className="ftype" aria-hidden="true" />
+                  <span className="tlabel mono">
+                    {activeDocsPreview?.title ?? "Docs Preview"}
+                  </span>
+                  <button
+                    type="button"
+                    className="close"
+                    title="Close docs preview"
+                    aria-label="Close docs preview"
+                    onClick={() => setSurface("empty")}
+                  >
+                    <X aria-hidden="true" />
+                  </button>
+                </div>
+              ) : null}
               <div className="tabstrip-tail">
                 <button
                   type="button"
@@ -2238,6 +2620,8 @@ export function AppShell() {
                   ? activeEditorParent
                   : surface === "terminal"
                     ? "terminal"
+                    : surface === "docs-preview"
+                      ? "docs"
                     : surface === "editor"
                       ? "editor"
                       : "workspace"}
@@ -2248,6 +2632,8 @@ export function AppShell() {
                   ? activeEditorName
                   : surface === "terminal"
                     ? activeTerminalName
+                    : surface === "docs-preview"
+                      ? (activeDocsPreview?.path ?? "Preview")
                     : surface === "editor"
                       ? "No file open"
                       : "Start"}
@@ -2259,7 +2645,8 @@ export function AppShell() {
                 showEditor ||
                 surface === "terminal" ||
                 surface === "git-diff" ||
-                surface === "git-graph"
+                surface === "git-graph" ||
+                surface === "docs-preview"
                   ? " editor-content"
                   : ""
               }`}
@@ -2416,6 +2803,19 @@ export function AppShell() {
                   onFetch={fetchFromGitPanel}
                   onRefresh={() => void loadGitGraph()}
                 />
+              ) : surface === "docs-preview" ? (
+                <div className="docs-preview-placeholder">
+                  <div className="editor-toolbar">
+                    <span className="path-label mono">
+                      {activeDocsPreview?.path ?? "Docs preview"}
+                    </span>
+                  </div>
+                  <div className="large-file-note">
+                    {activeDocsPreview
+                      ? "Markdown preview is queued for Task 5."
+                      : "Select a doc from the Docs panel."}
+                  </div>
+                </div>
               ) : (
                 <>
                   <div className="workspace-hero">

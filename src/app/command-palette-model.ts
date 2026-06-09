@@ -20,6 +20,18 @@ export const node1Commands: CommandItem[] = [
   { id: "search-workspace", label: "Search workspace", group: "Search" },
 ];
 
+export const node5Commands: CommandItem[] = [
+  { id: "open-docs", label: "Docs: Open docs panel", group: "Docs" },
+  { id: "refresh-docs-index", label: "Docs: Refresh index", group: "Docs" },
+  {
+    id: "create-context-pack",
+    label: "Docs: Create context pack",
+    group: "Docs",
+  },
+];
+
+export const allCommands: CommandItem[] = [...node1Commands, ...node5Commands];
+
 export function filterCommands(
   commands: CommandItem[],
   query: string,
