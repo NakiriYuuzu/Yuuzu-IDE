@@ -7,7 +7,23 @@ import type { WorkspaceRegistry } from "../features/workspace/workspace-api";
 const listWorkspacesMock = mock<() => Promise<WorkspaceRegistry>>();
 
 mock.module("../features/workspace/workspace-api", () => ({
+  addWorkspace: mock(() => Promise.reject(new Error("unexpected addWorkspace call"))),
   listWorkspaces: listWorkspacesMock,
+  openWorkspacePath: mock(() =>
+    Promise.reject(new Error("unexpected openWorkspacePath call")),
+  ),
+  pickWorkspaceFolder: mock(() =>
+    Promise.reject(new Error("unexpected pickWorkspaceFolder call")),
+  ),
+  pinWorkspace: mock(() => Promise.reject(new Error("unexpected pinWorkspace call"))),
+  removeWorkspace: mock(() =>
+    Promise.reject(new Error("unexpected removeWorkspace call")),
+  ),
+  scanDirectory: mock(() => Promise.reject(new Error("unexpected scanDirectory call"))),
+  scanWorkspace: mock(() => Promise.reject(new Error("unexpected scanWorkspace call"))),
+  switchWorkspace: mock(() =>
+    Promise.reject(new Error("unexpected switchWorkspace call")),
+  ),
 }));
 
 describe("workspace bootstrap", () => {
