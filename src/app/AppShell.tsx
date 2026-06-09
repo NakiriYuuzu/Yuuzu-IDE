@@ -32,6 +32,7 @@ import {
   unwatchWorkspace,
   watchWorkspace,
   writeTextFile,
+  type WatchWorkspaceHandle,
 } from "../features/files/file-api";
 import {
   clearDraft,
@@ -268,19 +269,21 @@ export function AppShell() {
     const workspaceId = activeWorkspaceId;
     const workspaceRoot = activeWorkspace.path;
     let disposed = false;
+    let watchHandle: WatchWorkspaceHandle | null = null;
     let watchedWorkspace: WatchedWorkspaceIdentity | null = null;
 
     void watchWorkspace(workspaceRoot)
-      .then((watchedRoot) => {
+      .then((handle) => {
         if (disposed) {
-          void unwatchWorkspace(workspaceRoot).catch(() => {});
+          void unwatchWorkspace(handle).catch(() => {});
           return;
         }
 
+        watchHandle = handle;
         watchedWorkspace = {
           workspaceId,
           registryRoot: workspaceRoot,
-          watchedRoot,
+          watchedRoot: handle.workspace_root,
         };
       })
       .catch(() => {});
@@ -319,7 +322,9 @@ export function AppShell() {
     return () => {
       disposed = true;
       void unlisten.then((dispose) => dispose()).catch(() => {});
-      void unwatchWorkspace(workspaceRoot).catch(() => {});
+      if (watchHandle) {
+        void unwatchWorkspace(watchHandle).catch(() => {});
+      }
     };
   }, [activeWorkspaceId, activeWorkspace?.path, updateEditor]);
 

@@ -1,12 +1,18 @@
 use crate::file_system::{self, FileVersion};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Component, Path, PathBuf},
     sync::Mutex,
 };
 use tauri::{AppHandle, Emitter};
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct WatchWorkspaceHandle {
+    pub workspace_root: PathBuf,
+    pub watch_id: String,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct FileChangedEvent {
@@ -16,13 +22,111 @@ pub struct FileChangedEvent {
 }
 
 pub struct FileWatcherState {
-    watchers: Mutex<HashMap<PathBuf, RecommendedWatcher>>,
+    registry: Mutex<WatcherRegistry>,
+}
+
+struct WatcherEntry {
+    _watcher: Option<RecommendedWatcher>,
+    claims: HashSet<String>,
+}
+
+struct WatcherRegistry {
+    entries: HashMap<PathBuf, WatcherEntry>,
+    next_watch_id: u64,
+}
+
+impl WatcherRegistry {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            next_watch_id: 0,
+        }
+    }
+
+    fn has_entry(&self, root: &Path) -> bool {
+        self.entries.contains_key(root)
+    }
+
+    fn insert_watcher(&mut self, root: PathBuf, watcher: RecommendedWatcher) {
+        self.entries.insert(
+            root,
+            WatcherEntry {
+                _watcher: Some(watcher),
+                claims: HashSet::new(),
+            },
+        );
+    }
+
+    #[cfg(test)]
+    fn insert_test_watcher(&mut self, root: PathBuf) {
+        self.entries.insert(
+            root,
+            WatcherEntry {
+                _watcher: None,
+                claims: HashSet::new(),
+            },
+        );
+    }
+
+    fn claim(&mut self, root: PathBuf) -> Result<WatchWorkspaceHandle, String> {
+        let entry = self
+            .entries
+            .get_mut(&root)
+            .ok_or_else(|| format!("workspace watcher not active: {}", root.display()))?;
+        self.next_watch_id += 1;
+        let watch_id = self.next_watch_id.to_string();
+        entry.claims.insert(watch_id.clone());
+
+        Ok(WatchWorkspaceHandle {
+            workspace_root: root,
+            watch_id,
+        })
+    }
+
+    fn release(&mut self, handle: &WatchWorkspaceHandle) -> Result<bool, String> {
+        let remove_entry = {
+            let entry = self
+                .entries
+                .get_mut(&handle.workspace_root)
+                .ok_or_else(|| {
+                    format!(
+                        "workspace watcher not active: {}",
+                        handle.workspace_root.display()
+                    )
+                })?;
+
+            if !entry.claims.remove(&handle.watch_id) {
+                return Err(format!("watch claim not active: {}", handle.watch_id));
+            }
+
+            entry.claims.is_empty()
+        };
+
+        if remove_entry {
+            self.entries.remove(&handle.workspace_root);
+        }
+
+        Ok(remove_entry)
+    }
+
+    #[cfg(test)]
+    fn claim_count(&self, root: &Path) -> usize {
+        self.entries
+            .get(root)
+            .map(|entry| entry.claims.len())
+            .unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    fn has_active_watcher(&self, root: &Path) -> bool {
+        self.entries.contains_key(root)
+    }
 }
 
 impl FileWatcherState {
     pub fn new() -> Self {
         Self {
-            watchers: Mutex::new(HashMap::new()),
+            registry: Mutex::new(WatcherRegistry::new()),
         }
     }
 
@@ -30,43 +134,41 @@ impl FileWatcherState {
         &self,
         app: AppHandle,
         workspace_root: PathBuf,
-    ) -> Result<PathBuf, String> {
+    ) -> Result<WatchWorkspaceHandle, String> {
         let root = canonical_workspace_root(&workspace_root)?;
-        let mut watchers = self.watchers.lock().map_err(|err| err.to_string())?;
-        if watchers.contains_key(&root) {
-            return Ok(root);
+        let mut registry = self.registry.lock().map_err(|err| err.to_string())?;
+
+        if !registry.has_entry(&root) {
+            let emit_root = root.clone();
+            let mut watcher =
+                notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                    let Ok(event) = event else {
+                        return;
+                    };
+
+                    for path in event.paths {
+                        if let Some(path) = normalize_event_path(&emit_root, &path) {
+                            let _ = app.emit(
+                                "workspace://file-changed",
+                                file_changed_event(emit_root.clone(), path),
+                            );
+                        }
+                    }
+                })
+                .map_err(|err| err.to_string())?;
+
+            watcher
+                .watch(&root, RecursiveMode::Recursive)
+                .map_err(|err| err.to_string())?;
+            registry.insert_watcher(root.clone(), watcher);
         }
 
-        let emit_root = root.clone();
-        let mut watcher =
-            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                let Ok(event) = event else {
-                    return;
-                };
-
-                for path in event.paths {
-                    if let Some(path) = normalize_event_path(&emit_root, &path) {
-                        let _ = app.emit(
-                            "workspace://file-changed",
-                            file_changed_event(emit_root.clone(), path),
-                        );
-                    }
-                }
-            })
-            .map_err(|err| err.to_string())?;
-
-        watcher
-            .watch(&root, RecursiveMode::Recursive)
-            .map_err(|err| err.to_string())?;
-        watchers.insert(root.clone(), watcher);
-        Ok(root)
+        registry.claim(root)
     }
 
-    pub fn unwatch_workspace(&self, workspace_root: PathBuf) -> Result<(), String> {
-        let root = canonical_workspace_root(&workspace_root)?;
-        let mut watchers = self.watchers.lock().map_err(|err| err.to_string())?;
-        watchers.remove(&root);
-        Ok(())
+    pub fn unwatch_workspace(&self, handle: WatchWorkspaceHandle) -> Result<(), String> {
+        let mut registry = self.registry.lock().map_err(|err| err.to_string())?;
+        registry.release(&handle).map(|_| ())
     }
 }
 
@@ -189,5 +291,36 @@ mod tests {
             event.version,
             Some(crate::file_system::file_version(&path).expect("version"))
         );
+    }
+
+    #[test]
+    fn releasing_one_of_two_watch_handles_keeps_root_active_until_second_release() {
+        let root = tempdir().expect("tempdir");
+        let root_path = root.path().canonicalize().expect("canonical");
+        let mut registry = super::WatcherRegistry::new();
+        registry.insert_test_watcher(root_path.clone());
+        let first = registry.claim(root_path.clone()).expect("first claim");
+        let second = registry.claim(root_path.clone()).expect("second claim");
+
+        assert_eq!(registry.claim_count(&root_path), 2);
+        assert!(!registry.release(&first).expect("release first"));
+        assert!(registry.has_active_watcher(&root_path));
+        assert_eq!(registry.claim_count(&root_path), 1);
+
+        assert!(registry.release(&second).expect("release second"));
+        assert!(!registry.has_active_watcher(&root_path));
+    }
+
+    #[test]
+    fn release_by_watch_token_does_not_require_root_to_still_exist() {
+        let root = tempdir().expect("tempdir");
+        let root_path = root.path().canonicalize().expect("canonical");
+        let mut registry = super::WatcherRegistry::new();
+        registry.insert_test_watcher(root_path.clone());
+        let handle = registry.claim(root_path.clone()).expect("claim");
+        drop(root);
+
+        assert!(registry.release(&handle).expect("release"));
+        assert!(!registry.has_active_watcher(&root_path));
     }
 }
