@@ -183,6 +183,80 @@ describe("agent model", () => {
     expect(item.truncated).toBe(true);
   });
 
+  test("bounds diagnostic context and keeps ids compact", () => {
+    const longMessage = "y".repeat(130_000);
+    const first = agentContextFromDiagnostic({
+      path: "src/app.ts",
+      message: longMessage,
+      severity: "error",
+      line: 42,
+    });
+    const second = agentContextFromDiagnostic({
+      path: "src/app.ts",
+      message: longMessage,
+      severity: "error",
+      line: 42,
+    });
+
+    expect(first.content).toHaveLength(120_000);
+    expect(first.truncated).toBe(true);
+    expect(first.id.length).toBeLessThan(300);
+    expect(first.id).not.toContain(longMessage);
+    expect(first.id).toBe(second.id);
+    expect(first.kind).toBe("diagnostic");
+    expect(first.label).toBe("error: src/app.ts:42");
+  });
+
+  test("normalizes file context paths across fallback and windows forms", () => {
+    expect(
+      agentContextFromFile({
+        workspaceRoot: "/repo",
+        path: "src\\app.ts",
+        content: "file",
+      }),
+    ).toMatchObject({
+      id: "file:src/app.ts",
+      path: "src/app.ts",
+      label: "src/app.ts",
+    });
+
+    expect(
+      agentContextFromFile({
+        workspaceRoot: "C:\\Repo",
+        path: "c:\\Repo\\src\\app.ts",
+        content: "file",
+      }),
+    ).toMatchObject({
+      id: "file:src/app.ts",
+      path: "src/app.ts",
+      label: "src/app.ts",
+    });
+
+    expect(
+      agentContextFromFile({
+        workspaceRoot: "/repo",
+        path: "/repo-old/src/app.ts",
+        content: "file",
+      }),
+    ).toMatchObject({
+      id: "file:/repo-old/src/app.ts",
+      path: "/repo-old/src/app.ts",
+      label: "/repo-old/src/app.ts",
+    });
+
+    expect(
+      agentContextFromFile({
+        workspaceRoot: "/repo",
+        path: "/repo/src/app.ts",
+        content: "file",
+      }),
+    ).toMatchObject({
+      id: "file:src/app.ts",
+      path: "src/app.ts",
+      label: "src/app.ts",
+    });
+  });
+
   test("builds bounded diagnostic context with ids and labels", () => {
     expect(
       agentContextFromDiagnostic({
@@ -192,7 +266,6 @@ describe("agent model", () => {
         line: 42,
       }),
     ).toMatchObject({
-      id: "diagnostic:src/app.ts:42:Unused variable",
       kind: "diagnostic",
       label: "error: src/app.ts:42",
       path: "src/app.ts",

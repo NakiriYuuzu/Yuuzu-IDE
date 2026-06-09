@@ -208,9 +208,36 @@ function boundContext(content: string): { content: string; truncated: boolean } 
 }
 
 function workspaceRelativePath(workspaceRoot: string, path: string): string {
-  const root = workspaceRoot.replace(/[\\/]+$/, "").replace(/\\/g, "/");
-  const normalized = path.replace(/\\/g, "/");
-  return normalized.startsWith(`${root}/`) ? normalized.slice(root.length + 1) : path;
+  const normalize = (value: string): string => value.replace(/\\/g, "/").replace(/\/+$/u, "");
+  const root = normalize(workspaceRoot);
+  const normalized = normalize(path);
+  const normalizedLower = normalized.toLowerCase();
+  const rootLower = root.toLowerCase();
+  const isWindowsRoot = /^[a-z]:/iu.test(root);
+
+  const isDirectMatch = isWindowsRoot
+    ? normalizedLower === rootLower
+    : normalized === root;
+  if (isDirectMatch) {
+    return "";
+  }
+
+  const hasRootPrefix = isWindowsRoot
+    ? normalizedLower.startsWith(`${rootLower}/`)
+    : normalized.startsWith(`${root}/`);
+
+  const safeBoundary = hasRootPrefix && normalized.charAt(root.length) === "/";
+
+  return safeBoundary ? normalized.slice(root.length + 1) : normalized;
+}
+
+function shortHash(value: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0").slice(0, 10);
 }
 
 export function agentContextFromFile(args: {
@@ -272,14 +299,15 @@ export function agentContextFromDiagnostic(args: {
   severity: string;
   line: number;
 }): AgentContextItem {
+  const bounded = boundContext(args.message);
   const label = `${args.severity}: ${args.path}:${args.line}`;
   return {
-    id: `diagnostic:${args.path}:${args.line}:${args.message}`,
+    id: `diagnostic:${args.path}:${args.line}:${args.severity}:${shortHash(args.message)}`,
     kind: "diagnostic",
     label,
     path: args.path,
-    content: args.message,
-    truncated: false,
+    content: bounded.content,
+    truncated: bounded.truncated,
   };
 }
 
