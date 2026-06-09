@@ -79,8 +79,11 @@ import {
   rerunnableTaskForState,
   runningTaskRunForState,
   setCustomCommand,
+  setTaskErrorForWorkspace,
   stopTaskRunInState,
+  taskErrorForWorkspace,
   upsertTaskRun,
+  type TaskErrorByWorkspace,
   type TaskRun,
   type TaskViewState,
   type WorkspaceTask,
@@ -366,7 +369,8 @@ export function AppShell() {
   const [loadedFile, setLoadedFile] = useState<LoadedFile | null>(null);
   const [editorError, setEditorError] = useState<string | null>(null);
   const [terminalError, setTerminalError] = useState<string | null>(null);
-  const [taskError, setTaskError] = useState<string | null>(null);
+  const [taskErrorsByWorkspace, setTaskErrorsByWorkspace] =
+    useState<TaskErrorByWorkspace>({});
   const [findOpen, setFindOpen] = useState(false);
   const [findFocusRequest, setFindFocusRequest] = useState(0);
   const [findQuery, setFindQuery] = useState("");
@@ -399,6 +403,10 @@ export function AppShell() {
   const activeTaskProblems = activeTaskRun
     ? (view.task.problemsByRunId[activeTaskRun.id] ?? [])
     : [];
+  const taskError = taskErrorForWorkspace(
+    taskErrorsByWorkspace,
+    activeWorkspaceId,
+  );
 
   function setActiveActivity(activeActivity: ActivityId) {
     updateView(activeWorkspaceId, { activeActivity });
@@ -410,6 +418,15 @@ export function AppShell() {
 
   function setSurface(surface: Surface) {
     updateView(activeWorkspaceId, { surface });
+  }
+
+  function setWorkspaceTaskError(
+    workspaceId: string | null,
+    error: string | null,
+  ) {
+    setTaskErrorsByWorkspace((errors) =>
+      setTaskErrorForWorkspace(errors, workspaceId, error),
+    );
   }
 
   const updateTerminal = useWorkspaceViewStore(
@@ -443,7 +460,6 @@ export function AppShell() {
     setFindFocusRequest(0);
     setFindQuery("");
     setTerminalError(null);
-    setTaskError(null);
   }, [activeWorkspaceId]);
 
   useEffect(() => {
@@ -638,11 +654,14 @@ export function AppShell() {
         }
 
         updateTask(workspaceId, (task) => replaceDetectedTasks(task, tasks));
-        setTaskError(null);
+        setWorkspaceTaskError(workspaceId, null);
       })
       .catch((error) => {
         if (!disposed) {
-          setTaskError(`Detect failed: ${terminalErrorMessage(error)}`);
+          setWorkspaceTaskError(
+            workspaceId,
+            `Detect failed: ${terminalErrorMessage(error)}`,
+          );
         }
       });
 
@@ -656,7 +675,10 @@ export function AppShell() {
       })
       .catch((error) => {
         if (!disposed) {
-          setTaskError(`History failed: ${terminalErrorMessage(error)}`);
+          setWorkspaceTaskError(
+            workspaceId,
+            `History failed: ${terminalErrorMessage(error)}`,
+          );
         }
       });
 
@@ -1205,9 +1227,12 @@ export function AppShell() {
         activeActivity: "tasks",
         panelOpen: true,
       });
-      setTaskError(null);
+      setWorkspaceTaskError(workspaceId, null);
     } catch (error) {
-      setTaskError(`Run failed: ${terminalErrorMessage(error)}`);
+      setWorkspaceTaskError(
+        workspaceId,
+        `Run failed: ${terminalErrorMessage(error)}`,
+      );
       updateView(workspaceId, {
         activeActivity: "tasks",
         panelOpen: true,
@@ -1250,9 +1275,12 @@ export function AppShell() {
           runId,
         ),
       );
-      setTaskError(null);
+      setWorkspaceTaskError(workspaceId, null);
     } catch (error) {
-      setTaskError(`Stop failed: ${terminalErrorMessage(error)}`);
+      setWorkspaceTaskError(
+        workspaceId,
+        `Stop failed: ${terminalErrorMessage(error)}`,
+      );
       updateView(workspaceId, {
         activeActivity: "tasks",
         panelOpen: true,

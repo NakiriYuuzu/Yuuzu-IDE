@@ -8,9 +8,12 @@ import {
   createTaskState,
   finishTaskRun,
   replaceDetectedTasks,
+  replaceTaskRuns,
   rerunnableTaskForState,
   setCustomCommand,
+  setTaskErrorForWorkspace,
   stopTaskRunInState,
+  taskErrorForWorkspace,
   upsertTaskRun,
 } from "./task-model";
 import type { TaskRun } from "./task-model";
@@ -122,5 +125,68 @@ describe("task model", () => {
       label: "bun test",
       command: "bun test",
     });
+  });
+
+  test("restored history orders newest first and reruns the latest run", () => {
+    const state = replaceTaskRuns(createTaskState(), [
+      runningRun({
+        id: "w:task-1",
+        label: "old",
+        command: "bun old",
+        status: "Exited",
+      }),
+      runningRun({
+        id: "w:task-2",
+        label: "latest",
+        command: "bun latest",
+        status: "Exited",
+      }),
+    ]);
+
+    expect(state.runs.map((run) => run.id)).toEqual(["w:task-2", "w:task-1"]);
+    expect(state.activeRunId).toBe("w:task-2");
+    expect(rerunnableTaskForState(state)).toMatchObject({
+      label: "latest",
+      command: "bun latest",
+    });
+  });
+
+  test("restored history sorts numeric suffixes and running runs first", () => {
+    const state = replaceTaskRuns(createTaskState(), [
+      runningRun({
+        id: "w:task-9",
+        label: "running older",
+        command: "bun dev",
+        status: "Running",
+      }),
+      runningRun({
+        id: "w:task-10",
+        label: "exited latest",
+        command: "bun build",
+        status: "Exited",
+      }),
+    ]);
+
+    expect(state.runs.map((run) => run.id)).toEqual(["w:task-9", "w:task-10"]);
+    expect(state.activeRunId).toBe("w:task-9");
+    expect(rerunnableTaskForState(state)).toMatchObject({
+      label: "running older",
+      command: "bun dev",
+    });
+  });
+
+  test("task errors are scoped by workspace", () => {
+    const errors = setTaskErrorForWorkspace(
+      setTaskErrorForWorkspace({}, "workspace-a", "Run failed"),
+      "workspace-b",
+      "History failed",
+    );
+    const cleared = setTaskErrorForWorkspace(errors, "workspace-b", null);
+
+    expect(taskErrorForWorkspace(errors, "workspace-a")).toBe("Run failed");
+    expect(taskErrorForWorkspace(errors, "workspace-b")).toBe("History failed");
+    expect(taskErrorForWorkspace(errors, null)).toBeNull();
+    expect(taskErrorForWorkspace(cleared, "workspace-a")).toBe("Run failed");
+    expect(taskErrorForWorkspace(cleared, "workspace-b")).toBeNull();
   });
 });

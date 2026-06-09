@@ -26,6 +26,8 @@ export type RerunnableTask = {
   cwd: string;
 };
 
+export type TaskErrorByWorkspace = Record<string, string>;
+
 type PendingTaskFinish = {
   exitCode: number | null;
 };
@@ -47,6 +49,31 @@ const MAX_TASK_RUNS = 40;
 function appendBoundedOutput(previous: string, chunk: string): string {
   const output = `${previous}${chunk}`;
   return output.slice(Math.max(0, output.length - MAX_TASK_OUTPUT_CHARS));
+}
+
+function taskRunNumber(run: TaskRun): number | null {
+  const match = /:task-(\d+)$/.exec(run.id);
+  return match ? Number(match[1]) : null;
+}
+
+function compareRestoredTaskRuns(left: TaskRun, right: TaskRun): number {
+  if (left.status !== right.status) {
+    if (left.status === "Running") {
+      return -1;
+    }
+
+    if (right.status === "Running") {
+      return 1;
+    }
+  }
+
+  const leftNumber = taskRunNumber(left);
+  const rightNumber = taskRunNumber(right);
+  if (leftNumber !== null && rightNumber !== null && leftNumber !== rightNumber) {
+    return rightNumber - leftNumber;
+  }
+
+  return right.id.localeCompare(left.id);
 }
 
 export function createTaskState(): TaskViewState {
@@ -76,16 +103,51 @@ export function setCustomCommand(
   return { ...state, customCommand };
 }
 
+export function taskErrorForWorkspace(
+  errors: TaskErrorByWorkspace,
+  workspaceId: string | null,
+): string | null {
+  if (!workspaceId) {
+    return null;
+  }
+
+  return errors[workspaceId] ?? null;
+}
+
+export function setTaskErrorForWorkspace(
+  errors: TaskErrorByWorkspace,
+  workspaceId: string | null,
+  error: string | null,
+): TaskErrorByWorkspace {
+  if (!workspaceId) {
+    return errors;
+  }
+
+  if (error === null) {
+    const next = { ...errors };
+    delete next[workspaceId];
+    return next;
+  }
+
+  return { ...errors, [workspaceId]: error };
+}
+
 export function replaceTaskRuns(
   state: TaskViewState,
   runs: TaskRun[],
 ): TaskViewState {
   const emptyState: TaskViewState = { ...state, runs: [], activeRunId: null };
+  const restoredRuns = [...runs]
+    .sort(compareRestoredTaskRuns)
+    .slice(0, MAX_TASK_RUNS);
+  const restoredState = [...restoredRuns]
+    .reverse()
+    .reduce<TaskViewState>(
+      (next, run) => upsertTaskRun(next, run),
+      emptyState,
+    );
 
-  return runs.reduce<TaskViewState>(
-    (next, run) => upsertTaskRun(next, run),
-    emptyState,
-  );
+  return { ...restoredState, activeRunId: restoredRuns[0]?.id ?? null };
 }
 
 export function upsertTaskRun(state: TaskViewState, run: TaskRun): TaskViewState {
