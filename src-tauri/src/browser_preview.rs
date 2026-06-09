@@ -9,6 +9,7 @@ const PNG_MAGIC: &[u8] = &[137, 80, 78, 71, 13, 10, 26, 10];
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn normalizes_localhost_urls_and_preserves_paths() {
@@ -130,6 +131,39 @@ mod tests {
 
         assert_eq!(screenshot.url, "http://localhost:5173/dashboard");
     }
+
+    #[test]
+    fn capture_region_allows_negative_coordinates() {
+        let captured_bounds: Arc<Mutex<Option<BrowserCaptureBounds>>> = Arc::new(Mutex::new(None));
+        let request = BrowserCaptureRequest {
+            url: "http://localhost:5173/".to_string(),
+            title: "local".to_string(),
+            bounds: BrowserCaptureBounds {
+                x: -320,
+                y: -200,
+                width: 320,
+                height: 180,
+            },
+        };
+
+        let observed = captured_bounds.clone();
+        capture_preview_with(
+            "/workspace",
+            request,
+            move |bounds| {
+                *observed.lock().expect("capture bounds") = Some(bounds.clone());
+                Ok(vec![137, 80, 78, 71, 13, 10, 26, 10])
+            },
+            || Ok(42),
+            || "shot-3".to_string(),
+        )
+        .expect("screenshot");
+
+        let observed = captured_bounds.lock().expect("capture bounds");
+        let observed = observed.as_ref().expect("bounds");
+        assert_eq!(observed.x, -320);
+        assert_eq!(observed.y, -200);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -185,18 +219,22 @@ pub fn normalize_browser_url(input: &str) -> Result<BrowserUrl, String> {
         return Err(format!("unsupported browser scheme: {scheme}"));
     }
 
-    let (authority, path, query, fragment) = split_browser_url(rest)?;
+    let split = split_browser_url(rest)?;
+    let authority = split.authority;
+    let path = split.path;
+    let query = split.query;
+    let fragment = split.fragment;
     let (host, port) = parse_loopback_host(authority)?;
 
     let mut normalized_url = format!("http://{authority}");
     normalized_url.push_str(&path);
     if let Some(query) = query {
         normalized_url.push('?');
-        normalized_url.push_str(&query);
+        normalized_url.push_str(query);
     }
     if let Some(fragment) = fragment {
         normalized_url.push('#');
-        normalized_url.push_str(&fragment);
+        normalized_url.push_str(fragment);
     }
 
     Ok(BrowserUrl {
@@ -206,7 +244,14 @@ pub fn normalize_browser_url(input: &str) -> Result<BrowserUrl, String> {
     })
 }
 
-fn split_browser_url(input: &str) -> Result<(&str, String, Option<&str>, Option<&str>), String> {
+struct SplitBrowserUrl<'a> {
+    authority: &'a str,
+    path: String,
+    query: Option<&'a str>,
+    fragment: Option<&'a str>,
+}
+
+fn split_browser_url(input: &str) -> Result<SplitBrowserUrl<'_>, String> {
     if input.is_empty() {
         return Err("browser url is missing host".to_string());
     }
@@ -242,7 +287,12 @@ fn split_browser_url(input: &str) -> Result<(&str, String, Option<&str>, Option<
         String::new()
     };
 
-    Ok((authority, path, query, fragment))
+    Ok(SplitBrowserUrl {
+        authority,
+        path,
+        query,
+        fragment,
+    })
 }
 
 fn parse_loopback_host(authority: &str) -> Result<(String, Option<u16>), String> {
@@ -302,9 +352,6 @@ fn parse_port(raw_port: &str) -> Result<u16, String> {
 pub fn validate_capture_bounds(bounds: &BrowserCaptureBounds) -> Result<(), String> {
     if bounds.width == 0 || bounds.height == 0 {
         return Err("capture region must have positive width and height".to_string());
-    }
-    if bounds.x < 0 || bounds.y < 0 {
-        return Err("capture region origin must not be negative".to_string());
     }
 
     let area = u64::from(bounds.width) * u64::from(bounds.height);

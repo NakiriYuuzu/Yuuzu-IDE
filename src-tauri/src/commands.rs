@@ -1692,6 +1692,29 @@ mod tests {
     }
 
     #[test]
+    fn capture_browser_preview_rejects_unregistered_workspace_before_capture() {
+        let config = tempdir().expect("config dir");
+        let unregistered = tempdir().expect("unregistered workspace");
+        let state = AppState::new(config.path()).expect("state");
+
+        let result = state.capture_browser_preview(
+            unregistered.path().to_str().expect("unregistered path"),
+            crate::browser_preview::BrowserCaptureRequest {
+                url: "localhost:5173".to_string(),
+                title: "local".to_string(),
+                bounds: crate::browser_preview::BrowserCaptureBounds {
+                    x: 0,
+                    y: 0,
+                    width: 10,
+                    height: 10,
+                },
+            },
+        );
+
+        assert!(result.unwrap_err().contains("workspace not registered"));
+    }
+
+    #[test]
     fn lsp_open_document_preserves_flat_command_signature() {
         type FlatOpenDocumentCommand =
             for<'app_state, 'lsp_state> fn(
