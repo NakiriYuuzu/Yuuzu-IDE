@@ -3004,6 +3004,16 @@ button {
     display: inline-flex;
   }
 
+  .agent-panel .agent-status,
+  .agent-panel .agent-transcript-head .badge2 {
+    display: inline-flex;
+    max-width: 90px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .panel {
     width: 220px;
     flex-basis: 220px;

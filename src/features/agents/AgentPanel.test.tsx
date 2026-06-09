@@ -57,7 +57,7 @@ function session(): AgentSession {
         id: "verify-1",
         session_id: "agent-1",
         kind: "verification",
-        title: "bun test",
+        title: "Run test command",
         content: "145 pass",
         status: "passed",
         approval_status: null,
@@ -125,6 +125,7 @@ function renderAgentPanel({
 describe("AgentPanel", () => {
   test("starts an agent session with draft prompt and selected context", () => {
     const started: string[] = [];
+    const toggled: Array<{ id: string; selected: boolean }> = [];
     renderAgentPanel({
       state: {
         ...createAgentState(),
@@ -140,12 +141,50 @@ describe("AgentPanel", () => {
           content: "shell",
           truncated: false,
         },
+        {
+          id: "terminal:build",
+          kind: "terminal",
+          label: "Build output",
+          path: "Build output",
+          content: "npm run build output ...",
+          truncated: true,
+        },
       ],
       onStartSession: (prompt) => started.push(prompt),
+      onToggleContext: (id, selected) => {
+        toggled.push({ id, selected });
+      },
     });
+
+    expect(screen.getByText("src/app/AppShell.tsx")).toBeTruthy();
+    expect(screen.getByText("file")).toBeTruthy();
+    expect(screen.getByText(/terminal/iu)).toBeTruthy();
+    expect(screen.getByText(/truncated/iu)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Start session" }));
     expect(started).toEqual(["Plan Node 7"]);
+
+    fireEvent.click(screen.getByLabelText("Use Build output context"));
+    expect(toggled).toEqual([{ id: "terminal:build", selected: true }]);
+  });
+
+  test("keeps mode buttons reflecting controlled mode state", () => {
+    const modes: AgentMode[] = ["plan", "edit", "verify", "review", "report"];
+    modes.forEach((mode) => {
+      renderAgentPanel({
+        state: {
+          ...createAgentState(),
+          mode,
+        },
+      });
+
+      modes.forEach((buttonMode) => {
+        const expected = buttonMode === mode ? "true" : "false";
+        expect(screen.getByRole("button", { name: buttonMode }).getAttribute("aria-pressed")).toBe(expected);
+      });
+
+      cleanup();
+    });
   });
 
   test("switches all modes and toggles context selection", () => {
@@ -174,11 +213,6 @@ describe("AgentPanel", () => {
 
     ["plan", "edit", "verify", "review", "report"].forEach((mode) => {
       fireEvent.click(screen.getByRole("button", { name: mode }));
-    });
-    expect(screen.getByRole("button", { name: "plan" }).getAttribute("aria-pressed")).toBe("true");
-    ["plan", "edit", "verify", "review"].forEach((mode) => {
-      const expected = mode === "plan" ? "true" : "false";
-      expect(screen.getByRole("button", { name: mode }).getAttribute("aria-pressed")).toBe(expected);
     });
     fireEvent.click(screen.getByLabelText("Use src/app/AppShell.tsx context"));
     expect(modes).toEqual(["plan", "edit", "verify", "review", "report"]);
@@ -262,8 +296,10 @@ describe("AgentPanel", () => {
     });
 
     expect(screen.getByText("Generated diff")).toBeTruthy();
-    expect(screen.getByText("bun test")).toBeTruthy();
+    expect(screen.getByText("Run test command")).toBeTruthy();
+    expect(screen.getByText("command: bun test")).toBeTruthy();
     expect(screen.getByText("145 pass")).toBeTruthy();
+    expect(screen.getByText("diff --git a/src/app/AppShell.tsx b/src/app/AppShell.tsx")).toBeTruthy();
     expect(screen.getByText("passed")).toBeTruthy();
     fireEvent.click(screen.getByLabelText("Approve Apply edit"));
     fireEvent.click(screen.getByLabelText("Reject Apply edit"));
@@ -364,7 +400,7 @@ describe("AgentPanel", () => {
 describe("AgentPanel session validation", () => {
   test("notifies prompt changes from the composer", () => {
     const prompts: string[] = [];
-    renderAgentPanel({
+    const { rerender } = renderAgentPanel({
       state: {
         ...createAgentState(),
         promptDraft: "",
@@ -373,9 +409,31 @@ describe("AgentPanel session validation", () => {
     });
 
     const promptInput = screen.getByLabelText("Agent prompt");
+    expect((promptInput as HTMLTextAreaElement).value).toBe("");
+
     fireEvent.change(promptInput, { target: { value: "Plan Node 7" } });
 
     expect(prompts).toEqual(["Plan Node 7"]);
+
+    rerender(
+      <AgentPanel
+        state={{
+          ...createAgentState(),
+          promptDraft: "Plan Node 7",
+        }}
+        availableContext={[]}
+        onModeChange={() => {}}
+        onPromptChange={() => {}}
+        onToggleContext={() => {}}
+        onStartSession={() => {}}
+        onSelectSession={() => {}}
+        onApprove={() => {}}
+        onReject={() => {}}
+        onExport={() => {}}
+      />,
+    );
+
+    expect((promptInput as HTMLTextAreaElement).value).toBe("Plan Node 7");
   });
 
   test("keeps start session disabled for empty prompt", () => {
@@ -406,6 +464,8 @@ describe("AgentPanel css contract", () => {
     expect(source.includes(".btn.sm")).toBe(true);
     expect(source.includes(".btn.ghost")).toBe(true);
     expect(source.includes(".agent-session-toolbar .badge2")).toBe(true);
+    expect(source.includes(".agent-panel .agent-status")).toBe(true);
+    expect(source.includes(".agent-panel .agent-transcript-head .badge2")).toBe(true);
     expect(source.includes(".agent-modes .btn.sm")).toBe(true);
   });
 });
