@@ -521,6 +521,40 @@ mod tests {
                 )],
             )
             .expect("start session");
+        let session_id = session.id.clone();
+
+        let long_transcript = "y".repeat(MAX_AGENT_TRANSCRIPT_CHARS + 32);
+        let appended = store
+            .append_transcript(
+                &session_id,
+                AgentTranscriptInput {
+                    kind: AgentTranscriptKind::Verification,
+                    title: "Long transcript".to_string(),
+                    content: long_transcript,
+                    status: Some(AgentEvidenceStatus::Passed),
+                    metadata: serde_json::json!({}),
+                },
+            )
+            .expect("append transcript");
+
+        assert_eq!(appended.content.chars().count(), MAX_AGENT_TRANSCRIPT_CHARS);
+
+        let reloaded = store.list_sessions("/workspace").expect("list sessions");
+        let session = reloaded
+            .into_iter()
+            .find(|entry| entry.id == session_id)
+            .expect("session found");
+        assert_eq!(
+            session
+                .transcript
+                .iter()
+                .find(|entry| entry.id == appended.id)
+                .expect("appended entry found")
+                .content
+                .chars()
+                .count(),
+            MAX_AGENT_TRANSCRIPT_CHARS
+        );
 
         assert_eq!(
             session.context_items[0].content.len(),
