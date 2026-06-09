@@ -57,7 +57,7 @@ describe("LanguagePanel", () => {
       ],
     );
 
-    render(
+    const { container } = render(
       <LanguagePanel
         state={state}
         onOpenDiagnostic={() => calls.push("open")}
@@ -68,6 +68,7 @@ describe("LanguagePanel", () => {
 
     expect(screen.getByText("expected item")).toBeTruthy();
     expect(screen.getByText("Rust Analyzer")).toBeTruthy();
+    expect(container.querySelector(".panel-head + .panel-body.language-panel")).toBeTruthy();
     fireEvent.click(screen.getByLabelText("Restart Rust Analyzer"));
 
     expect(calls).toEqual(["restart"]);

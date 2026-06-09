@@ -2152,6 +2152,13 @@ button {
   flex: 0 0 auto;
 }
 
+.language-panel-shell {
+  display: flex;
+  min-width: 0;
+  height: 100%;
+  flex-direction: column;
+}
+
 .language-panel {
   display: flex;
   min-width: 0;
