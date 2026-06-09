@@ -5,7 +5,13 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { AgentPanel } from "./AgentPanel";
-import { createAgentState, type AgentMode, type AgentSession, type AgentViewState } from "./agent-model";
+import {
+  createAgentState,
+  type AgentMode,
+  type AgentSession,
+  type AgentTranscriptEntry,
+  type AgentViewState,
+} from "./agent-model";
 import { ensureTestDom } from "../../app/test-dom";
 
 ensureTestDom();
@@ -294,6 +300,7 @@ describe("AgentPanel", () => {
     expect(screen.getByText("145 pass")).toBeTruthy();
     expect(screen.getByText("diff --git a/src/app/AppShell.tsx b/src/app/AppShell.tsx")).toBeTruthy();
     expect(screen.getByText("passed")).toBeTruthy();
+    expect(screen.getByText("1 passed | 0 failed")).toBeTruthy();
     fireEvent.click(screen.getByLabelText("Approve Apply edit"));
     fireEvent.click(screen.getByLabelText("Reject Apply edit"));
     fireEvent.click(screen.getByLabelText("Export prompt"));
@@ -302,6 +309,46 @@ describe("AgentPanel", () => {
     expect(rejected).toEqual(["approval-1"]);
     expect(screen.getByRole("status").textContent).toBe("1 pending");
     expect(exported).toBe(1);
+  });
+
+  test("shows verification summary with failed entries", () => {
+    const verificationSessionId = "agent-verify-failed";
+    const failedVerificationEntries: AgentTranscriptEntry[] = [
+      {
+        id: "verification-failed",
+        session_id: verificationSessionId,
+        kind: "verification",
+        title: "Run lint command",
+        content: "lint failed",
+        status: "failed",
+        approval_status: null,
+        metadata: { command: "bun lint" },
+        created_ms: 7,
+      },
+    ];
+
+    const active = {
+      ...session(),
+      id: "agent-verify-failed",
+      transcript: [
+        ...session().transcript.map((entry, index) => ({
+          ...entry,
+          id: `${entry.id}-${verificationSessionId}-${index}`,
+          session_id: verificationSessionId,
+        })),
+        ...failedVerificationEntries,
+      ],
+    } as AgentSession;
+
+    renderAgentPanel({
+      state: {
+        ...createAgentState(),
+        sessions: [active],
+        activeSessionId: active.id,
+      },
+    });
+
+    expect(screen.getByText("1 passed | 1 failed")).toBeTruthy();
   });
 
   test("keeps non-pending approval actions disabled and inert", () => {

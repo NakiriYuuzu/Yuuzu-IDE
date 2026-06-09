@@ -186,6 +186,24 @@ export function approvalEntries(session: AgentSession): AgentTranscriptEntry[] {
   return session.transcript.filter((entry) => entry.approval_status !== null);
 }
 
+export function verificationSummary(session: AgentSession): string {
+  let passed = 0;
+  let failed = 0;
+
+  for (const entry of session.transcript) {
+    if (entry.kind !== "verification") {
+      continue;
+    }
+    if (entry.status === "passed") {
+      passed += 1;
+    } else if (entry.status === "failed") {
+      failed += 1;
+    }
+  }
+
+  return `${passed} passed | ${failed} failed`;
+}
+
 export function agentBadgeCount(state: AgentViewState): string | null {
   const pending = state.sessions.reduce(
     (count, session) =>

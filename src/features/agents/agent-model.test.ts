@@ -12,6 +12,7 @@ import {
   agentContextFromFile,
   agentContextFromTerminal,
   approvalEntries,
+  verificationSummary,
   type AgentMode,
   type AgentViewState,
   createAgentState,
@@ -19,6 +20,7 @@ import {
   selectAgentSession,
   storeAgentSession,
   transcriptByKind,
+  type AgentTranscriptEntry,
   type AgentSession,
 } from "./agent-model";
 
@@ -131,6 +133,56 @@ describe("agent model", () => {
     expect(approvalEntries(state.sessions[0])).toHaveLength(1);
     expect(transcriptByKind(state.sessions[0], "approval_request")).toHaveLength(1);
     expect(agentBadgeCount(state)).toBe("1");
+  });
+
+  test("summarizes verification outcomes with passed and failed", () => {
+    const withVerificationTranscript: AgentTranscriptEntry[] = [
+      {
+        id: "verification-passed",
+        session_id: "with-verification",
+        kind: "verification",
+        title: "Run tests",
+        content: "all pass",
+        status: "passed",
+        approval_status: null,
+        metadata: { command: "bun test" },
+        created_ms: 4,
+      },
+      {
+        id: "verification-failed",
+        session_id: "with-verification",
+        kind: "verification",
+        title: "Run lint",
+        content: "lint failed",
+        status: "failed",
+        approval_status: null,
+        metadata: { command: "bun lint" },
+        created_ms: 5,
+      },
+      {
+        id: "verification-skipped",
+        session_id: "with-verification",
+        kind: "verification",
+        title: "Run format",
+        content: "skipped",
+        status: "skipped",
+        approval_status: null,
+        metadata: {},
+        created_ms: 6,
+      },
+    ];
+
+    const noVerification = {
+      ...session("no-verification"),
+      transcript: [],
+    };
+    expect(verificationSummary(noVerification)).toBe("0 passed | 0 failed");
+
+    const withVerification: AgentSession = {
+      ...session("with-verification"),
+      transcript: withVerificationTranscript,
+    };
+    expect(verificationSummary(withVerification)).toBe("1 passed | 1 failed");
   });
 
   test("builds bounded agent context items from selected sources", () => {

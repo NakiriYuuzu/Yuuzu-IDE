@@ -15,6 +15,7 @@ import {
   type AgentMode,
   type AgentTranscriptEntry,
   type AgentViewState,
+  verificationSummary,
 } from "./agent-model";
 
 type AgentPanelProps = {
@@ -139,6 +140,7 @@ export function AgentPanel({
     ? activeSession.transcript.filter((entry) => entry.approval_status === "pending")
         .length
     : 0;
+  const verificationSummaryText = activeSession ? verificationSummary(activeSession) : "0 passed | 0 failed";
   const canStartSession = state.promptDraft.trim().length > 0;
 
   return (
@@ -241,6 +243,10 @@ export function AgentPanel({
             >
               <ShieldCheck aria-hidden="true" />
               {pendingApprovalsCount} pending
+            </span>
+            <span className="badge2">
+              <ShieldCheck aria-hidden="true" />
+              {verificationSummaryText}
             </span>
             <button
               type="button"
