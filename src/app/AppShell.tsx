@@ -52,10 +52,13 @@ import {
 } from "../features/docs/docs-model";
 import { getLanguageServerStatus, getWorkspaceDiagnostics } from "../features/language/language-api";
 import {
+  isCurrentLanguageRefreshRequest,
+  nextLanguageRefreshRequest,
   replaceDiagnostics,
   replaceServerStatuses,
   selectDiagnosticBadge,
   type LspDiagnostic,
+  type LanguageRefreshRequestState,
   type LanguageServerStatus,
   type LanguageViewState,
 } from "../features/language/language-model";
@@ -602,6 +605,7 @@ export function AppShell() {
   const savedContentByPathRef = useRef<Record<string, string>>({});
   const openRequestRef = useRef(0);
   const docsLoadRequestRef = useRef<DocsLoadRequestState>({});
+  const languageRefreshRequestRef = useRef<LanguageRefreshRequestState>({});
   const docsSearchRequestRef = useRef<DocsRequestIdentity>({
     requestId: 0,
     workspaceId: null,
@@ -2495,6 +2499,13 @@ export function AppShell() {
     const workspaceId = activeWorkspaceId;
     const workspaceRoot = activeWorkspace.path;
     const rootBeforeRefresh = workspaceRoot;
+    const request = nextLanguageRefreshRequest(
+      languageRefreshRequestRef.current,
+      workspaceId,
+      workspaceRoot,
+    );
+    languageRefreshRequestRef.current = request.state;
+    const requestId = request.requestId;
 
     updateLanguage(workspaceId, (language) => ({
       ...language,
@@ -2510,6 +2521,17 @@ export function AppShell() {
           workspaceRoot,
         }),
       ]);
+
+      if (
+        !isCurrentLanguageRefreshRequest(
+          languageRefreshRequestRef.current,
+          workspaceId,
+          workspaceRoot,
+          requestId,
+        )
+      ) {
+        return;
+      }
 
       if (!hasRegisteredWorkspace(workspaceId)) {
         updateLanguage(workspaceId, (language) => ({ ...language, loading: false }));
@@ -2528,6 +2550,17 @@ export function AppShell() {
         replaceDiagnostics(replaceServerStatuses(language, servers), diagnostics),
       );
     } catch (error) {
+      if (
+        !isCurrentLanguageRefreshRequest(
+          languageRefreshRequestRef.current,
+          workspaceId,
+          workspaceRoot,
+          requestId,
+        )
+      ) {
+        return;
+      }
+
       if (!hasRegisteredWorkspace(workspaceId)) {
         updateLanguage(workspaceId, (language) => ({ ...language, loading: false }));
         return;

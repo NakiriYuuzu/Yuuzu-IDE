@@ -41,6 +41,16 @@ export type LanguageViewState = {
   error: string | null;
 };
 
+export type LanguageRefreshRequestState = Record<
+  string,
+  { workspaceRoot: string; requestId: number }
+>;
+
+export type LanguageRefreshRequestNext = {
+  state: LanguageRefreshRequestState;
+  requestId: number;
+};
+
 export function createLanguageState(): LanguageViewState {
   return {
     diagnosticsByPath: {},
@@ -50,6 +60,36 @@ export function createLanguageState(): LanguageViewState {
     loading: false,
     error: null,
   };
+}
+
+export function nextLanguageRefreshRequest(
+  state: LanguageRefreshRequestState,
+  workspaceId: string,
+  workspaceRoot: string,
+): LanguageRefreshRequestNext {
+  const requestId = (state[workspaceId]?.requestId ?? 0) + 1;
+
+  return {
+    state: {
+      ...state,
+      [workspaceId]: { workspaceRoot, requestId },
+    },
+    requestId,
+  };
+}
+
+export function isCurrentLanguageRefreshRequest(
+  state: LanguageRefreshRequestState,
+  workspaceId: string,
+  workspaceRoot: string,
+  requestId: number,
+): boolean {
+  const current = state[workspaceId];
+
+  return (
+    current?.workspaceRoot === workspaceRoot &&
+    current.requestId === requestId
+  );
 }
 
 export function replaceDiagnostics(

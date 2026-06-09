@@ -8,6 +8,8 @@ import {
   storeHover,
   storeServerLogs,
   normalizeLanguageHover,
+  nextLanguageRefreshRequest,
+  isCurrentLanguageRefreshRequest,
 } from "./language-model";
 
 describe("language model", () => {
@@ -91,5 +93,55 @@ describe("language model", () => {
       character: 1,
       contents: "fn main",
     });
+  });
+
+  test("scopes language refresh request freshness by workspace root", () => {
+    const first = nextLanguageRefreshRequest({}, "workspace-a", "/workspace-a");
+    const second = nextLanguageRefreshRequest(
+      first.state,
+      "workspace-a",
+      "/workspace-a",
+    );
+    const third = nextLanguageRefreshRequest(
+      second.state,
+      "workspace-a",
+      "/workspace-b",
+    );
+
+    expect(first.requestId).toBe(1);
+    expect(second.requestId).toBe(2);
+    expect(third.requestId).toBe(3);
+    expect(
+      isCurrentLanguageRefreshRequest(
+        second.state,
+        "workspace-a",
+        "/workspace-a",
+        1,
+      ),
+    ).toBe(false);
+    expect(
+      isCurrentLanguageRefreshRequest(
+        second.state,
+        "workspace-a",
+        "/workspace-a",
+        2,
+      ),
+    ).toBe(true);
+    expect(
+      isCurrentLanguageRefreshRequest(
+        third.state,
+        "workspace-a",
+        "/workspace-a",
+        2,
+      ),
+    ).toBe(false);
+    expect(
+      isCurrentLanguageRefreshRequest(
+        third.state,
+        "workspace-a",
+        "/workspace-b",
+        3,
+      ),
+    ).toBe(true);
   });
 });
