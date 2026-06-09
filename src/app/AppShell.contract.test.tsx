@@ -15,6 +15,7 @@ import {
   collectAgentAvailableContext,
   activeLoadedFileForWorkspace,
   PanelBody,
+  BrowserPreviewSplitSurface,
   shouldShowBrowserSplitEditor,
   openBrowserPreviewWithValidation,
   type AgentAvailableContextSource,
@@ -321,6 +322,38 @@ describe("AppShell AppShell helpers", () => {
         loadedFile,
       }),
     ).toBe(true);
+  });
+
+  test("Browser split layout renders editor and preview together", () => {
+    const renderResult = render(
+      <BrowserPreviewSplitSurface
+        showEditor={true}
+        editor={<div data-testid="browser-editor-panel">Editor</div>}
+        preview={<div data-testid="browser-preview-panel">Preview</div>}
+      />,
+    );
+
+    expect(renderResult.getByTestId("browser-editor-panel")).toBeTruthy();
+    expect(renderResult.getByTestId("browser-preview-panel")).toBeTruthy();
+    expect(
+      renderResult.container.querySelector(".browser-split.has-editor"),
+    ).toBeTruthy();
+  });
+
+  test("Browser split layout keeps preview only without editor", () => {
+    const renderResult = render(
+      <BrowserPreviewSplitSurface
+        showEditor={false}
+        editor={<div data-testid="browser-editor-panel">Editor</div>}
+        preview={<div data-testid="browser-preview-panel">Preview</div>}
+      />,
+    );
+
+    expect(renderResult.queryByTestId("browser-editor-panel")).toBeNull();
+    expect(renderResult.getByTestId("browser-preview-panel")).toBeTruthy();
+    expect(
+      renderResult.container.querySelector(".browser-split.has-editor"),
+    ).toBeNull();
   });
 
   test("openBrowserPreviewWithValidation does not switch surface on invalid URL", async () => {

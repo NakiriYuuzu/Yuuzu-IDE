@@ -15,7 +15,15 @@ import {
   SquareTerminal,
   X,
 } from "lucide-react";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { ActivityRail, type ActivityId } from "./activity-rail";
 import { CommandPalette } from "./CommandPalette";
@@ -433,6 +441,27 @@ export function shouldShowBrowserSplitEditor({
     activePath !== null &&
     loadedFile?.workspaceId === activeWorkspaceId &&
     loadedFile.path === activePath
+  );
+}
+
+type BrowserPreviewSplitSurfaceProps = {
+  showEditor: boolean;
+  editor: ReactNode;
+  preview: ReactNode;
+};
+
+export function BrowserPreviewSplitSurface({
+  showEditor,
+  editor,
+  preview,
+}: BrowserPreviewSplitSurfaceProps) {
+  return (
+    <div className={`browser-split${showEditor ? " has-editor" : ""}`}>
+      {showEditor ? (
+        <div className="browser-split-editor">{editor}</div>
+      ) : null}
+      {preview}
+    </div>
   );
 }
 
@@ -4408,17 +4437,12 @@ export function AppShell() {
                   }}
                 />
               ) : surface === "browser-preview" ? (
-                <div
-                  className={`browser-split${
-                    splitBrowserSurface ? " has-editor" : ""
-                  }`}
-                >
-                  {activeEditorTab && splitBrowserSurface ? (
-                    <div className="browser-split-editor">
+                <BrowserPreviewSplitSurface
+                  showEditor={splitBrowserSurface}
+                  editor={
+                    activeEditorTab && splitBrowserSurface ? (
                       <Suspense
-                        fallback={
-                          <div className="editor-loading">Loading editor</div>
-                        }
+                        fallback={<div className="editor-loading">Loading editor</div>}
                       >
                         <EditorTab
                           workspaceId={activeWorkspaceId ?? ""}
@@ -4441,26 +4465,28 @@ export function AppShell() {
                           onDirtyChange={() => undefined}
                         />
                       </Suspense>
-                    </div>
-                  ) : null}
-                  <BrowserPreviewSurface
-                    workspaceId={activeWorkspaceId}
-                    url={view.browser.activeUrl}
-                    title={view.browser.activeTitle}
-                    reloadVersion={view.browser.reloadVersion}
-                    hardReloadVersion={view.browser.hardReloadVersion}
-                    onBoundsChange={(bounds) =>
-                      updateBrowser(activeWorkspaceId, (browser) =>
-                        updateBrowserBounds(browser, bounds),
-                      )
-                    }
-                    onError={(message) =>
-                      updateBrowser(activeWorkspaceId, (browser) =>
-                        setBrowserError(browser, message),
-                      )
-                    }
-                  />
-                </div>
+                    ) : null
+                  }
+                  preview={
+                    <BrowserPreviewSurface
+                      workspaceId={activeWorkspaceId}
+                      url={view.browser.activeUrl}
+                      title={view.browser.activeTitle}
+                      reloadVersion={view.browser.reloadVersion}
+                      hardReloadVersion={view.browser.hardReloadVersion}
+                      onBoundsChange={(bounds) =>
+                        updateBrowser(activeWorkspaceId, (browser) =>
+                          updateBrowserBounds(browser, bounds),
+                        )
+                      }
+                      onError={(message) =>
+                        updateBrowser(activeWorkspaceId, (browser) =>
+                          setBrowserError(browser, message),
+                        )
+                      }
+                    />
+                  }
+                />
               ) : (
                 <>
                   <div className="workspace-hero">
