@@ -135,6 +135,19 @@ fn workspace_child(
     Ok(normalized)
 }
 
+pub fn workspace_child_for_existing_dir(
+    workspace_root: &Path,
+    path: &Path,
+) -> Result<PathBuf, String> {
+    let path = workspace_child(workspace_root, path, PathResolution::CanonicalExisting)?;
+    let metadata = fs::metadata(&path).map_err(|err| err.to_string())?;
+    if !metadata.is_dir() {
+        return Err(format!("not a directory: {}", path.display()));
+    }
+
+    Ok(path)
+}
+
 fn create_unique_temp_file(path: &Path) -> Result<(fs::File, PathBuf), String> {
     let parent = path
         .parent()
@@ -319,7 +332,7 @@ pub fn delete_path(workspace_root: &Path, path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, path::Path};
     use tempfile::tempdir;
 
     #[cfg(unix)]
@@ -375,6 +388,30 @@ mod tests {
         let result = super::read_text_file(root.path(), &dir, 1024);
 
         assert!(result.unwrap_err().contains("not a regular file"));
+    }
+
+    #[test]
+    fn workspace_child_for_existing_dir_accepts_nested_directory() {
+        let root = tempdir().expect("tempdir");
+        fs::create_dir(root.path().join("src")).expect("src");
+
+        let result =
+            super::workspace_child_for_existing_dir(root.path(), Path::new("src")).expect("dir");
+
+        assert_eq!(
+            result,
+            root.path().join("src").canonicalize().expect("canonical")
+        );
+    }
+
+    #[test]
+    fn workspace_child_for_existing_dir_rejects_outside_directory() {
+        let root = tempdir().expect("tempdir");
+        let outside = tempdir().expect("outside");
+
+        let result = super::workspace_child_for_existing_dir(root.path(), outside.path());
+
+        assert!(result.unwrap_err().contains("outside workspace"));
     }
 
     #[test]

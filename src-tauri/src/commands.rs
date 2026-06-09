@@ -10,6 +10,7 @@ use crate::file_watcher::{FileWatcherState, WatchWorkspaceHandle};
 use crate::metrics::{snapshot, AppMetricSnapshot};
 use crate::search::WorkspaceSearchResult;
 use crate::settings::{AppSettings, SettingsStore};
+use crate::terminal::{TerminalSessionInfo, TerminalState};
 use crate::workspace::{Workspace, WorkspaceRegistry};
 use crate::workspace_scan::{self, FileTreeEntry};
 use crate::workspace_store::WorkspaceRegistryStore;
@@ -239,6 +240,48 @@ pub fn unwatch_workspace(
 #[tauri::command]
 pub fn terminal_probe() -> Result<String, String> {
     crate::pty::spawn_shell_probe()
+}
+
+#[tauri::command]
+pub fn list_terminal_sessions(
+    state: State<'_, TerminalState>,
+    workspace_id: String,
+) -> Result<Vec<TerminalSessionInfo>, String> {
+    state.list_sessions(&workspace_id)
+}
+
+#[tauri::command]
+pub fn spawn_terminal_session(
+    app: AppHandle,
+    app_state: State<'_, AppState>,
+    terminal_state: State<'_, TerminalState>,
+    workspace_id: String,
+    workspace_root: String,
+    cwd: String,
+    name: Option<String>,
+    rows: u16,
+    cols: u16,
+) -> Result<TerminalSessionInfo, String> {
+    let workspace_root = app_state.trusted_workspace_root(&workspace_root)?;
+    let cwd = file_system::workspace_child_for_existing_dir(&workspace_root, Path::new(&cwd))?;
+    terminal_state.spawn_session(app, workspace_id, cwd, name, rows, cols)
+}
+
+#[tauri::command]
+pub fn write_terminal_session(
+    state: State<'_, TerminalState>,
+    session_id: String,
+    data: String,
+) -> Result<(), String> {
+    state.write_session(&session_id, &data)
+}
+
+#[tauri::command]
+pub fn close_terminal_session(
+    state: State<'_, TerminalState>,
+    session_id: String,
+) -> Result<TerminalSessionInfo, String> {
+    state.close_session(&session_id)
 }
 
 #[tauri::command]
