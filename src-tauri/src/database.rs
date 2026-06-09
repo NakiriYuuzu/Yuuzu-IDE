@@ -190,15 +190,35 @@ impl DatabaseQueryResult {
 }
 
 pub fn classify_sql(sql: &str) -> QueryClassification {
-    let token = first_sql_token(sql);
-    let kind = match token.as_deref() {
-        Some("SELECT" | "WITH" | "EXPLAIN" | "SHOW" | "DESCRIBE") => QueryKind::Read,
-        Some("INSERT" | "UPDATE" | "DELETE" | "MERGE" | "CALL") => QueryKind::Mutation,
-        Some("DROP" | "TRUNCATE" | "ALTER" | "CREATE" | "REINDEX" | "VACUUM") => {
-            QueryKind::Destructive
+    let mut has_executable_statement = false;
+    let mut kind = QueryKind::Read;
+
+    for statement in split_sql_statements(sql) {
+        if let Some(token) = first_sql_token(statement) {
+            has_executable_statement = true;
+            let statement_kind = match token.as_str() {
+                "SELECT" | "WITH" | "EXPLAIN" | "SHOW" | "DESCRIBE" => QueryKind::Read,
+                "INSERT" | "UPDATE" | "DELETE" | "MERGE" | "CALL" => QueryKind::Mutation,
+                "DROP" | "TRUNCATE" | "ALTER" | "CREATE" | "REINDEX" | "VACUUM" => {
+                    QueryKind::Destructive
+                }
+                _ => QueryKind::Destructive,
+            };
+
+            if matches!(statement_kind, QueryKind::Destructive) {
+                kind = QueryKind::Destructive;
+                break;
+            }
+
+            if matches!(statement_kind, QueryKind::Mutation) && matches!(kind, QueryKind::Read) {
+                kind = QueryKind::Mutation;
+            }
         }
-        _ => QueryKind::Destructive,
-    };
+    }
+
+    if !has_executable_statement {
+        kind = QueryKind::Destructive;
+    }
 
     let (requires_confirmation, confirmation_text, reason) = match kind {
         QueryKind::Read => (false, String::new(), "read-only statement".to_string()),
@@ -236,16 +256,116 @@ pub fn validate_query_request(
         return Err("read-only database profile blocks mutating SQL".to_string());
     }
 
-    if classification.requires_confirmation {
-        if request.confirmation.as_deref() != Some(classification.confirmation_text.as_str()) {
-            return Err(format!(
-                "confirmation required: {}",
-                classification.confirmation_text
-            ));
-        }
+    if classification.requires_confirmation
+        && request.confirmation.as_deref() != Some(classification.confirmation_text.as_str())
+    {
+        return Err(format!(
+            "confirmation required: {}",
+            classification.confirmation_text
+        ));
     }
 
     Ok(classification)
+}
+
+fn split_sql_statements(sql: &str) -> Vec<&str> {
+    let bytes = sql.as_bytes();
+    let mut statements = Vec::new();
+
+    let mut statement_start = 0;
+    let mut index = 0;
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+
+    while index < bytes.len() {
+        if in_line_comment {
+            if bytes[index] == b'\n' {
+                in_line_comment = false;
+            }
+            index += 1;
+            continue;
+        }
+
+        if in_block_comment {
+            if bytes[index] == b'*' && index + 1 < bytes.len() && bytes[index + 1] == b'/' {
+                in_block_comment = false;
+                index += 2;
+                continue;
+            }
+
+            index += 1;
+            continue;
+        }
+
+        if in_single_quote {
+            if bytes[index] == b'\'' {
+                if index + 1 < bytes.len() && bytes[index + 1] == b'\'' {
+                    index += 2;
+                    continue;
+                }
+                in_single_quote = false;
+            }
+            index += 1;
+            continue;
+        }
+
+        if in_double_quote {
+            if bytes[index] == b'"' {
+                if index + 1 < bytes.len() && bytes[index + 1] == b'"' {
+                    index += 2;
+                    continue;
+                }
+                in_double_quote = false;
+            }
+            index += 1;
+            continue;
+        }
+
+        if bytes[index] == b'\'' {
+            in_single_quote = true;
+            index += 1;
+            continue;
+        }
+
+        if bytes[index] == b'"' {
+            in_double_quote = true;
+            index += 1;
+            continue;
+        }
+
+        if bytes[index] == b'-' && index + 1 < bytes.len() && bytes[index + 1] == b'-' {
+            in_line_comment = true;
+            index += 2;
+            continue;
+        }
+
+        if bytes[index] == b'/' && index + 1 < bytes.len() && bytes[index + 1] == b'*' {
+            in_block_comment = true;
+            index += 2;
+            continue;
+        }
+
+        if bytes[index] == b';' {
+            let statement = sql[statement_start..index].trim();
+            if !statement.is_empty() {
+                statements.push(statement);
+            }
+            statement_start = index + 1;
+            index += 1;
+            continue;
+        }
+
+        index += 1;
+    }
+
+    let trailing_statement = sql[statement_start..].trim();
+    if !trailing_statement.is_empty() {
+        statements.push(trailing_statement);
+    }
+
+    statements
 }
 
 pub fn database_now_ms() -> u64 {
@@ -315,6 +435,15 @@ mod tests {
     }
 
     #[test]
+    fn classifies_multistatement_sql_as_destructive() {
+        let result = classify_sql("SELECT 1; DROP TABLE users");
+
+        assert_eq!(result.kind, QueryKind::Destructive);
+        assert!(result.requires_confirmation);
+        assert_eq!(result.confirmation_text, "RUN DESTRUCTIVE SQL");
+    }
+
+    #[test]
     fn readonly_profiles_reject_mutating_sql_even_with_confirmation() {
         let profile = database_profile("profile-1", DatabaseKind::PostgreSQL, true, true);
 
@@ -323,6 +452,26 @@ mod tests {
             &DatabaseQueryRequest {
                 profile_id: profile.id.clone(),
                 sql: "DELETE FROM audit_log".to_string(),
+                limit: 100,
+                confirmation: Some("RUN DESTRUCTIVE SQL".to_string()),
+            },
+        );
+
+        assert_eq!(
+            result.expect_err("read-only profile blocks mutation"),
+            "read-only database profile blocks mutating SQL"
+        );
+    }
+
+    #[test]
+    fn readonly_profiles_reject_mutation_after_read_statement() {
+        let profile = database_profile("profile-1", DatabaseKind::PostgreSQL, true, true);
+
+        let result = validate_query_request(
+            &profile,
+            &DatabaseQueryRequest {
+                profile_id: profile.id.clone(),
+                sql: "SELECT 1; DELETE FROM users".to_string(),
                 limit: 100,
                 confirmation: Some("RUN DESTRUCTIVE SQL".to_string()),
             },
