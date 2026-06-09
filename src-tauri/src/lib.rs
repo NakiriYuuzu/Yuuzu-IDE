@@ -26,6 +26,7 @@ pub fn run() {
             app.manage(file_watcher::FileWatcherState::new());
             app.manage(tasks::TaskState::new());
             app.manage(terminal::TerminalState::new());
+            app.manage(lsp::LspState::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -74,6 +75,20 @@ pub fn run() {
             commands::run_workspace_task,
             commands::stop_task_run,
             commands::list_task_runs,
+            commands::lsp_server_status,
+            commands::lsp_open_document,
+            commands::lsp_close_document,
+            commands::lsp_document_diagnostics,
+            commands::lsp_workspace_diagnostics,
+            commands::lsp_hover,
+            commands::lsp_definition,
+            commands::lsp_references,
+            commands::lsp_completion,
+            commands::lsp_code_actions,
+            commands::lsp_symbols,
+            commands::lsp_rename,
+            commands::lsp_restart_server,
+            commands::lsp_server_logs,
             commands::metric_snapshot,
             commands::read_text_file,
             commands::write_text_file,
