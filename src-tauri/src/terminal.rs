@@ -1,4 +1,4 @@
-use portable_pty::{ChildKiller, CommandBuilder, NativePtySystem, PtySize, PtySystem};
+use portable_pty::{Child, ChildKiller, CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -68,6 +68,12 @@ impl TerminalRegistry {
     pub fn remove_metadata(&mut self, id: &str) -> Option<TerminalSessionInfo> {
         self.metadata.remove(id)
     }
+
+    pub fn mark_stopped(&mut self, id: &str) -> Option<TerminalSessionInfo> {
+        let session = self.metadata.get_mut(id)?;
+        session.running = false;
+        Some(session.clone())
+    }
 }
 
 pub fn terminal_size(rows: u16, cols: u16) -> PtySize {
@@ -94,19 +100,18 @@ pub struct TerminalExitEvent {
 struct TerminalProcess {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
-    _waiter: thread::JoinHandle<()>,
 }
 
 pub struct TerminalState {
-    registry: Mutex<TerminalRegistry>,
-    processes: Mutex<HashMap<String, TerminalProcess>>,
+    registry: Arc<Mutex<TerminalRegistry>>,
+    processes: Arc<Mutex<HashMap<String, TerminalProcess>>>,
 }
 
 impl TerminalState {
     pub fn new() -> Self {
         Self {
-            registry: Mutex::new(TerminalRegistry::default()),
-            processes: Mutex::new(HashMap::new()),
+            registry: Arc::new(Mutex::new(TerminalRegistry::default())),
+            processes: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -126,6 +131,11 @@ impl TerminalState {
     ) -> Result<TerminalSessionInfo, String> {
         let mut registry = self.registry.lock().map_err(|err| err.to_string())?;
         Ok(registry.reserve_metadata(workspace_id, cwd, name))
+    }
+
+    #[cfg(test)]
+    fn mark_session_exited(&self, session_id: &str) -> Result<Option<TerminalSessionInfo>, String> {
+        mark_session_exited_in_state(&self.registry, &self.processes, session_id)
     }
 
     pub fn spawn_session(
@@ -165,7 +175,7 @@ impl TerminalState {
         let mut reader = match pair.master.try_clone_reader() {
             Ok(reader) => reader,
             Err(err) => {
-                let _ = child.kill();
+                kill_and_wait(&mut *child);
                 let _ = self
                     .registry
                     .lock()
@@ -176,7 +186,7 @@ impl TerminalState {
         let writer = Arc::new(Mutex::new(match pair.master.take_writer() {
             Ok(writer) => writer,
             Err(err) => {
-                let _ = child.kill();
+                kill_and_wait(&mut *child);
                 let _ = self
                     .registry
                     .lock()
@@ -207,12 +217,26 @@ impl TerminalState {
             }
         });
 
+        if let Err(err) = self.processes.lock().map(|mut processes| {
+            processes.insert(info.id.clone(), TerminalProcess { writer, killer });
+        }) {
+            kill_and_wait(&mut *child);
+            let _ = self
+                .registry
+                .lock()
+                .map(|mut registry| registry.remove_metadata(&info.id));
+            return Err(err.to_string());
+        }
+
         let exit_session_id = info.id.clone();
-        let waiter = thread::spawn(move || {
+        let exit_registry = Arc::clone(&self.registry);
+        let exit_processes = Arc::clone(&self.processes);
+        thread::spawn(move || {
             let exit_code = child
                 .wait()
                 .ok()
                 .and_then(|status| i32::try_from(status.exit_code()).ok());
+            let _ = mark_session_exited_in_state(&exit_registry, &exit_processes, &exit_session_id);
             let _ = app.emit(
                 "workspace://terminal-exit",
                 TerminalExitEvent {
@@ -222,27 +246,20 @@ impl TerminalState {
             );
         });
 
-        self.processes
-            .lock()
-            .map_err(|err| err.to_string())?
-            .insert(
-                info.id.clone(),
-                TerminalProcess {
-                    writer,
-                    killer,
-                    _waiter: waiter,
-                },
-            );
-
         Ok(info)
     }
 
     pub fn write_session(&self, session_id: &str, data: &str) -> Result<(), String> {
-        let processes = self.processes.lock().map_err(|err| err.to_string())?;
-        let process = processes
-            .get(session_id)
-            .ok_or_else(|| format!("missing terminal session: {session_id}"))?;
-        let mut writer = process.writer.lock().map_err(|err| err.to_string())?;
+        let writer = {
+            let processes = self.processes.lock().map_err(|err| err.to_string())?;
+            Arc::clone(
+                &processes
+                    .get(session_id)
+                    .ok_or_else(|| format!("missing terminal session: {session_id}"))?
+                    .writer,
+            )
+        };
+        let mut writer = writer.lock().map_err(|err| err.to_string())?;
         writer
             .write_all(data.as_bytes())
             .and_then(|_| writer.flush())
@@ -267,9 +284,115 @@ impl TerminalState {
     }
 }
 
+fn mark_session_exited_in_state(
+    registry: &Mutex<TerminalRegistry>,
+    processes: &Mutex<HashMap<String, TerminalProcess>>,
+    session_id: &str,
+) -> Result<Option<TerminalSessionInfo>, String> {
+    processes
+        .lock()
+        .map_err(|err| err.to_string())?
+        .remove(session_id);
+
+    Ok(registry
+        .lock()
+        .map_err(|err| err.to_string())?
+        .mark_stopped(session_id))
+}
+
+fn kill_and_wait(child: &mut dyn Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use portable_pty::{Child, ChildKiller, ExitStatus};
+    use std::{
+        io::{self, Write},
+        path::PathBuf,
+        sync::{mpsc, Arc, Mutex},
+        thread,
+        time::Duration,
+    };
+
+    #[derive(Debug)]
+    struct NoopKiller;
+
+    impl ChildKiller for NoopKiller {
+        fn kill(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+            Box::new(Self)
+        }
+    }
+
+    struct BlockingWriter {
+        entered: Option<mpsc::Sender<()>>,
+        release: mpsc::Receiver<()>,
+    }
+
+    impl Write for BlockingWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            if let Some(entered) = self.entered.take() {
+                let _ = entered.send(());
+            }
+            let _ = self.release.recv_timeout(Duration::from_secs(5));
+
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    struct EventChild {
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl ChildKiller for EventChild {
+        fn kill(&mut self) -> io::Result<()> {
+            self.events.lock().expect("events").push("kill");
+            Ok(())
+        }
+
+        fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+            Box::new(self.clone())
+        }
+    }
+
+    impl Child for EventChild {
+        fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+            Ok(None)
+        }
+
+        fn wait(&mut self) -> io::Result<ExitStatus> {
+            self.events.lock().expect("events").push("wait");
+            Ok(ExitStatus::with_exit_code(0))
+        }
+
+        fn process_id(&self) -> Option<u32> {
+            None
+        }
+    }
+
+    fn insert_test_process(
+        manager: &super::TerminalState,
+        session_id: &str,
+        writer: Box<dyn Write + Send>,
+    ) {
+        manager.processes.lock().expect("processes").insert(
+            session_id.to_string(),
+            super::TerminalProcess {
+                writer: Arc::new(Mutex::new(writer)),
+                killer: Arc::new(Mutex::new(Box::new(NoopKiller))),
+            },
+        );
+    }
 
     #[test]
     fn terminal_ids_are_workspace_scoped_and_incrementing() {
@@ -339,5 +462,73 @@ mod tests {
             .list_sessions("workspace-a")
             .expect("list")
             .is_empty());
+    }
+
+    #[test]
+    fn write_session_releases_process_registry_before_writing() {
+        let manager = Arc::new(super::TerminalState::new());
+        let session = manager
+            .register_test_session("workspace-a".to_string(), PathBuf::from("/repo-a"), None)
+            .expect("session");
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        insert_test_process(
+            &manager,
+            &session.id,
+            Box::new(BlockingWriter {
+                entered: Some(entered_tx),
+                release: release_rx,
+            }),
+        );
+
+        let writer_manager = Arc::clone(&manager);
+        let session_id = session.id.clone();
+        let write_result =
+            thread::spawn(move || writer_manager.write_session(&session_id, "input"));
+
+        entered_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("writer entered");
+        let registry_available_during_write = manager.processes.try_lock().is_ok();
+        release_tx.send(()).expect("release writer");
+
+        assert!(write_result.join().expect("join writer").is_ok());
+        assert!(
+            registry_available_during_write,
+            "write_session should not hold processes mutex during writer IO"
+        );
+    }
+
+    #[test]
+    fn exited_session_is_marked_stopped_and_process_handle_removed() {
+        let manager = super::TerminalState::new();
+        let session = manager
+            .register_test_session("workspace-a".to_string(), PathBuf::from("/repo-a"), None)
+            .expect("session");
+        insert_test_process(&manager, &session.id, Box::new(io::sink()));
+        assert_eq!(manager.processes.lock().expect("processes").len(), 1);
+
+        let stopped = manager
+            .mark_session_exited(&session.id)
+            .expect("mark exited")
+            .expect("session");
+
+        assert!(!stopped.running);
+        assert_eq!(manager.processes.lock().expect("processes").len(), 0);
+        let listed = manager.list_sessions("workspace-a").expect("list");
+        assert_eq!(listed.len(), 1);
+        assert!(!listed[0].running);
+    }
+
+    #[test]
+    fn rollback_child_cleanup_kills_and_waits_for_child() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let mut child = EventChild {
+            events: Arc::clone(&events),
+        };
+
+        super::kill_and_wait(&mut child);
+
+        assert_eq!(*events.lock().expect("events"), vec!["kill", "wait"]);
     }
 }

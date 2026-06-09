@@ -3,6 +3,7 @@ use std::{
     sync::Mutex,
 };
 
+use serde::Deserialize;
 use tauri::{AppHandle, State};
 
 use crate::file_system::{self, FileOperationResult, FileVersion, TextFileRead};
@@ -20,6 +21,16 @@ pub struct AppState {
     registry_store: WorkspaceRegistryStore,
     settings: Mutex<AppSettings>,
     settings_store: SettingsStore,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct SpawnTerminalSessionRequest {
+    pub workspace_id: String,
+    pub workspace_root: String,
+    pub cwd: String,
+    pub name: Option<String>,
+    pub rows: u16,
+    pub cols: u16,
 }
 
 impl AppState {
@@ -255,16 +266,19 @@ pub fn spawn_terminal_session(
     app: AppHandle,
     app_state: State<'_, AppState>,
     terminal_state: State<'_, TerminalState>,
-    workspace_id: String,
-    workspace_root: String,
-    cwd: String,
-    name: Option<String>,
-    rows: u16,
-    cols: u16,
+    request: SpawnTerminalSessionRequest,
 ) -> Result<TerminalSessionInfo, String> {
-    let workspace_root = app_state.trusted_workspace_root(&workspace_root)?;
-    let cwd = file_system::workspace_child_for_existing_dir(&workspace_root, Path::new(&cwd))?;
-    terminal_state.spawn_session(app, workspace_id, cwd, name, rows, cols)
+    let workspace_root = app_state.trusted_workspace_root(&request.workspace_root)?;
+    let cwd =
+        file_system::workspace_child_for_existing_dir(&workspace_root, Path::new(&request.cwd))?;
+    terminal_state.spawn_session(
+        app,
+        request.workspace_id,
+        cwd,
+        request.name,
+        request.rows,
+        request.cols,
+    )
 }
 
 #[tauri::command]
