@@ -1,5 +1,5 @@
 import { Database as DatabaseIcon, ShieldAlert } from "lucide-react";
-import { useMemo, useRef } from "react";
+import { type CSSProperties, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { type DatabaseQueryResult, type DatabaseQueryResultRow } from "./database-model";
@@ -9,6 +9,20 @@ type DatabaseResultViewProps = {
   loading: boolean;
   error: string | null;
 };
+
+function rowStyle(columns: number, height: number, start: number): CSSProperties {
+  return {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    width: "100%",
+    transform: `translateY(${start}px)`,
+    height,
+    display: "grid",
+    gridTemplateColumns: `repeat(${Math.max(columns, 1)}, minmax(0, 1fr))`,
+    minHeight: `${height}px`,
+  };
+}
 
 export function DatabaseResultView({
   result,
@@ -36,7 +50,9 @@ export function DatabaseResultView({
           size: 28,
         }));
   const totalHeight = virtualizer.getTotalSize();
-  const hasRows = rows.length > 0;
+
+  const columnCount = result?.columns.length ?? 0;
+  const columnTemplate = `repeat(${Math.max(columnCount, 1)}, minmax(0, 1fr))`;
 
   const kindLabel = useMemo(() => result?.classification.kind ?? "Read", [result]);
   const affectedLabel = useMemo(() => {
@@ -85,9 +101,7 @@ export function DatabaseResultView({
 
       {loading && <div className="panel-empty">Running query</div>}
 
-      {!result && !loading ? (
-        <div className="panel-empty">No result yet</div>
-      ) : null}
+      {!result && !loading ? <div className="panel-empty">No result yet</div> : null}
 
       {result ? (
         <div className="database-result-wrap">
@@ -96,17 +110,37 @@ export function DatabaseResultView({
             ref={parentRef}
             style={{ height: 220 }}
           >
-            <table className="dbgrid" role="table">
-              <thead>
-                <tr>
+            <div
+              className="dbgrid"
+              role="table"
+              style={{ gridTemplateColumns: columnTemplate }}
+            >
+              <div role="rowgroup">
+                <div
+                  role="row"
+                  className="database-result-row"
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: columnTemplate,
+                    position: "sticky",
+                    top: 0,
+                  }}
+                >
                   {result.columns.map((column) => (
-                    <th key={column} role="columnheader">
+                    <div
+                      key={column}
+                      role="columnheader"
+                      className="database-result-header-cell"
+                    >
                       {column}
-                    </th>
+                    </div>
                   ))}
-                </tr>
-              </thead>
-              <tbody
+                </div>
+              </div>
+
+              <div
+                role="rowgroup"
+                className="database-result-body"
                 style={{
                   position: "relative",
                   height: `${totalHeight}px`,
@@ -119,36 +153,34 @@ export function DatabaseResultView({
                   }
 
                   return (
-                    <tr
+                    <div
                       key={virtualRow.key}
+                      role="row"
                       className="database-result-row"
-                      style={{
-                        position: "absolute",
-                        top: 0,
-                        left: 0,
-                        width: "100%",
-                        transform: `translateY(${virtualRow.start}px)`,
-                        height: virtualRow.size,
-                      }}
+                      style={rowStyle(columnCount, virtualRow.size, virtualRow.start)}
                     >
-                      {row.cells.map((cell: DatabaseQueryResultRow["cells"][number], index) => {
+                      {row.cells.map((cell: DatabaseQueryResultRow["cells"][number], colIndex) => {
                         const value = cell.kind === "Null" ? "NULL" : cell.display;
                         return (
-                          <td key={`${virtualRow.index}:${index}`}>
-                            <span className="mono database-cell">{value}</span>
-                          </td>
+                          <div
+                            role="cell"
+                            key={`${virtualRow.index}:${colIndex}`}
+                            className="database-cell"
+                          >
+                            {value}
+                          </div>
                         );
                       })}
-                    </tr>
+                    </div>
                   );
                 })}
-              </tbody>
-            </table>
+              </div>
+            </div>
           </div>
         </div>
       ) : null}
 
-      {!loading && result && !hasRows ? (
+      {!loading && result && rows.length === 0 ? (
         <div className="panel-empty">Result is empty</div>
       ) : null}
     </section>

@@ -160,6 +160,7 @@ export function replaceDatabaseProfiles(
     state.activeProfileId,
     profiles,
   );
+  const activeProfileSwitched = activeProfileId !== state.activeProfileId;
   const keepTable = activeProfileId === state.activeProfileId ? state.activeTable : null;
   const schemaByProfileId = pruneDatabaseSchemas(
     state.schemaByProfileId,
@@ -170,10 +171,20 @@ export function replaceDatabaseProfiles(
     ...state,
     profiles,
     activeProfileId,
-    activeTable: activeProfileId ? keepTable : null,
     schemaByProfileId,
-    error: state.error,
-    activeResult: activeProfileId ? state.activeResult : null,
+    activeTable: activeProfileId ? keepTable : null,
+    ...(activeProfileSwitched || activeProfileId === null
+      ? {
+          history: [],
+          activeResult: null,
+          export: null,
+          confirmation: null,
+          loading: false,
+          error: null,
+        }
+      : {
+          error: state.error,
+        }),
   };
 }
 
@@ -185,11 +196,20 @@ export function selectDatabaseProfile(
     return state;
   }
 
+  if (state.activeProfileId === profileId) {
+    return state;
+  }
+
   return {
     ...state,
     activeProfileId: profileId,
     activeTable: null,
     confirmation: null,
+    activeResult: null,
+    history: [],
+    export: null,
+    loading: false,
+    error: null,
   };
 }
 
@@ -235,6 +255,13 @@ export function storeDatabaseQueryResult(
   state: DatabaseViewState,
   result: DatabaseQueryResult,
 ): DatabaseViewState {
+  if (
+    state.activeProfileId === null ||
+    result.profile_id !== state.activeProfileId
+  ) {
+    return state;
+  }
+
   const boundedRows = result.rows.slice(0, MAX_DATABASE_ROWS);
   const truncated = result.truncated || result.rows.length > MAX_DATABASE_ROWS;
 

@@ -1505,6 +1505,12 @@ button {
   white-space: nowrap;
 }
 
+.dbgrid [role="cell"]:hover,
+.dbgrid [role="cell"]:focus-within {
+  background: var(--hover);
+}
+
+.dbgrid .database-result-body tr:hover td,
 .dbgrid tbody tr:hover td {
   background: var(--hover);
 }
@@ -1552,6 +1558,16 @@ button {
   flex-direction: column;
   justify-content: center;
   overflow: hidden;
+}
+
+.database-profile-row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  padding: 0 8px;
+  font: inherit;
 }
 
 .database-row-meta {
@@ -1738,6 +1754,58 @@ button {
 
 .database-result-wrap .dbgrid {
   table-layout: fixed;
+  display: block;
+  min-width: 100%;
+  width: 100%;
+  overflow: hidden;
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+}
+
+.database-result-body {
+  min-width: 100%;
+}
+
+.database-result-body [role="row"] {
+  min-height: 28px;
+}
+
+.database-result-row {
+  min-height: 28px;
+}
+
+.database-result-header-cell,
+.database-cell {
+  border-right: 1px solid var(--line);
+  padding: 4px 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--txt);
+}
+
+.database-result-header-cell:last-child,
+.database-cell:last-child {
+  border-right: none;
+}
+
+.database-result-header-cell {
+  font-weight: 600;
+  color: var(--txt-dim);
+  background: var(--chrome);
+  border-bottom: 1px solid var(--line);
+  height: 28px;
+  display: flex;
+  align-items: center;
+}
+
+.database-result-wrap .dbgrid [role="cell"] {
+  display: flex;
+  align-items: center;
+}
+
+.database-result-wrap .dbgrid [role="row"] {
+  align-items: stretch;
 }
 
 .database-result-row td {

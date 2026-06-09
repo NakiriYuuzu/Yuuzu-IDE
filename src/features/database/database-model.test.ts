@@ -7,6 +7,7 @@ import {
   createDatabaseState,
   databaseBadgeCount,
   beginDatabaseQuery,
+  type DatabaseQueryHistoryEntry,
   replaceDatabaseProfiles,
   requireDatabaseConfirmation,
   selectDatabaseProfile,
@@ -104,7 +105,9 @@ describe("database model", () => {
   });
 
   test("query result replaces loading state and enforces row cap", () => {
-    const loading = beginDatabaseQuery(createDatabaseState());
+    const loading = beginDatabaseQuery(
+      replaceDatabaseProfiles(createDatabaseState(), [profile("local", "SQLite")]),
+    );
     const state = storeDatabaseQueryResult(loading, result("local", 600));
 
     expect(state.loading).toBe(false);
@@ -126,6 +129,98 @@ describe("database model", () => {
 
     expect(state.activeProfileId).toBe("prod");
     expect(state.activeTable).toBeNull();
+  });
+
+  test("selecting active profile clears profile-scoped async state", () => {
+    const base = selectDatabaseProfile(
+      replaceDatabaseProfiles(
+        {
+          ...createDatabaseState(),
+          queryDraft: "SELECT * FROM local.users",
+          activeResult: result("local", 2),
+          history: [
+            {
+              executed_ms: 11,
+              kind: "Read",
+              sql: "SELECT 1",
+              affected_rows: null,
+              row_count: 1,
+            },
+          ],
+          export: { path: "/tmp/result.csv" },
+          loading: true,
+          error: "stale error",
+          confirmation: {
+            confirmationText: "RUN DESTRUCTIVE SQL",
+            reason: "mutation",
+            input: "",
+          },
+          profiles: [profile("local", "SQLite"), profile("prod", "PostgreSQL")],
+          activeProfileId: "local",
+        },
+        [profile("local", "SQLite"), profile("prod", "PostgreSQL")],
+      ),
+      "prod",
+    );
+
+    expect(base.activeProfileId).toBe("prod");
+    expect(base.activeTable).toBeNull();
+    expect(base.activeResult).toBeNull();
+    expect(base.history).toEqual([]);
+    expect(base.export).toBeNull();
+    expect(base.loading).toBe(false);
+    expect(base.error).toBeNull();
+    expect(base.confirmation).toBeNull();
+  });
+
+  test("replacing profiles clears profile-scoped state when active profile changes", () => {
+    const history: DatabaseQueryHistoryEntry = {
+      executed_ms: 11,
+      kind: "Mutation",
+      sql: "DELETE FROM users",
+      affected_rows: 1,
+      row_count: 1,
+    };
+
+    const base = {
+      ...replaceDatabaseProfiles(createDatabaseState(), [
+        profile("local", "SQLite"),
+        profile("prod", "PostgreSQL"),
+      ]),
+      activeResult: result("prod", 2),
+      history: [history],
+      export: { path: "/tmp/query.csv" },
+      loading: true,
+      error: "old error",
+      confirmation: {
+        confirmationText: "RUN DESTRUCTIVE SQL",
+        reason: "mutation",
+        input: "",
+      },
+    };
+    const next = replaceDatabaseProfiles(base, [profile("prod", "PostgreSQL")]);
+
+    expect(next.activeProfileId).toBe("prod");
+    expect(next.activeResult).toBeNull();
+    expect(next.history).toEqual([]);
+    expect(next.export).toBeNull();
+    expect(next.loading).toBe(false);
+    expect(next.error).toBeNull();
+    expect(next.confirmation).toBeNull();
+  });
+
+  test("does not overwrite active result when query result profile mismatches active profile", () => {
+    const base = selectDatabaseProfile(
+      {
+        ...createDatabaseState(),
+        activeProfileId: "local",
+      },
+      "local",
+    );
+    const staleResult = result("other", 3);
+    const next = storeDatabaseQueryResult(base, staleResult);
+
+    expect(next).toEqual(base);
   });
 
   function profile(id: string, kind: DatabaseProfile["kind"]): DatabaseProfile {

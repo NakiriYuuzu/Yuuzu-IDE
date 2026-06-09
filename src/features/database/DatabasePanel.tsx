@@ -10,10 +10,11 @@ import {
   ShieldAlert,
   Table2,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   type DatabaseProfile,
+  type DatabaseTable,
   type DatabaseQueryHistoryEntry,
   type DatabaseSchema,
   type DatabaseViewState,
@@ -24,7 +25,7 @@ type DatabasePanelProps = {
   onRefreshProfiles: () => void;
   onSelectProfile: (profileId: string) => void;
   onInspectSchema: (profileId: string) => void;
-  onOpenTable: (profileId: string, tableName: string) => void;
+  onOpenTable: (profileId: string, table: DatabaseTable) => void;
   onQueryDraftChange: (sql: string) => void;
   onRunQuery: () => void;
   onConfirmQuery: (confirmationInput: string) => void;
@@ -41,7 +42,7 @@ type DatabasePanelProfileRowProps = {
   onToggle: () => void;
   onSelectProfile: () => void;
   onInspectSchema: () => void;
-  onOpenTable: (tableName: string) => void;
+  onOpenTable: (table: DatabaseTable) => void;
 };
 
 function DatabasePanelProfileRow({
@@ -58,12 +59,17 @@ function DatabasePanelProfileRow({
 
   return (
     <div key={profile.id}>
-      <div
-        className={`row ${active ? "sel" : ""}`}
-        role="button"
-        tabIndex={0}
+      <button
+        type="button"
+        className={`row database-profile-row ${active ? "sel" : ""}`}
         aria-label={`Select ${profile.name}`}
         onClick={onSelectProfile}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onSelectProfile();
+          }
+        }}
       >
         <span className="tw">
           {expanded ? (
@@ -88,19 +94,28 @@ function DatabasePanelProfileRow({
             background: active ? "var(--yuzu)" : "var(--txt-faint)",
           }}
         />
-        <button
-          type="button"
+        <span
+          role="button"
+          tabIndex={0}
           className="iconbtn database-row-action"
           title={`Inspect schema ${profile.name}`}
           aria-label={`Inspect schema ${profile.name}`}
           onClick={(event) => {
+            event.preventDefault();
             event.stopPropagation();
             onInspectSchema();
           }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              event.stopPropagation();
+              onInspectSchema();
+            }
+          }}
         >
           <Table2 aria-hidden="true" />
-        </button>
-      </div>
+        </span>
+      </button>
       {expanded ? (
         <div className="database-tables" aria-label={`Tables for ${profile.name}`}>
           <button
@@ -121,14 +136,17 @@ function DatabasePanelProfileRow({
             <button
               type="button"
               className="row database-table-row"
-              key={`${profile.id}:${table.name}`}
-              aria-label={`Open table ${table.name}`}
-              onClick={() => onOpenTable(table.name)}
+              key={`${profile.id}:${table.schema ?? "null"}:${table.name}`}
+              aria-label={`Open table ${table.schema ? `${table.schema}.` : ""}${table.name}`}
+              onClick={() => onOpenTable(table)}
             >
               <span className="tw" aria-hidden="true">
                 <Table2 aria-hidden="true" />
               </span>
-              <span className="nm mono database-table-name">{table.name}</span>
+              <span className="nm mono database-table-name">
+                {table.schema ? `${table.schema}.` : ""}
+                {table.name}
+              </span>
               <span className="meta">
                 {table.row_count === null
                   ? "unknown"
@@ -172,9 +190,6 @@ export function DatabasePanel({
   const activeProfile = state.profiles.find(
     (profile) => profile.id === state.activeProfileId,
   );
-  const activeSchema = state.activeProfileId
-    ? state.schemaByProfileId[state.activeProfileId]
-    : undefined;
 
   useEffect(() => {
     if (state.confirmation) {
@@ -195,13 +210,6 @@ export function DatabasePanel({
       [activeProfileId]: current[activeProfileId] ?? true,
     }));
   }, [state.activeProfileId]);
-
-  const tablesAvailable = useMemo(
-    () => Boolean(
-      activeProfile && activeSchema && activeSchema.tables.length > 0,
-    ),
-    [activeProfile, activeSchema],
-  );
 
   const requireConfirmation = state.confirmation !== null;
   const canRunConfirmed =
@@ -225,9 +233,9 @@ export function DatabasePanel({
           <button
             type="button"
             className="iconbtn"
-            title="New database connection"
-            aria-label="New database connection"
-            onClick={() => {}}
+            title="Create database connection (not available yet)"
+            aria-label="Create database connection (not available yet)"
+            disabled
           >
             <Plug aria-hidden="true" />
           </button>
@@ -269,7 +277,7 @@ export function DatabasePanel({
                   onToggle={() => toggleProfile(profile.id)}
                   onSelectProfile={() => onSelectProfile(profile.id)}
                   onInspectSchema={() => onInspectSchema(profile.id)}
-                  onOpenTable={(tableName) => onOpenTable(profile.id, tableName)}
+                  onOpenTable={(table) => onOpenTable(profile.id, table)}
                 />
               );
             })
@@ -342,16 +350,6 @@ export function DatabasePanel({
                 >
                   <Play aria-hidden="true" />
                   Run query
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  title={tablesAvailable ? "Run quick sample query" : "Run query"}
-                  disabled={!canRunQuery}
-                  onClick={() => onRunQuery()}
-                >
-                  <RefreshCw aria-hidden="true" />
-                  Execute
                 </button>
                 <button
                   type="button"
