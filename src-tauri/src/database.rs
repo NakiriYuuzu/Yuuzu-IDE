@@ -522,7 +522,7 @@ fn has_raw_dsn_prefix(value: &str) -> bool {
         "file:",
     ];
 
-    let lowered = value.to_lowercase();
+    let lowered = value.trim().to_lowercase();
     RAW_DSN_PREFIXES
         .iter()
         .any(|prefix| lowered.starts_with(prefix))
@@ -1217,6 +1217,36 @@ mod tests {
     }
 
     #[test]
+    fn profile_store_rejects_sqlite_dsn_paths_with_leading_whitespace() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = DatabaseProfileStore::new(temp.path().join("database-profiles.json"));
+        let secrets = InMemoryDatabaseSecretStore::default();
+        let result = store.save_profile(
+            DatabaseProfileInput {
+                id: None,
+                workspace_root: "/workspace".to_string(),
+                name: "legacy".to_string(),
+                kind: DatabaseKind::SQLite,
+                sqlite_path: Some("\tsqlite:///tmp/app.db".to_string()),
+                host: None,
+                port: None,
+                database: None,
+                username: None,
+                password: None,
+                read_only: false,
+                production: false,
+            },
+            &secrets,
+            || Ok(10),
+            || "sqlite-profile".to_string(),
+        );
+
+        let err = result.expect_err("sqlite leading-whitespace dsn should be rejected");
+        assert!(err.contains("raw database DSNs are not accepted"));
+        assert!(!temp.path().join("database-profiles.json").exists());
+    }
+
+    #[test]
     fn profile_store_rejects_tcp_dsn_hosts_before_persisting() {
         let temp = tempfile::tempdir().expect("temp dir");
         let store = DatabaseProfileStore::new(temp.path().join("database-profiles.json"));
@@ -1260,6 +1290,38 @@ mod tests {
             assert!(!contents.contains("mssql://"));
             assert!(!contents.contains("user:pw"));
         }
+        let values = secrets.values.lock().expect("secret store lock");
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn profile_store_rejects_tcp_host_with_leading_space_without_secret() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = DatabaseProfileStore::new(temp.path().join("database-profiles.json"));
+        let secrets = InMemoryDatabaseSecretStore::default();
+        let result = store.save_profile(
+            DatabaseProfileInput {
+                id: Some("profile-1".to_string()),
+                workspace_root: "/workspace".to_string(),
+                name: "legacy".to_string(),
+                kind: DatabaseKind::PostgreSQL,
+                sqlite_path: None,
+                host: Some(" postgres://user:pw@db/app".to_string()),
+                port: Some(5432),
+                database: Some("app".to_string()),
+                username: Some("user".to_string()),
+                password: Some("pw".to_string()),
+                read_only: false,
+                production: false,
+            },
+            &secrets,
+            || Ok(10),
+            || "tcp-profile".to_string(),
+        );
+
+        let err = result.expect_err("tcp leading-space dsn host should be rejected");
+        assert!(err.contains("raw database DSNs are not accepted"));
+        assert!(!temp.path().join("database-profiles.json").exists());
         let values = secrets.values.lock().expect("secret store lock");
         assert!(values.is_empty());
     }
