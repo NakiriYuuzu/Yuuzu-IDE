@@ -8,9 +8,57 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use keyring_core::Entry;
+use keyring_core::{get_default_store, Entry};
+
+#[cfg(not(test))]
+use keyring::use_native_store;
 #[cfg(test)]
 use std::collections::HashMap;
+
+#[cfg(not(test))]
+fn ensure_keyring_default_store() -> Result<(), String> {
+    ensure_keyring_default_store_with(
+        || get_default_store().is_some(),
+        || use_native_store(false).map_err(|err| format!("failed to initialize OS keyring: {err}")),
+    )
+}
+
+#[cfg(test)]
+fn ensure_keyring_default_store_with<GetDefault, SetNative>(
+    get_default_store: GetDefault,
+    set_native_store: SetNative,
+) -> Result<(), String>
+where
+    GetDefault: Fn() -> bool,
+    SetNative: Fn() -> Result<(), String>,
+{
+    if get_default_store() {
+        return Ok(());
+    }
+
+    set_native_store()
+}
+
+#[cfg(not(test))]
+fn ensure_keyring_default_store_with<GetDefault, SetNative>(
+    get_default_store: GetDefault,
+    set_native_store: SetNative,
+) -> Result<(), String>
+where
+    GetDefault: Fn() -> bool,
+    SetNative: Fn() -> Result<(), String>,
+{
+    if get_default_store() {
+        return Ok(());
+    }
+
+    set_native_store()
+}
+
+#[cfg(test)]
+fn ensure_keyring_default_store() -> Result<(), String> {
+    ensure_keyring_default_store_with(|| get_default_store().is_some(), || Ok(()))
+}
 
 pub const MAX_DATABASE_ROWS: usize = 500;
 pub const MAX_DATABASE_CELL_CHARS: usize = 2000;
@@ -227,6 +275,7 @@ impl KeyringDatabaseSecretStore {
 
 impl DatabaseSecretStore for KeyringDatabaseSecretStore {
     fn set_secret(&self, secret_id: &str, secret: &str) -> Result<(), String> {
+        ensure_keyring_default_store()?;
         let entry = Entry::new(&self.service, secret_id).map_err(|err| err.to_string())?;
         entry
             .set_secret(secret.as_bytes())
@@ -234,12 +283,14 @@ impl DatabaseSecretStore for KeyringDatabaseSecretStore {
     }
 
     fn get_secret(&self, secret_id: &str) -> Result<String, String> {
+        ensure_keyring_default_store()?;
         let entry = Entry::new(&self.service, secret_id).map_err(|err| err.to_string())?;
         let secret = entry.get_secret().map_err(|err| err.to_string())?;
         String::from_utf8(secret).map_err(|_| "stored secret is not valid UTF-8".to_string())
     }
 
     fn delete_secret(&self, secret_id: &str) -> Result<(), String> {
+        ensure_keyring_default_store()?;
         let entry = Entry::new(&self.service, secret_id).map_err(|err| err.to_string())?;
         entry.delete_credential().map_err(|err| err.to_string())
     }
@@ -889,6 +940,11 @@ fn truncate_cell(value: String) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
     use super::*;
 
     #[test]
@@ -1089,6 +1145,57 @@ mod tests {
         store.delete_profile("profile-1", &secrets).expect("delete");
 
         assert!(secrets.get_secret(&secret_id).is_err());
+    }
+
+    #[test]
+    fn keyring_store_initializer_runs_when_default_store_is_missing() {
+        let init_calls = Arc::new(AtomicUsize::new(0));
+        let init_calls_for_set = Arc::clone(&init_calls);
+        let result = ensure_keyring_default_store_with(
+            || false,
+            || {
+                init_calls_for_set.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        );
+
+        assert!(
+            result.is_ok(),
+            "initializer should run when missing default store"
+        );
+        assert_eq!(init_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn keyring_store_initializer_is_skipped_when_default_store_already_exists() {
+        let init_calls = Arc::new(AtomicUsize::new(0));
+        let init_calls_for_set = Arc::clone(&init_calls);
+        let result = ensure_keyring_default_store_with(
+            || true,
+            || {
+                init_calls_for_set.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        );
+
+        assert!(
+            result.is_ok(),
+            "pre-existing default store should be reused"
+        );
+        assert_eq!(init_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn keyring_store_initializer_errors_are_propagated() {
+        let result = ensure_keyring_default_store_with(
+            || false,
+            || Err("native store unavailable".to_string()),
+        );
+
+        assert_eq!(
+            result.expect_err("expected initialization failure"),
+            "native store unavailable"
+        );
     }
 
     fn database_profile(
