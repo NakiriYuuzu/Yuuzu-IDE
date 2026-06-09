@@ -3,6 +3,10 @@
 import { describe, expect, test } from "bun:test";
 
 import { replaceDocsIndex } from "../features/docs/docs-model";
+import {
+  createLanguageState,
+  replaceDiagnostics,
+} from "../features/language/language-model";
 import { upsertTaskRun } from "../features/tasks/task-model";
 import { upsertTerminal } from "../features/terminal/terminal-model";
 import { createWorkspaceViewStore } from "./workspace-view-state";
@@ -326,5 +330,95 @@ describe("createWorkspaceViewStore", () => {
       loading: false,
       error: null,
     });
+  });
+
+  test("unknown workspace language defaults cannot be mutated across future defaults", () => {
+    const store = createWorkspaceViewStore();
+
+    const unknownView = store.getState().viewFor("unknown");
+
+    expect(() => {
+      unknownView.language.serverStatuses.push({
+        workspace_id: "workspace",
+        workspace_root: "/workspace",
+        language: "Rust",
+        display_name: "Rust Analyzer",
+        state: "Running",
+        pid: 10,
+        memory_bytes: 1024,
+        open_documents: 1,
+        last_error: null,
+      });
+    }).toThrow(TypeError);
+
+    expect(() => {
+      unknownView.language.serverLogs.push("initialized");
+    }).toThrow(TypeError);
+
+    expect(() => {
+      unknownView.language.diagnosticsByPath["src/main.rs"] = [
+        {
+          path: "src/main.rs",
+          range: {
+            start_line: 1,
+            start_character: 0,
+            end_line: 1,
+            end_character: 4,
+          },
+          severity: "error",
+          message: "expected item",
+          source: "rust-analyzer",
+        },
+      ];
+    }).toThrow(TypeError);
+
+    expect(() => {
+      unknownView.language.activeHover = {
+        path: "src/main.rs",
+        line: 1,
+        character: 1,
+        contents: "fn main",
+      };
+    }).toThrow(TypeError);
+
+    expect(store.getState().viewFor("other-unknown").language).toMatchObject({
+      diagnosticsByPath: {},
+      serverStatuses: [],
+      activeHover: null,
+      serverLogs: [],
+      loading: false,
+      error: null,
+    });
+  });
+
+  test("language state is restored per workspace", () => {
+    const store = createWorkspaceViewStore();
+
+    store.getState().updateView("workspace-a", {
+      language: replaceDiagnostics(createLanguageState(), [
+        {
+          path: "src/main.rs",
+          range: {
+            start_line: 1,
+            start_character: 0,
+            end_line: 1,
+            end_character: 4,
+          },
+          severity: "error",
+          message: "expected item",
+          source: "rust-analyzer",
+        },
+      ]),
+    });
+
+    expect(
+      store
+        .getState()
+        .viewFor("workspace-a")
+        .language.diagnosticsByPath["src/main.rs"],
+    ).toHaveLength(1);
+    expect(
+      store.getState().viewFor("workspace-b").language.diagnosticsByPath,
+    ).toEqual({});
   });
 });

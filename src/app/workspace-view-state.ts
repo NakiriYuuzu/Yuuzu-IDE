@@ -6,6 +6,10 @@ import {
 } from "../features/docs/docs-model";
 import type { EditorFileState } from "../features/files/file-model";
 import {
+  createLanguageState,
+  type LanguageViewState,
+} from "../features/language/language-model";
+import {
   createGitState,
   type GitViewState,
 } from "../features/git/git-model";
@@ -36,6 +40,7 @@ export type WorkspaceViewState = {
   task: TaskViewState;
   git: GitViewState;
   docs: DocsViewState;
+  language: LanguageViewState;
 };
 
 type WorkspaceViewStore = {
@@ -77,6 +82,7 @@ function defaultWorkspaceView(): WorkspaceViewState {
     task: createTaskState(),
     git: createGitState(),
     docs: createDocsState(),
+    language: createLanguageState(),
   };
 }
 
@@ -127,6 +133,19 @@ function freezeWorkspaceView(view: WorkspaceViewState): WorkspaceViewState {
   }
   Object.freeze(view.docs.contextPacks);
   Object.freeze(view.docs);
+  Object.freeze(view.language.serverStatuses);
+  for (const status of view.language.serverStatuses) {
+    Object.freeze(status);
+  }
+  Object.freeze(view.language.diagnosticsByPath);
+  for (const diagnostics of Object.values(view.language.diagnosticsByPath)) {
+    Object.freeze(diagnostics);
+  }
+  if (view.language.activeHover) {
+    Object.freeze(view.language.activeHover);
+  }
+  Object.freeze(view.language.serverLogs);
+  Object.freeze(view.language);
   return Object.freeze(view);
 }
 
