@@ -22,6 +22,7 @@ pub struct AppState {
     settings: Mutex<AppSettings>,
     settings_store: SettingsStore,
     docs_store: crate::docs::ContextPackStore,
+    agent_store: crate::agent::AgentSessionStore,
 }
 
 impl AppState {
@@ -33,6 +34,8 @@ impl AppState {
         let settings = settings_store.load()?;
         let docs_store =
             crate::docs::ContextPackStore::new(config_dir.as_ref().join("context-packs.json"));
+        let agent_store =
+            crate::agent::AgentSessionStore::new(config_dir.as_ref().join("agent-sessions.json"));
 
         Ok(Self {
             registry: Mutex::new(registry),
@@ -40,6 +43,7 @@ impl AppState {
             settings: Mutex::new(settings),
             settings_store,
             docs_store,
+            agent_store,
         })
     }
 
@@ -447,6 +451,56 @@ impl AppState {
         self.docs_store
             .link_pack(&id, task_run_id.as_deref(), agent_session_id.as_deref())
     }
+
+    pub fn list_agent_sessions(
+        &self,
+        workspace_root: &str,
+    ) -> Result<Vec<crate::agent::AgentSession>, String> {
+        let workspace_root = self.trusted_workspace_root(workspace_root)?;
+        self.agent_store
+            .list_sessions(&workspace_root.to_string_lossy())
+    }
+
+    pub fn start_agent_session(
+        &self,
+        workspace_root: &str,
+        mode: crate::agent::AgentMode,
+        prompt: String,
+        context_items: Vec<crate::agent::AgentContextItem>,
+    ) -> Result<crate::agent::AgentSession, String> {
+        let workspace_root = self.trusted_workspace_root(workspace_root)?;
+        self.agent_store.start_session(
+            &workspace_root.to_string_lossy(),
+            mode,
+            &prompt,
+            context_items,
+        )
+    }
+
+    pub fn append_agent_transcript(
+        &self,
+        session_id: String,
+        entry: crate::agent::AgentTranscriptInput,
+    ) -> Result<crate::agent::AgentTranscriptEntry, String> {
+        self.agent_store.append_transcript(&session_id, entry)
+    }
+
+    pub fn update_agent_approval(
+        &self,
+        session_id: String,
+        approval_id: String,
+        status: crate::agent::AgentApprovalStatus,
+    ) -> Result<crate::agent::AgentSession, String> {
+        self.agent_store
+            .update_approval(&session_id, &approval_id, status)
+    }
+
+    pub fn export_agent_prompt(
+        &self,
+        session_id: String,
+    ) -> Result<crate::agent::AgentPromptExport, String> {
+        self.agent_store.export_prompt(&session_id)
+    }
 }
 
 #[tauri::command]
@@ -627,6 +681,52 @@ pub fn link_context_pack(
     agent_session_id: Option<String>,
 ) -> Result<crate::docs::ContextPack, String> {
     state.link_context_pack(id, task_run_id, agent_session_id)
+}
+
+#[tauri::command]
+pub fn list_agent_sessions(
+    state: State<'_, AppState>,
+    workspace_root: String,
+) -> Result<Vec<crate::agent::AgentSession>, String> {
+    state.list_agent_sessions(&workspace_root)
+}
+
+#[tauri::command]
+pub fn start_agent_session(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    mode: crate::agent::AgentMode,
+    prompt: String,
+    context_items: Vec<crate::agent::AgentContextItem>,
+) -> Result<crate::agent::AgentSession, String> {
+    state.start_agent_session(&workspace_root, mode, prompt, context_items)
+}
+
+#[tauri::command]
+pub fn append_agent_transcript(
+    state: State<'_, AppState>,
+    session_id: String,
+    entry: crate::agent::AgentTranscriptInput,
+) -> Result<crate::agent::AgentTranscriptEntry, String> {
+    state.append_agent_transcript(session_id, entry)
+}
+
+#[tauri::command]
+pub fn update_agent_approval(
+    state: State<'_, AppState>,
+    session_id: String,
+    approval_id: String,
+    status: crate::agent::AgentApprovalStatus,
+) -> Result<crate::agent::AgentSession, String> {
+    state.update_agent_approval(session_id, approval_id, status)
+}
+
+#[tauri::command]
+pub fn export_agent_prompt(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<crate::agent::AgentPromptExport, String> {
+    state.export_agent_prompt(session_id)
 }
 
 #[tauri::command]
@@ -1432,6 +1532,22 @@ mod tests {
     }
 
     #[test]
+    fn start_agent_session_preserves_flat_command_signature() {
+        type FlatStartAgentSessionCommand = fn(
+            State<'_, AppState>,
+            String,
+            crate::agent::AgentMode,
+            String,
+            Vec<crate::agent::AgentContextItem>,
+        )
+            -> Result<crate::agent::AgentSession, String>;
+
+        fn assert_flat_signature(_command: FlatStartAgentSessionCommand) {}
+
+        assert_flat_signature(start_agent_session);
+    }
+
+    #[test]
     fn lsp_open_document_preserves_flat_command_signature() {
         type FlatOpenDocumentCommand =
             for<'app_state, 'lsp_state> fn(
@@ -1447,6 +1563,21 @@ mod tests {
         fn assert_flat_signature(_command: FlatOpenDocumentCommand) {}
 
         assert_flat_signature(super::lsp_open_document);
+    }
+
+    #[test]
+    fn agent_sessions_reject_unregistered_workspaces() {
+        let config = tempfile::tempdir().expect("config dir");
+        let state = AppState::new(config.path()).expect("state");
+
+        let result = state.start_agent_session(
+            "/not/registered",
+            crate::agent::AgentMode::Plan,
+            "Plan work".to_string(),
+            Vec::new(),
+        );
+
+        assert!(result.unwrap_err().contains("workspace not registered"));
     }
 
     #[test]

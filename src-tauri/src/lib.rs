@@ -1,3 +1,4 @@
+pub mod agent;
 mod commands;
 pub mod docs;
 mod file_system;
@@ -44,6 +45,11 @@ pub fn run() {
             commands::docs_index,
             commands::docs_preview,
             commands::docs_search,
+            commands::list_agent_sessions,
+            commands::start_agent_session,
+            commands::append_agent_transcript,
+            commands::update_agent_approval,
+            commands::export_agent_prompt,
             commands::list_context_packs,
             commands::create_context_pack,
             commands::delete_context_pack,
