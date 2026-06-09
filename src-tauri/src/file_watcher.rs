@@ -32,14 +32,12 @@ struct WatcherEntry {
 
 struct WatcherRegistry {
     entries: HashMap<PathBuf, WatcherEntry>,
-    next_watch_id: u64,
 }
 
 impl WatcherRegistry {
     fn new() -> Self {
         Self {
             entries: HashMap::new(),
-            next_watch_id: 0,
         }
     }
 
@@ -73,8 +71,10 @@ impl WatcherRegistry {
             .entries
             .get_mut(&root)
             .ok_or_else(|| format!("workspace watcher not active: {}", root.display()))?;
-        self.next_watch_id += 1;
-        let watch_id = self.next_watch_id.to_string();
+        let mut watch_id = uuid::Uuid::new_v4().to_string();
+        while entry.claims.contains(&watch_id) {
+            watch_id = uuid::Uuid::new_v4().to_string();
+        }
         entry.claims.insert(watch_id.clone());
 
         Ok(WatchWorkspaceHandle {
@@ -322,5 +322,41 @@ mod tests {
 
         assert!(registry.release(&handle).expect("release"));
         assert!(!registry.has_active_watcher(&root_path));
+    }
+
+    #[test]
+    fn forged_sequential_watch_id_cannot_release_active_claim() {
+        let root = tempdir().expect("tempdir");
+        let root_path = root.path().canonicalize().expect("canonical");
+        let mut registry = super::WatcherRegistry::new();
+        registry.insert_test_watcher(root_path.clone());
+        let handle = registry.claim(root_path.clone()).expect("claim");
+        let forged = super::WatchWorkspaceHandle {
+            workspace_root: root_path.clone(),
+            watch_id: "1".to_string(),
+        };
+
+        assert!(registry.release(&forged).is_err());
+        assert_eq!(registry.claim_count(&root_path), 1);
+
+        registry.release(&handle).expect("release issued handle");
+        assert!(!registry.has_active_watcher(&root_path));
+    }
+
+    #[test]
+    fn issued_watch_ids_are_uuid_v4_tokens() {
+        let root = tempdir().expect("tempdir");
+        let root_path = root.path().canonicalize().expect("canonical");
+        let mut registry = super::WatcherRegistry::new();
+        registry.insert_test_watcher(root_path.clone());
+
+        let first = registry.claim(root_path.clone()).expect("first claim");
+        let second = registry.claim(root_path).expect("second claim");
+        let first_uuid = uuid::Uuid::parse_str(&first.watch_id).expect("first uuid");
+        let second_uuid = uuid::Uuid::parse_str(&second.watch_id).expect("second uuid");
+
+        assert_eq!(first_uuid.get_version_num(), 4);
+        assert_eq!(second_uuid.get_version_num(), 4);
+        assert_ne!(first.watch_id, second.watch_id);
     }
 }
