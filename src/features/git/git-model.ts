@@ -238,6 +238,10 @@ export function canStash(state: GitViewState): boolean {
   );
 }
 
+export function canRunRepositoryAction(state: GitViewState): boolean {
+  return state.status !== null;
+}
+
 export function gitActionLabel(action: GitAction): string {
   switch (action) {
     case "commit":

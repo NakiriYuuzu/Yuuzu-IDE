@@ -2051,7 +2051,10 @@ export function AppShell() {
 
             <div
               className={`group-content${
-                showEditor || surface === "terminal"
+                showEditor ||
+                surface === "terminal" ||
+                surface === "git-diff" ||
+                surface === "git-graph"
                   ? " editor-content"
                   : ""
               }`}

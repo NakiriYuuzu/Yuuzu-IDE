@@ -5,6 +5,7 @@ import {
   branchCheckoutConfirmation,
   canAmend,
   canCommit,
+  canRunRepositoryAction,
   canStash,
   changeBadgeCount,
   confirmationTextForGitAction,
@@ -200,6 +201,18 @@ describe("git-model", () => {
     expect(canStash(readyState)).toBe(true);
     expect(canStash(conflictState)).toBe(false);
     expect(canStash(cleanState)).toBe(false);
+  });
+
+  test("repository actions require loaded status without conflict gating", () => {
+    expect(canRunRepositoryAction(createGitState())).toBe(false);
+    expect(canRunRepositoryAction(replaceGitStatus(createGitState(), status))).toBe(
+      true,
+    );
+    expect(
+      canRunRepositoryAction(
+        replaceGitStatus(createGitState(), statusWithoutConflicts),
+      ),
+    ).toBe(true);
   });
 
   test("git action labels match the Source Control panel commands", () => {

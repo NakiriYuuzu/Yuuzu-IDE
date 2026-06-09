@@ -15,6 +15,7 @@ import { useState, type FormEvent } from "react";
 import {
   canAmend,
   canCommit,
+  canRunRepositoryAction,
   canStash,
   gitActionLabel,
   groupGitChanges,
@@ -85,13 +86,15 @@ export function GitPanel({
   const commitEnabled = canCommit(state) && !state.loading;
   const amendEnabled = canAmend(state) && !state.loading;
   const stashEnabled = canStash(state) && !state.loading;
-  const canCreateBranch = newBranchName.trim().length > 0 && !state.loading;
+  const repositoryActionEnabled = canRunRepositoryAction(state) && !state.loading;
+  const canCreateBranch =
+    newBranchName.trim().length > 0 && repositoryActionEnabled;
 
   function submitCreateBranch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const branchName = newBranchName.trim();
 
-    if (!branchName) {
+    if (!branchName || !repositoryActionEnabled) {
       return;
     }
 
@@ -129,6 +132,7 @@ export function GitPanel({
             className="iconbtn"
             title="View graph"
             aria-label="View graph"
+            disabled={!repositoryActionEnabled}
             onClick={onOpenGraph}
           >
             <GitGraph aria-hidden="true" />
@@ -143,7 +147,7 @@ export function GitPanel({
             className="input2"
             aria-label="Checkout branch"
             value={branchSelectValue}
-            disabled={state.loading || state.branches.length === 0}
+            disabled={!repositoryActionEnabled || state.branches.length === 0}
             onChange={(event) => {
               const nextBranch = event.currentTarget.value;
 
@@ -175,7 +179,7 @@ export function GitPanel({
             value={newBranchName}
             placeholder="New branch"
             aria-label="New branch name"
-            disabled={state.loading}
+            disabled={!repositoryActionEnabled}
             onChange={(event) => setNewBranchName(event.currentTarget.value)}
           />
           <button
@@ -193,7 +197,7 @@ export function GitPanel({
           <button
             type="button"
             className="btn"
-            disabled={state.loading}
+            disabled={!repositoryActionEnabled}
             onClick={onFetch}
           >
             <RefreshCw aria-hidden="true" />
@@ -202,7 +206,7 @@ export function GitPanel({
           <button
             type="button"
             className="btn"
-            disabled={state.loading}
+            disabled={!repositoryActionEnabled}
             onClick={onPull}
           >
             <Download aria-hidden="true" />
@@ -211,7 +215,7 @@ export function GitPanel({
           <button
             type="button"
             className="btn"
-            disabled={state.loading}
+            disabled={!repositoryActionEnabled}
             onClick={onPush}
           >
             <Upload aria-hidden="true" />
