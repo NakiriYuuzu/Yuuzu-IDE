@@ -142,11 +142,19 @@ export function storeContextPack(
   state: DocsViewState,
   pack: ContextPack,
 ): DocsViewState {
-  const contextPacks = state.contextPacks.filter((item) => item.id !== pack.id);
+  const existingIndex = state.contextPacks.findIndex(
+    (item) => item.id === pack.id,
+  );
+  const contextPacks =
+    existingIndex === -1
+      ? [...state.contextPacks, pack]
+      : state.contextPacks.map((item, index) =>
+          index === existingIndex ? pack : item,
+        );
 
   return {
     ...state,
-    contextPacks: [...contextPacks, pack],
+    contextPacks,
     activePackId: pack.id,
     packDraftName: "",
   };
