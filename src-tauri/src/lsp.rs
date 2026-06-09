@@ -23,7 +23,7 @@ pub fn detect_language(path: &str) -> Option<LanguageId> {
 
     match extension.as_str() {
         "rs" => Some(LanguageId::Rust),
-        "ts" | "tsx" => Some(LanguageId::TypeScript),
+        "ts" | "tsx" | "mts" | "cts" => Some(LanguageId::TypeScript),
         "js" | "jsx" | "mjs" | "cjs" => Some(LanguageId::JavaScript),
         "py" | "pyw" => Some(LanguageId::Python),
         _ => None,
@@ -72,16 +72,18 @@ pub fn decode_lsp_message(buffer: &mut Vec<u8>) -> Result<Option<serde_json::Val
     };
 
     let header = std::str::from_utf8(&buffer[..header_end]).map_err(|err| err.to_string())?;
-    let content_length = header
+    let content_length_value = header
         .lines()
-        .find_map(|line| {
-            line.strip_prefix("Content-Length: ")
-                .and_then(|value| value.parse::<usize>().ok())
-        })
+        .find_map(|line| line.strip_prefix("Content-Length: "))
         .ok_or_else(|| "missing LSP Content-Length header".to_string())?;
+    let content_length = content_length_value
+        .parse::<usize>()
+        .map_err(|err| format!("invalid LSP Content-Length: {err}"))?;
 
     let body_start = header_end + 4;
-    let body_end = body_start + content_length;
+    let body_end = body_start
+        .checked_add(content_length)
+        .ok_or_else(|| "invalid LSP Content-Length exceeds frame bounds".to_string())?;
     if buffer.len() < body_end {
         return Ok(None);
     }
@@ -102,6 +104,8 @@ mod tests {
         assert_eq!(detect_language("src/main.rs"), Some(LanguageId::Rust));
         assert_eq!(detect_language("src/app.ts"), Some(LanguageId::TypeScript));
         assert_eq!(detect_language("src/app.tsx"), Some(LanguageId::TypeScript));
+        assert_eq!(detect_language("src/app.mts"), Some(LanguageId::TypeScript));
+        assert_eq!(detect_language("src/app.cts"), Some(LanguageId::TypeScript));
         assert_eq!(detect_language("src/app.js"), Some(LanguageId::JavaScript));
         assert_eq!(
             detect_language("scripts/build.py"),
@@ -154,5 +158,25 @@ mod tests {
             buffer.len(),
             b"Content-Length: 12\r\n\r\n{\"jsonrpc\"".len()
         );
+    }
+
+    #[test]
+    fn reports_invalid_lsp_content_length_header() {
+        let mut buffer = b"Content-Length: abc\r\n\r\n{}".to_vec();
+
+        let error = decode_lsp_message(&mut buffer).expect_err("invalid length");
+
+        assert!(error.contains("invalid LSP Content-Length"));
+        assert_eq!(buffer, b"Content-Length: abc\r\n\r\n{}".to_vec());
+    }
+
+    #[test]
+    fn rejects_lsp_content_length_that_overflows_frame_end() {
+        let mut buffer = format!("Content-Length: {}\r\n\r\n{{}}", usize::MAX).into_bytes();
+
+        let error = decode_lsp_message(&mut buffer).expect_err("overflowing length");
+
+        assert_eq!(error, "invalid LSP Content-Length exceeds frame bounds");
+        assert!(buffer.starts_with(b"Content-Length: "));
     }
 }
