@@ -6,6 +6,11 @@ import {
   activeAgentSession,
   agentBadgeCount,
   agentContextSummary,
+  agentContextFromDiagnostic,
+  agentContextFromDiff,
+  agentContextFromDoc,
+  agentContextFromFile,
+  agentContextFromTerminal,
   approvalEntries,
   type AgentMode,
   type AgentViewState,
@@ -126,6 +131,74 @@ describe("agent model", () => {
     expect(approvalEntries(state.sessions[0])).toHaveLength(1);
     expect(transcriptByKind(state.sessions[0], "approval_request")).toHaveLength(1);
     expect(agentBadgeCount(state)).toBe("1");
+  });
+
+  test("builds bounded agent context items from selected sources", () => {
+    expect(
+      agentContextFromFile({
+        path: "/repo/src/app.ts",
+        workspaceRoot: "/repo",
+        content: "export const app = true;",
+      }),
+    ).toMatchObject({
+      id: "file:src/app.ts",
+      kind: "file",
+      label: "src/app.ts",
+      path: "src/app.ts",
+      truncated: false,
+    });
+
+    expect(
+      agentContextFromDoc({
+        path: "docs/architecture/tech-stack.md",
+        title: "Tech Stack",
+        content: "# Tech Stack",
+      }),
+    ).toMatchObject({
+      id: "doc:docs/architecture/tech-stack.md",
+      kind: "doc",
+      label: "Tech Stack",
+    });
+
+    expect(
+      agentContextFromDiff({
+        path: "src/app/AppShell.tsx",
+        staged: false,
+        raw: "diff --git a/src/app/AppShell.tsx b/src/app/AppShell.tsx",
+      }),
+    ).toMatchObject({
+      id: "diff:unstaged:src/app/AppShell.tsx",
+      kind: "diff",
+    });
+  });
+
+  test("bounds long terminal context", () => {
+    const item = agentContextFromTerminal({
+      sessionId: "w:terminal-1",
+      name: "zsh",
+      output: "x".repeat(130_000),
+    });
+
+    expect(item.content).toHaveLength(120_000);
+    expect(item.truncated).toBe(true);
+  });
+
+  test("builds bounded diagnostic context with ids and labels", () => {
+    expect(
+      agentContextFromDiagnostic({
+        path: "src/app.ts",
+        message: "Unused variable",
+        severity: "error",
+        line: 42,
+      }),
+    ).toMatchObject({
+      id: "diagnostic:src/app.ts:42:Unused variable",
+      kind: "diagnostic",
+      label: "error: src/app.ts:42",
+      path: "src/app.ts",
+      content: "Unused variable",
+      truncated: false,
+    });
   });
 
   test("ignores missing selected sessions", () => {

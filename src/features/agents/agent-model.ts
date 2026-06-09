@@ -68,6 +68,8 @@ export type AgentViewState = {
   error: string | null;
 };
 
+const MAX_AGENT_CONTEXT_CHARS = 120_000;
+
 export function createAgentState(): AgentViewState {
   return {
     sessions: [],
@@ -192,4 +194,107 @@ export function agentBadgeCount(state: AgentViewState): string | null {
     0,
   );
   return pending > 0 ? String(pending) : null;
+}
+
+function boundContext(content: string): { content: string; truncated: boolean } {
+  if (content.length <= MAX_AGENT_CONTEXT_CHARS) {
+    return { content, truncated: false };
+  }
+
+  return {
+    content: content.slice(content.length - MAX_AGENT_CONTEXT_CHARS),
+    truncated: true,
+  };
+}
+
+function workspaceRelativePath(workspaceRoot: string, path: string): string {
+  const root = workspaceRoot.replace(/[\\/]+$/, "").replace(/\\/g, "/");
+  const normalized = path.replace(/\\/g, "/");
+  return normalized.startsWith(`${root}/`) ? normalized.slice(root.length + 1) : path;
+}
+
+export function agentContextFromFile(args: {
+  workspaceRoot: string;
+  path: string;
+  content: string;
+}): AgentContextItem {
+  const relativePath = workspaceRelativePath(args.workspaceRoot, args.path);
+  const bounded = boundContext(args.content);
+
+  return {
+    id: `file:${relativePath}`,
+    kind: "file",
+    label: relativePath,
+    path: relativePath,
+    content: bounded.content,
+    truncated: bounded.truncated,
+  };
+}
+
+export function agentContextFromDoc(args: {
+  path: string;
+  title: string;
+  content: string;
+}): AgentContextItem {
+  const bounded = boundContext(args.content);
+
+  return {
+    id: `doc:${args.path}`,
+    kind: "doc",
+    label: args.title || args.path,
+    path: args.path,
+    content: bounded.content,
+    truncated: bounded.truncated,
+  };
+}
+
+export function agentContextFromDiff(args: {
+  path: string;
+  staged: boolean;
+  raw: string;
+}): AgentContextItem {
+  const bounded = boundContext(args.raw);
+  const stage = args.staged ? "staged" : "unstaged";
+
+  return {
+    id: `diff:${stage}:${args.path}`,
+    kind: "diff",
+    label: `${stage} diff: ${args.path}`,
+    path: args.path,
+    content: bounded.content,
+    truncated: bounded.truncated,
+  };
+}
+
+export function agentContextFromDiagnostic(args: {
+  path: string;
+  message: string;
+  severity: string;
+  line: number;
+}): AgentContextItem {
+  const label = `${args.severity}: ${args.path}:${args.line}`;
+  return {
+    id: `diagnostic:${args.path}:${args.line}:${args.message}`,
+    kind: "diagnostic",
+    label,
+    path: args.path,
+    content: args.message,
+    truncated: false,
+  };
+}
+
+export function agentContextFromTerminal(args: {
+  sessionId: string;
+  name: string;
+  output: string;
+}): AgentContextItem {
+  const bounded = boundContext(args.output);
+  return {
+    id: `terminal:${args.sessionId}`,
+    kind: "terminal",
+    label: args.name,
+    path: null,
+    content: bounded.content,
+    truncated: bounded.truncated,
+  };
 }
