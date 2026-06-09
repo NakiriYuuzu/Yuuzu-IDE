@@ -363,10 +363,12 @@ impl TaskState {
         }
 
         if let Err(err) = kill_process(&process) {
-            if try_child_exit_code(&process)?.is_some() {
-                return mark_run_stopped_in_state(&self.registry, &self.processes, run_id);
+            match cancel_stop_if_still_running(&process)? {
+                StopCancel::AlreadyExited(_) => {
+                    return mark_run_stopped_in_state(&self.registry, &self.processes, run_id);
+                }
+                StopCancel::StillRunning => return Err(err),
             }
-            return Err(err);
         }
 
         mark_run_stopped_in_state(&self.registry, &self.processes, run_id)
@@ -455,6 +457,12 @@ enum StopStart {
     Started,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum StopCancel {
+    AlreadyExited(Option<i32>),
+    StillRunning,
+}
+
 fn begin_stop_or_observe_exit(process: &TaskProcess) -> Result<StopStart, String> {
     let mut child = process.child.lock().map_err(|err| err.to_string())?;
     if let Some(status) = child.try_wait().map_err(|err| err.to_string())? {
@@ -463,6 +471,16 @@ fn begin_stop_or_observe_exit(process: &TaskProcess) -> Result<StopStart, String
 
     process.stop_started.store(true, Ordering::SeqCst);
     Ok(StopStart::Started)
+}
+
+fn cancel_stop_if_still_running(process: &TaskProcess) -> Result<StopCancel, String> {
+    let mut child = process.child.lock().map_err(|err| err.to_string())?;
+    if let Some(status) = child.try_wait().map_err(|err| err.to_string())? {
+        return Ok(StopCancel::AlreadyExited(status.code()));
+    }
+
+    process.stop_started.store(false, Ordering::SeqCst);
+    Ok(StopCancel::StillRunning)
 }
 
 fn mark_run_stopped_in_state(
@@ -805,6 +823,64 @@ mod tests {
         assert!(event.is_none());
         assert_eq!(run_after_wait.status, super::TaskRunStatus::Running);
         assert_eq!(stopped.status, super::TaskRunStatus::Stopped);
+    }
+
+    #[test]
+    fn canceling_failed_stop_intent_allows_later_exit_event() {
+        let temp = tempdir().expect("tempdir");
+        let state = super::TaskState::new();
+        let run = state
+            .register_test_run(
+                "workspace-a".to_string(),
+                "custom".to_string(),
+                "sleep 0.1; exit 9".to_string(),
+                temp.path().into(),
+            )
+            .expect("run");
+        let child = super::task_command("sleep 0.1; exit 9", temp.path())
+            .spawn()
+            .expect("child");
+        state
+            .insert_test_process(run.id.clone(), child)
+            .expect("insert child");
+        let process = state
+            .processes
+            .lock()
+            .expect("processes")
+            .get(&run.id)
+            .expect("process")
+            .clone();
+
+        assert_eq!(
+            super::begin_stop_or_observe_exit(&process).expect("begin stop"),
+            super::StopStart::Started
+        );
+        assert_eq!(
+            super::cancel_stop_if_still_running(&process).expect("cancel stop"),
+            super::StopCancel::StillRunning
+        );
+        let exit_code = wait_until_process_exited(&process);
+        let event = super::finish_wait_observed_exit(
+            &state.registry,
+            &state.processes,
+            &process,
+            &run.id,
+            exit_code,
+        )
+        .expect("finish wait")
+        .expect("event");
+        let exited = state
+            .list_runs("workspace-a")
+            .expect("runs")
+            .into_iter()
+            .next()
+            .expect("run");
+
+        assert_eq!(event.run_id, run.id);
+        assert_eq!(event.exit_code, Some(9));
+        assert_eq!(exited.status, super::TaskRunStatus::Exited);
+        assert_eq!(exited.exit_code, Some(9));
+        assert_eq!(state.child_count(), 0);
     }
 
     #[cfg(unix)]
