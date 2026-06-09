@@ -67,7 +67,8 @@ import {
   nextLanguageRefreshRequest,
   replaceDiagnostics,
   diagnosticsForPath,
-  lspDocumentChangeForWorkspace,
+  isLspSupportedDocumentPath,
+  lspDocumentChangesForWorkspacePaths,
   lspDocumentPathForWorkspace,
   replaceServerStatuses,
   selectDiagnosticBadge,
@@ -1278,7 +1279,7 @@ export function AppShell() {
         language,
         readOnly: read.too_large,
       });
-      if (isLspSupportedLanguage(language)) {
+      if (isLspSupportedDocumentPath(path)) {
         void openLanguageDocument({
           workspaceId: activeWorkspaceId,
           workspaceRoot: activeWorkspace.path,
@@ -1398,7 +1399,7 @@ export function AppShell() {
         tryClearDraft(activeWorkspaceId, activePath);
 
         if (
-          isLspSupportedLanguage(loadedFile.language) &&
+          isLspSupportedDocumentPath(activePath) &&
           loadedFile.workspaceId === activeWorkspaceId &&
           loadedFile.path === activePath
         ) {
@@ -1445,36 +1446,36 @@ export function AppShell() {
     }
 
     const loadedBeforeRename = loadedFile;
+    const openPathsBeforeRename = workspaceViewStore
+      .getState()
+      .viewFor(activeWorkspaceId)
+      .editor.tabs.map((tab) => tab.path);
     const result = await renamePath(activeWorkspace.path, path, newName);
-    if (
-      activeWorkspaceId &&
-      loadedBeforeRename?.workspaceId === activeWorkspaceId &&
-      isSameOrDescendant(loadedBeforeRename.path, path)
-    ) {
-      const nextPath = replacePathPrefix(
-        loadedBeforeRename.path,
+    if (activeWorkspaceId) {
+      for (const change of lspDocumentChangesForWorkspacePaths(
+        activeWorkspace.path,
+        openPathsBeforeRename,
         path,
         result.path,
-      );
-      const change = lspDocumentChangeForWorkspace(
-        activeWorkspace.path,
-        loadedBeforeRename.path,
-        nextPath,
-      );
-      if (isLspSupportedLanguage(languageForPath(loadedBeforeRename.path))) {
+      )) {
         void closeLanguageDocument({
           workspaceId: activeWorkspaceId,
           workspaceRoot: activeWorkspace.path,
           path: change.closePath,
         }).catch(() => {});
-      }
-      if (isLspSupportedLanguage(languageForPath(nextPath))) {
-        void openLanguageDocument({
-          workspaceId: activeWorkspaceId,
-          workspaceRoot: activeWorkspace.path,
-          path: change.openPath!,
-          content: loadedBeforeRename.content,
-        }).catch(() => {});
+
+        if (
+          change.openPath &&
+          loadedBeforeRename?.workspaceId === activeWorkspaceId &&
+          loadedBeforeRename.path === change.previousPath
+        ) {
+          void openLanguageDocument({
+            workspaceId: activeWorkspaceId,
+            workspaceRoot: activeWorkspace.path,
+            path: change.openPath,
+            content: loadedBeforeRename.content,
+          }).catch(() => {});
+        }
       }
     }
     updateEditor(activeWorkspaceId, (editor) =>
@@ -1513,7 +1514,10 @@ export function AppShell() {
       return;
     }
 
-    const loadedBeforeDelete = loadedFile;
+    const openPathsBeforeDelete = workspaceViewStore
+      .getState()
+      .viewFor(activeWorkspaceId)
+      .editor.tabs.map((tab) => tab.path);
     await deletePath(activeWorkspace.path, path);
     const currentView = workspaceViewStore
       .getState()
@@ -1529,21 +1533,20 @@ export function AppShell() {
         isSameOrDescendant(loadedFile.path, path)
       : false;
     if (
-      activeWorkspaceId &&
-      loadedBeforeDelete?.workspaceId === activeWorkspaceId &&
-      isSameOrDescendant(loadedBeforeDelete.path, path) &&
-      isLspSupportedLanguage(languageForPath(loadedBeforeDelete.path))
+      activeWorkspaceId
     ) {
-      const change = lspDocumentChangeForWorkspace(
+      for (const change of lspDocumentChangesForWorkspacePaths(
         activeWorkspace.path,
-        loadedBeforeDelete.path,
+        openPathsBeforeDelete,
+        path,
         null,
-      );
-      void closeLanguageDocument({
-        workspaceId: activeWorkspaceId,
-        workspaceRoot: activeWorkspace.path,
-        path: change.closePath,
-      }).catch(() => {});
+      )) {
+        void closeLanguageDocument({
+          workspaceId: activeWorkspaceId,
+          workspaceRoot: activeWorkspace.path,
+          path: change.closePath,
+        }).catch(() => {});
+      }
     }
     updateEditor(activeWorkspaceId, (editor) => removeEditorPath(editor, path));
     if (nextSurface !== currentView.surface) {

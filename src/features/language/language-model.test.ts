@@ -6,6 +6,7 @@ import {
   replaceServerStatuses,
   diagnosticsForPath,
   lspDocumentChangeForWorkspace,
+  lspDocumentChangesForWorkspacePaths,
   lspDocumentPathForWorkspace,
   severityToMonacoMarker,
   selectDiagnosticBadge,
@@ -103,6 +104,45 @@ describe("language model", () => {
       closePath: "src/main.rs",
       openPath: null,
     });
+  });
+
+  test("builds LSP document lifecycle changes for inactive open tabs", () => {
+    const openPaths = [
+      "/workspace/src/a.ts",
+      "/workspace/src/b.ts",
+      "/workspace/README.md",
+    ];
+
+    expect(
+      lspDocumentChangesForWorkspacePaths(
+        "/workspace",
+        openPaths,
+        "/workspace/src/a.ts",
+        "/workspace/src/renamed.ts",
+      ),
+    ).toEqual([
+      {
+        previousPath: "/workspace/src/a.ts",
+        nextPath: "/workspace/src/renamed.ts",
+        closePath: "src/a.ts",
+        openPath: "src/renamed.ts",
+      },
+    ]);
+    expect(
+      lspDocumentChangesForWorkspacePaths(
+        "/workspace",
+        openPaths,
+        "/workspace/src/a.ts",
+        null,
+      ),
+    ).toEqual([
+      {
+        previousPath: "/workspace/src/a.ts",
+        nextPath: null,
+        closePath: "src/a.ts",
+        openPath: null,
+      },
+    ]);
   });
 
   test("stores server status, hover, and logs without mutating defaults", () => {

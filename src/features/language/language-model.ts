@@ -87,6 +87,59 @@ export function lspDocumentPathForWorkspace(
     : path;
 }
 
+function normalizeDocumentPath(path: string): string {
+  return path.replace(/[\\/]+$/, "").replace(/\\/g, "/");
+}
+
+function isSameOrDescendantPath(path: string, parent: string): boolean {
+  const normalizedPath = normalizeDocumentPath(path);
+  const normalizedParent = normalizeDocumentPath(parent);
+
+  return (
+    normalizedPath === normalizedParent ||
+    normalizedPath.startsWith(`${normalizedParent}/`)
+  );
+}
+
+function replaceDocumentPathPrefix(
+  path: string,
+  oldPath: string,
+  newPath: string,
+): string {
+  const normalizedPath = normalizeDocumentPath(path);
+  const normalizedOldPath = normalizeDocumentPath(oldPath);
+  const normalizedNewPath = normalizeDocumentPath(newPath);
+
+  if (normalizedPath === normalizedOldPath) {
+    return newPath;
+  }
+
+  if (normalizedPath.startsWith(`${normalizedOldPath}/`)) {
+    return `${normalizedNewPath}${normalizedPath.slice(normalizedOldPath.length)}`;
+  }
+
+  return path;
+}
+
+export function isLspSupportedDocumentPath(path: string): boolean {
+  const lower = path.toLowerCase();
+
+  return (
+    lower.endsWith(".rs") ||
+    lower.endsWith(".ts") ||
+    lower.endsWith(".tsx") ||
+    lower.endsWith(".mts") ||
+    lower.endsWith(".cts") ||
+    lower.endsWith(".js") ||
+    lower.endsWith(".jsx") ||
+    lower.endsWith(".mjs") ||
+    lower.endsWith(".cjs") ||
+    lower.endsWith(".py") ||
+    lower.endsWith(".pyw") ||
+    lower.endsWith(".pyi")
+  );
+}
+
 export function lspDocumentChangeForWorkspace(
   workspaceRoot: string,
   previousPath: string,
@@ -98,6 +151,36 @@ export function lspDocumentChangeForWorkspace(
       ? lspDocumentPathForWorkspace(workspaceRoot, nextPath)
       : null,
   };
+}
+
+export function lspDocumentChangesForWorkspacePaths(
+  workspaceRoot: string,
+  openPaths: string[],
+  affectedPath: string,
+  replacementPath: string | null,
+): Array<{
+  previousPath: string;
+  nextPath: string | null;
+  closePath: string;
+  openPath: string | null;
+}> {
+  return openPaths.flatMap((previousPath) => {
+    if (
+      !isSameOrDescendantPath(previousPath, affectedPath) ||
+      !isLspSupportedDocumentPath(previousPath)
+    ) {
+      return [];
+    }
+
+    const nextPath = replacementPath
+      ? replaceDocumentPathPrefix(previousPath, affectedPath, replacementPath)
+      : null;
+    return [{
+      previousPath,
+      nextPath,
+      ...lspDocumentChangeForWorkspace(workspaceRoot, previousPath, nextPath),
+    }];
+  });
 }
 
 export function createLanguageState(): LanguageViewState {
