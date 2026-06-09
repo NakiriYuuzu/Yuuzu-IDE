@@ -150,6 +150,53 @@ describe("DatabasePanel", () => {
     expect(onSelectProfile).toHaveBeenCalledTimes(1);
   });
 
+  test("inspect schema action is separate from profile selection", () => {
+    const onSelectProfile = mock(() => {});
+    const onInspectSchema = mock(() => {});
+    const state = storeDatabaseSchema(
+      replaceDatabaseProfiles(createDatabaseState(), [profile("local")]),
+      {
+        profile_id: "local",
+        refreshed_ms: 1,
+        tables: [{ schema: null, name: "users", row_count: 2, columns: [] }],
+      } as DatabaseSchema,
+    );
+
+    const view = render(
+      <DatabasePanel
+        state={{ ...state, queryDraft: "SELECT * FROM users" }}
+        onRefreshProfiles={() => {}}
+        onSelectProfile={onSelectProfile}
+        onInspectSchema={onInspectSchema}
+        onOpenTable={() => {}}
+        onQueryDraftChange={() => {}}
+        onRunQuery={() => {}}
+        onConfirmQuery={() => {}}
+        onCancelConfirmation={() => {}}
+        onExportResult={() => {}}
+        onSelectHistory={() => {}}
+      />,
+    );
+
+    const selectButton = view.getByRole("button", { name: "Select local.db" });
+    const inspectButton = view.getByRole("button", {
+      name: "Inspect schema local.db",
+    });
+
+    expect(inspectButton.closest("button") === inspectButton).toBe(true);
+
+    fireEvent.click(inspectButton);
+    expect(onInspectSchema).toHaveBeenCalledTimes(1);
+    expect(onSelectProfile).toHaveBeenCalledTimes(0);
+
+    fireEvent.keyDown(inspectButton, { key: "Enter", code: "Enter" });
+    expect(onInspectSchema).toHaveBeenCalledTimes(2);
+    expect(onSelectProfile).toHaveBeenCalledTimes(0);
+
+    fireEvent.keyDown(selectButton, { key: "Enter", code: "Enter" });
+    expect(onSelectProfile).toHaveBeenCalledTimes(1);
+  });
+
   test("shows explicit confirmation text for mutating SQL", () => {
     const view = render(
       <DatabasePanel

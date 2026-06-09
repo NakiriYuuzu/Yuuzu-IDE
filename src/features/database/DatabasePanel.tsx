@@ -59,63 +59,59 @@ function DatabasePanelProfileRow({
 
   return (
     <div key={profile.id}>
-      <button
-        type="button"
-        className={`row database-profile-row ${active ? "sel" : ""}`}
-        aria-label={`Select ${profile.name}`}
-        onClick={onSelectProfile}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            onSelectProfile();
-          }
-        }}
-      >
-        <span className="tw">
-          {expanded ? (
-            <ChevronDown aria-hidden="true" />
-          ) : (
-            <ChevronRight aria-hidden="true" />
-          )}
-        </span>
-        <Database aria-hidden="true" />
-        <div className="database-row-main">
-          <span className="nm" style={{ fontWeight: 600, fontSize: "12px" }}>
-            {profile.name}
-          </span>
-          <span className="mono database-row-meta">
-            {profile.kind}
-            {profile.production ? " · production" : " · local"}
-          </span>
-        </div>
-        <span
-          className="database-status-dot"
-          style={{
-            background: active ? "var(--yuzu)" : "var(--txt-faint)",
-          }}
-        />
-        <span
-          role="button"
-          tabIndex={0}
-          className="iconbtn database-row-action"
-          title={`Inspect schema ${profile.name}`}
-          aria-label={`Inspect schema ${profile.name}`}
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            onInspectSchema();
-          }}
+      <div className={`row database-profile-row ${active ? "sel" : ""}`}>
+        <button
+          type="button"
+          className="database-profile-select"
+          aria-label={`Select ${profile.name}`}
+          onClick={onSelectProfile}
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
-              event.stopPropagation();
+              onSelectProfile();
+            }
+          }}
+        >
+          <span className="tw">
+            {expanded ? (
+              <ChevronDown aria-hidden="true" />
+            ) : (
+              <ChevronRight aria-hidden="true" />
+            )}
+          </span>
+          <Database aria-hidden="true" />
+          <div className="database-row-main">
+            <span className="nm" style={{ fontWeight: 600, fontSize: "12px" }}>
+              {profile.name}
+            </span>
+            <span className="mono database-row-meta">
+              {profile.kind}
+              {profile.production ? " · production" : " · local"}
+            </span>
+          </div>
+          <span
+            className="database-status-dot"
+            style={{
+              background: active ? "var(--yuzu)" : "var(--txt-faint)",
+            }}
+          />
+        </button>
+        <button
+          type="button"
+          className="iconbtn database-row-action"
+          title={`Inspect schema ${profile.name}`}
+          aria-label={`Inspect schema ${profile.name}`}
+          onClick={onInspectSchema}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
               onInspectSchema();
             }
           }}
         >
           <Table2 aria-hidden="true" />
-        </span>
-      </button>
+        </button>
+      </div>
       {expanded ? (
         <div className="database-tables" aria-label={`Tables for ${profile.name}`}>
           <button
