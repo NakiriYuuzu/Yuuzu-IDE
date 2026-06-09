@@ -114,6 +114,7 @@ import {
   browserScreenshotToContext,
   type BrowserScreenshot,
   type BrowserViewState,
+  type BrowserUrl,
   type DevServerTarget,
   detectDevServerTargets,
   hardReloadBrowser,
@@ -411,6 +412,70 @@ export function collectAgentAvailableContext(
   }
 
   return context;
+}
+
+export type BrowserSplitEditorParams = {
+  surface: Surface;
+  activeWorkspaceId: string | null;
+  activePath: string | null;
+  loadedFile: LoadedFile | null;
+};
+
+export function shouldShowBrowserSplitEditor({
+  surface,
+  activeWorkspaceId,
+  activePath,
+  loadedFile,
+}: BrowserSplitEditorParams): boolean {
+  return (
+    surface === "browser-preview" &&
+    activeWorkspaceId !== null &&
+    activePath !== null &&
+    loadedFile?.workspaceId === activeWorkspaceId &&
+    loadedFile.path === activePath
+  );
+}
+
+type OpenBrowserPreviewParams = {
+  value: string;
+  hasWorkspace: boolean;
+  onOpenPanel: () => void;
+  onSetSurface: (surface: Surface) => void;
+  onOpenUrl: (parsed: BrowserUrl) => void;
+  onValidationError: (error: unknown) => void;
+};
+
+export function openBrowserPreviewWithValidation(
+  {
+    value,
+    hasWorkspace,
+    onOpenPanel,
+    onSetSurface,
+    onOpenUrl,
+    onValidationError,
+  }: OpenBrowserPreviewParams,
+  validate: (value: string) => Promise<BrowserUrl>,
+): Promise<void> {
+  if (!hasWorkspace) {
+    onOpenPanel();
+    return Promise.resolve();
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    onOpenPanel();
+    return Promise.resolve();
+  }
+
+  onOpenPanel();
+  return validate(trimmed)
+    .then((parsedUrl) => {
+      onOpenUrl(parsedUrl);
+      onSetSurface("browser-preview");
+    })
+    .catch((error) => {
+      onValidationError(error);
+    });
 }
 
 function languageForPath(path: string): string {
@@ -987,11 +1052,12 @@ export function AppShell() {
     : "";
   const showEditor = surface === "editor";
   const splitBrowserSurface =
-    surface === "browser-preview" &&
-    activeEditorTab !== null &&
-    activeWorkspaceId !== null &&
-    loadedFile?.workspaceId === activeWorkspaceId &&
-    loadedFile.path === activeEditorTab.path;
+    shouldShowBrowserSplitEditor({
+      surface,
+      activeWorkspaceId,
+      activePath: view.editor.activePath,
+      loadedFile,
+    });
   const showLoadedEditor = isLoadedEditorForActiveFile({
     surface,
     activeWorkspaceId,
@@ -2974,33 +3040,36 @@ export function AppShell() {
   }
 
   function openBrowserPreview(value: string) {
-    if (!activeWorkspace || !activeWorkspaceId) {
-      openBrowserPanel();
-      return;
-    }
+    openBrowserPreviewWithValidation(
+      {
+        value,
+        hasWorkspace: Boolean(activeWorkspace && activeWorkspaceId),
+        onOpenPanel: openBrowserPanel,
+        onSetSurface: setSurface,
+        onOpenUrl: (parsedUrl) => {
+          if (!activeWorkspaceId) {
+            return;
+          }
 
-    const workspaceId = activeWorkspaceId;
-    const trimmed = value.trim();
-    if (!trimmed) {
-      openBrowserPanel();
-      setSurface("browser-preview");
-      return;
-    }
+          const workspaceId = activeWorkspaceId;
+          updateBrowser(workspaceId, (browser) =>
+            openBrowserUrl(browser, parsedUrl),
+          );
+        },
+        onValidationError: (error) => {
+          if (!activeWorkspaceId) {
+            return;
+          }
 
-    void validateBrowserUrl(trimmed)
-      .then((parsedUrl) => {
-        updateBrowser(workspaceId, (browser) => openBrowserUrl(browser, parsedUrl));
-        setSurface("browser-preview");
-      })
-      .catch((error) => {
-        updateBrowser(
-          workspaceId,
-          (browser) => setBrowserError(browser, terminalErrorMessage(error)),
-        );
-      });
-
-    setSurface("browser-preview");
-    openBrowserPanel();
+          const workspaceId = activeWorkspaceId;
+          updateBrowser(
+            workspaceId,
+            (browser) => setBrowserError(browser, terminalErrorMessage(error)),
+          );
+        },
+      },
+      validateBrowserUrl,
+    );
   }
 
   function updateBrowserUrlInput(value: string) {
@@ -4344,7 +4413,7 @@ export function AppShell() {
                     splitBrowserSurface ? " has-editor" : ""
                   }`}
                 >
-                  {activeEditorTab && showLoadedEditor ? (
+                  {activeEditorTab && splitBrowserSurface ? (
                     <div className="browser-split-editor">
                       <Suspense
                         fallback={

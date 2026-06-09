@@ -15,6 +15,8 @@ import {
   collectAgentAvailableContext,
   activeLoadedFileForWorkspace,
   PanelBody,
+  shouldShowBrowserSplitEditor,
+  openBrowserPreviewWithValidation,
   type AgentAvailableContextSource,
 } from "./AppShell";
 import { ensureTestDom } from "./test-dom";
@@ -300,6 +302,106 @@ describe("AppShell AppShell helpers", () => {
         name: "Capture browser screenshot",
       }) as HTMLButtonElement).disabled,
     ).toBe(true);
+  });
+
+  test("Browser split editor visibility remains enabled in browser-preview", () => {
+    const loadedFile = {
+      workspaceId: "workspace-1",
+      path: "src/app/AppShell.tsx",
+      content: "export const app = true;",
+      language: "typescript",
+      readOnly: false,
+    };
+
+    expect(
+      shouldShowBrowserSplitEditor({
+        surface: "browser-preview",
+        activeWorkspaceId: "workspace-1",
+        activePath: "src/app/AppShell.tsx",
+        loadedFile,
+      }),
+    ).toBe(true);
+  });
+
+  test("openBrowserPreviewWithValidation does not switch surface on invalid URL", async () => {
+    const onOpenPanel = mock(() => {});
+    const onSetSurface = mock(() => {});
+    const onOpenUrl = mock(() => {});
+    const onValidationError = mock(() => {});
+
+    await openBrowserPreviewWithValidation(
+      {
+        value: "not-a-valid-url",
+        hasWorkspace: true,
+        onOpenPanel,
+        onSetSurface,
+        onOpenUrl,
+        onValidationError,
+      },
+      async () => {
+        throw new Error("invalid browser URL");
+      },
+    );
+
+    expect(onOpenPanel).toHaveBeenCalledTimes(1);
+    expect(onSetSurface).not.toHaveBeenCalled();
+    expect(onOpenUrl).not.toHaveBeenCalled();
+    expect(onValidationError).toHaveBeenCalledTimes(1);
+  });
+
+  test("openBrowserPreviewWithValidation sets browser surface only when URL validates", async () => {
+    const parsedUrl = {
+      url: "http://localhost:5173",
+      host: "localhost",
+      port: 5173,
+    };
+    const onOpenPanel = mock(() => {});
+    const onSetSurface = mock(() => {});
+    const onOpenUrl = mock(() => {});
+    const onValidationError = mock(() => {});
+
+    await openBrowserPreviewWithValidation(
+      {
+        value: " http://localhost:5173 ",
+        hasWorkspace: true,
+        onOpenPanel,
+        onSetSurface,
+        onOpenUrl,
+        onValidationError,
+      },
+      async () => parsedUrl,
+    );
+
+    expect(onOpenPanel).toHaveBeenCalledTimes(1);
+    expect(onOpenUrl).toHaveBeenCalledWith(parsedUrl);
+    expect(onSetSurface).toHaveBeenCalledWith("browser-preview");
+    expect(onValidationError).not.toHaveBeenCalled();
+  });
+
+  test("openBrowserPreviewWithValidation keeps surface unchanged for empty input", async () => {
+    const onOpenPanel = mock(() => {});
+    const onSetSurface = mock(() => {});
+    const onOpenUrl = mock(() => {});
+    const onValidationError = mock(() => {});
+
+    await openBrowserPreviewWithValidation(
+      {
+        value: "   ",
+        hasWorkspace: true,
+        onOpenPanel,
+        onSetSurface,
+        onOpenUrl,
+        onValidationError,
+      },
+      async () => {
+        throw new Error("should not be called");
+      },
+    );
+
+    expect(onOpenPanel).toHaveBeenCalledTimes(1);
+    expect(onSetSurface).not.toHaveBeenCalled();
+    expect(onOpenUrl).not.toHaveBeenCalled();
+    expect(onValidationError).not.toHaveBeenCalled();
   });
 
   test("collects all bounded agent context pieces", () => {
