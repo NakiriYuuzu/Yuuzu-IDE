@@ -119,6 +119,220 @@ pub fn diff_file(workspace_root: &Path, path: &str, staged: bool) -> Result<GitD
     ))
 }
 
+pub fn stage_paths(workspace_root: &Path, paths: &[String]) -> Result<GitRepositoryStatus, String> {
+    let repository_root = repository_root(workspace_root)?;
+    let paths = normalize_required_paths(&repository_root, paths)?;
+
+    let mut command = git_command(&repository_root);
+    command
+        .env("GIT_LITERAL_PATHSPECS", "1")
+        .arg("add")
+        .arg("--")
+        .args(paths.iter());
+    run_git_command("git add", &mut command)?;
+
+    repository_status(workspace_root)
+}
+
+pub fn unstage_paths(
+    workspace_root: &Path,
+    paths: &[String],
+) -> Result<GitRepositoryStatus, String> {
+    let repository_root = repository_root(workspace_root)?;
+    let paths = normalize_required_paths(&repository_root, paths)?;
+
+    let mut command = git_command(&repository_root);
+    command
+        .env("GIT_LITERAL_PATHSPECS", "1")
+        .arg("restore")
+        .arg("--staged")
+        .arg("--")
+        .args(paths.iter());
+    run_git_command("git restore --staged", &mut command)?;
+
+    repository_status(workspace_root)
+}
+
+pub fn discard_paths(
+    workspace_root: &Path,
+    paths: &[String],
+    confirmation: &str,
+) -> Result<GitRepositoryStatus, String> {
+    require_confirmation(confirmation, "DISCARD")?;
+    let repository_root = repository_root(workspace_root)?;
+    let paths = normalize_required_paths(&repository_root, paths)?;
+
+    let mut command = git_command(&repository_root);
+    command
+        .env("GIT_LITERAL_PATHSPECS", "1")
+        .arg("restore")
+        .arg("--")
+        .args(paths.iter());
+    run_git_command("git restore", &mut command)?;
+
+    repository_status(workspace_root)
+}
+
+pub fn commit(
+    workspace_root: &Path,
+    message: &str,
+    amend: bool,
+    push_after: bool,
+) -> Result<GitRepositoryStatus, String> {
+    let message = required_trimmed(message, "commit message")?;
+    let repository_root = repository_root(workspace_root)?;
+
+    let mut command = git_command(&repository_root);
+    command.arg("commit");
+    if amend {
+        command.arg("--amend");
+    }
+    command.arg("-m").arg(message);
+    run_git_command("git commit", &mut command)?;
+
+    if push_after {
+        let mut push = git_command(&repository_root);
+        push.arg("push");
+        run_git_command("git push", &mut push)?;
+    }
+
+    repository_status(workspace_root)
+}
+
+pub fn stash(
+    workspace_root: &Path,
+    message: &str,
+    include_untracked: bool,
+) -> Result<GitRepositoryStatus, String> {
+    let repository_root = repository_root(workspace_root)?;
+
+    let mut command = git_command(&repository_root);
+    command.arg("stash").arg("push");
+    if include_untracked {
+        command.arg("-u");
+    }
+    command.arg("-m").arg(message);
+    run_git_command("git stash", &mut command)?;
+
+    repository_status(workspace_root)
+}
+
+pub fn list_branches(workspace_root: &Path) -> Result<Vec<GitBranch>, String> {
+    let repository_root = repository_root(workspace_root)?;
+    let output = run_git(
+        &repository_root,
+        [
+            "branch",
+            "--format=%(HEAD)%00%(refname:short)%00%(upstream:short)%00%(objectname:short)",
+        ]
+        .iter(),
+    )?;
+
+    Ok(parse_branches(&output))
+}
+
+pub fn create_branch(workspace_root: &Path, name: &str) -> Result<Vec<GitBranch>, String> {
+    let name = required_trimmed(name, "branch name")?;
+    let repository_root = repository_root(workspace_root)?;
+
+    let mut command = git_command(&repository_root);
+    command.arg("branch").arg(name);
+    run_git_command("git branch", &mut command)?;
+
+    list_branches(workspace_root)
+}
+
+pub fn checkout_branch(
+    workspace_root: &Path,
+    name: &str,
+    confirmation: &str,
+) -> Result<GitRepositoryStatus, String> {
+    let name = required_trimmed(name, "branch name")?;
+    require_confirmation(confirmation, &format!("CHECKOUT {name}"))?;
+    let repository_root = repository_root(workspace_root)?;
+
+    let mut command = git_command(&repository_root);
+    command.arg("checkout").arg(name);
+    run_git_command("git checkout", &mut command)?;
+
+    repository_status(workspace_root)
+}
+
+pub fn fetch(workspace_root: &Path) -> Result<GitRepositoryStatus, String> {
+    let repository_root = repository_root(workspace_root)?;
+    let mut command = git_command(&repository_root);
+    command.arg("fetch").arg("--prune");
+    run_git_command("git fetch", &mut command)?;
+
+    repository_status(workspace_root)
+}
+
+pub fn pull(workspace_root: &Path) -> Result<GitRepositoryStatus, String> {
+    let repository_root = repository_root(workspace_root)?;
+    let mut command = git_command(&repository_root);
+    command.arg("pull").arg("--ff-only");
+    run_git_command("git pull", &mut command)?;
+
+    repository_status(workspace_root)
+}
+
+pub fn push(workspace_root: &Path) -> Result<GitRepositoryStatus, String> {
+    let repository_root = repository_root(workspace_root)?;
+    let mut command = git_command(&repository_root);
+    command.arg("push");
+    run_git_command("git push", &mut command)?;
+
+    repository_status(workspace_root)
+}
+
+pub fn commit_graph(workspace_root: &Path, limit: usize) -> Result<Vec<GitCommitSummary>, String> {
+    let repository_root = repository_root(workspace_root)?;
+    let limit = limit.min(120).to_string();
+
+    let mut command = git_command(&repository_root);
+    command
+        .arg("log")
+        .arg("--graph")
+        .arg("--decorate=short")
+        .arg("--date=relative")
+        .arg("--pretty=format:%H%x00%h%x00%s%x00%an%x00%ar%x00%D")
+        .arg("-n")
+        .arg(limit);
+    let output = run_git_command("git log", &mut command)?;
+
+    Ok(parse_commit_graph(&output))
+}
+
+pub fn reset_hard(
+    workspace_root: &Path,
+    confirmation: &str,
+) -> Result<GitRepositoryStatus, String> {
+    require_confirmation(confirmation, "RESET HARD")?;
+    let repository_root = repository_root(workspace_root)?;
+
+    let mut command = git_command(&repository_root);
+    command.arg("reset").arg("--hard");
+    run_git_command("git reset --hard", &mut command)?;
+
+    repository_status(workspace_root)
+}
+
+pub fn rebase_onto(
+    workspace_root: &Path,
+    target: &str,
+    confirmation: &str,
+) -> Result<GitRepositoryStatus, String> {
+    let target = required_trimmed(target, "rebase target")?;
+    require_confirmation(confirmation, &format!("REBASE {target}"))?;
+    let repository_root = repository_root(workspace_root)?;
+
+    let mut command = git_command(&repository_root);
+    command.arg("rebase").arg(target);
+    run_git_command("git rebase", &mut command)?;
+
+    repository_status(workspace_root)
+}
+
 pub(crate) fn parse_status_output(
     workspace_root: &str,
     repository_root: &str,
@@ -262,6 +476,51 @@ fn repository_root(workspace_root: &Path) -> Result<PathBuf, String> {
     Ok(PathBuf::from(root))
 }
 
+fn normalize_required_paths(
+    repository_root: &Path,
+    paths: &[String],
+) -> Result<Vec<PathBuf>, String> {
+    let paths = normalize_repo_relative_paths(repository_root, paths)?;
+    if paths.is_empty() {
+        Err("git path is required".to_string())
+    } else {
+        Ok(paths)
+    }
+}
+
+fn required_trimmed<'a>(value: &'a str, label: &str) -> Result<&'a str, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        Err(format!("{label} is required"))
+    } else {
+        Ok(value)
+    }
+}
+
+fn require_confirmation(actual: &str, expected: &str) -> Result<(), String> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(format!("confirmation must be exactly: {expected}"))
+    }
+}
+
+fn git_command(repository_root: &Path) -> Command {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(repository_root);
+    command
+}
+
+fn run_git_command(label: &str, command: &mut Command) -> Result<Vec<u8>, String> {
+    let output = command.output().map_err(|err| err.to_string())?;
+
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        Err(command_error(label, &output.stderr))
+    }
+}
+
 fn run_git<'a, I>(working_dir: &Path, args: I) -> Result<Vec<u8>, String>
 where
     I: IntoIterator<Item = &'a &'a str>,
@@ -278,6 +537,78 @@ where
     } else {
         Err(command_error("git", &output.stderr))
     }
+}
+
+fn parse_branches(output: &[u8]) -> Vec<GitBranch> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\0');
+            let head = fields.next()?;
+            let name = fields.next()?.trim();
+            let upstream = fields.next().and_then(non_empty);
+
+            if name.is_empty() {
+                return None;
+            }
+
+            Some(GitBranch {
+                name: name.to_string(),
+                current: head.trim() == "*",
+                remote: name.starts_with("remotes/"),
+                upstream,
+            })
+        })
+        .collect()
+}
+
+fn parse_commit_graph(output: &[u8]) -> Vec<GitCommitSummary> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .filter_map(parse_commit_graph_line)
+        .collect()
+}
+
+fn parse_commit_graph_line(line: &str) -> Option<GitCommitSummary> {
+    let fields = line.split('\0').collect::<Vec<_>>();
+    if fields.len() < 6 {
+        return None;
+    }
+
+    let (graph_prefix, hash) = split_graph_hash(fields[0])?;
+    let refs = fields[5]
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let subject = fields[2].to_string();
+    let merge = subject.starts_with("Merge ");
+
+    Some(GitCommitSummary {
+        hash: hash.to_string(),
+        short_hash: fields[1].to_string(),
+        subject,
+        author: fields[3].to_string(),
+        when: fields[4].to_string(),
+        refs,
+        lane: graph_lane(graph_prefix),
+        merge,
+    })
+}
+
+fn split_graph_hash(value: &str) -> Option<(&str, &str)> {
+    let hash = value.split_whitespace().last()?;
+    let hash_start = value.rfind(hash)?;
+    Some((&value[..hash_start], hash))
+}
+
+fn graph_lane(graph_prefix: &str) -> u8 {
+    graph_prefix
+        .chars()
+        .position(|value| value == '*')
+        .unwrap_or(0)
+        .min(u8::MAX as usize) as u8
 }
 
 fn command_error(command: &str, stderr: &[u8]) -> String {
@@ -385,7 +716,7 @@ fn path_to_git_string(path: &Path) -> String {
 mod tests {
     use super::*;
     use std::fs;
-    use tempfile::tempdir;
+    use tempfile::{tempdir, TempDir};
 
     #[test]
     fn parses_porcelain_status_with_staged_unstaged_untracked_and_renamed_paths() {
@@ -441,6 +772,144 @@ mod tests {
 
         assert!(diff.truncated);
         assert!(diff.raw.len() <= 240 * 1024 + "... diff truncated ...\n".len());
+    }
+
+    #[test]
+    fn stages_unstages_commits_and_lists_graph_in_temp_repository() {
+        let repo = TempGitRepo::new();
+        repo.write_file("README.md", "initial\n");
+        repo.run(["add", "README.md"]);
+        repo.run(["commit", "-m", "initial"]);
+        repo.write_file("README.md", "changed\n");
+
+        stage_paths(repo.path(), &["README.md".to_string()]).expect("stage succeeds");
+        let status = repository_status(repo.path()).expect("status after stage");
+        assert_eq!(status.changes[0].index_status, "M");
+
+        unstage_paths(repo.path(), &["README.md".to_string()]).expect("unstage succeeds");
+        let status = repository_status(repo.path()).expect("status after unstage");
+        assert_eq!(status.changes[0].worktree_status, "M");
+
+        stage_paths(repo.path(), &["README.md".to_string()]).expect("restage succeeds");
+        commit(repo.path(), "feat: update readme", false, false).expect("commit succeeds");
+        let graph = commit_graph(repo.path(), 20).expect("graph loads");
+        assert_eq!(graph[0].subject, "feat: update readme");
+    }
+
+    #[test]
+    fn destructive_commands_require_exact_confirmation() {
+        let repo = TempGitRepo::new();
+        repo.write_file("README.md", "initial\n");
+        repo.run(["add", "README.md"]);
+        repo.run(["commit", "-m", "initial"]);
+        repo.write_file("README.md", "changed\n");
+
+        let error = discard_paths(repo.path(), &["README.md".to_string()], "")
+            .expect_err("missing confirmation is rejected");
+        assert!(error.contains("confirmation"));
+
+        discard_paths(repo.path(), &["README.md".to_string()], "DISCARD")
+            .expect("confirmed discard succeeds");
+        assert_eq!(repo.read_file("README.md"), "initial\n");
+    }
+
+    #[test]
+    fn checkout_reset_and_rebase_require_confirmation_text() {
+        let repo = TempGitRepo::new();
+        repo.write_file("README.md", "initial\n");
+        repo.run(["add", "README.md"]);
+        repo.run(["commit", "-m", "initial"]);
+        create_branch(repo.path(), "topic").expect("branch creates");
+
+        assert!(checkout_branch(repo.path(), "topic", "CHECKOUT main").is_err());
+        assert!(reset_hard(repo.path(), "").is_err());
+        assert!(rebase_onto(repo.path(), "main", "REBASE topic").is_err());
+    }
+
+    #[test]
+    fn rejects_blank_commit_messages_and_empty_branch_targets() {
+        let repo = TempGitRepo::new();
+
+        let error = commit(repo.path(), "  ", false, false).expect_err("blank commit rejects");
+        assert!(error.contains("commit message"));
+
+        assert!(create_branch(repo.path(), "  ").is_err());
+        assert!(checkout_branch(repo.path(), "  ", "CHECKOUT ").is_err());
+        assert!(rebase_onto(repo.path(), "  ", "REBASE ").is_err());
+    }
+
+    #[test]
+    fn stages_and_discards_literal_wildcard_paths() {
+        let repo = TempGitRepo::new();
+        repo.write_file("*.txt", "literal before\n");
+        repo.write_file("other.txt", "other before\n");
+        repo.run(["add", "*.txt", "other.txt"]);
+        repo.run(["commit", "-m", "initial"]);
+        repo.write_file("*.txt", "literal after\n");
+        repo.write_file("other.txt", "other after\n");
+
+        stage_paths(repo.path(), &["*.txt".to_string()]).expect("stage literal wildcard");
+        let status = repository_status(repo.path()).expect("status after literal stage");
+
+        let literal = status
+            .changes
+            .iter()
+            .find(|change| change.path == "*.txt")
+            .expect("literal wildcard status");
+        assert_eq!(literal.index_status, "M");
+        let other = status
+            .changes
+            .iter()
+            .find(|change| change.path == "other.txt")
+            .expect("other status");
+        assert_eq!(other.index_status, " ");
+
+        unstage_paths(repo.path(), &["*.txt".to_string()]).expect("unstage literal wildcard");
+        discard_paths(repo.path(), &["*.txt".to_string()], "DISCARD")
+            .expect("discard literal wildcard");
+        assert_eq!(repo.read_file("*.txt"), "literal before\n");
+        assert_eq!(repo.read_file("other.txt"), "other after\n");
+    }
+
+    struct TempGitRepo {
+        dir: TempDir,
+    }
+
+    impl TempGitRepo {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let repo = Self { dir };
+            repo.run(["init"]);
+            repo.run(["config", "user.email", "yuuzu@example.test"]);
+            repo.run(["config", "user.name", "Yuuzu Test"]);
+            repo
+        }
+
+        fn path(&self) -> &std::path::Path {
+            self.dir.path()
+        }
+
+        fn run<const N: usize>(&self, args: [&str; N]) {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(self.path())
+                .args(args)
+                .output()
+                .expect("git runs");
+            assert!(
+                output.status.success(),
+                "git failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        fn write_file(&self, path: &str, content: &str) {
+            std::fs::write(self.path().join(path), content).expect("write file");
+        }
+
+        fn read_file(&self, path: &str) -> String {
+            std::fs::read_to_string(self.path().join(path)).expect("read file")
+        }
     }
 
     fn run_git_test_command(repo: &Path, args: &[&str]) {

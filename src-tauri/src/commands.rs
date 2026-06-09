@@ -240,6 +240,148 @@ pub fn git_diff_file(
 }
 
 #[tauri::command]
+pub fn git_stage_paths(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    paths: Vec<String>,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::git::stage_paths(&workspace_root, &paths)
+}
+
+#[tauri::command]
+pub fn git_unstage_paths(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    paths: Vec<String>,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::git::unstage_paths(&workspace_root, &paths)
+}
+
+#[tauri::command]
+pub fn git_discard_paths(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    paths: Vec<String>,
+    confirmation: String,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::git::discard_paths(&workspace_root, &paths, &confirmation)
+}
+
+#[tauri::command]
+pub fn git_commit(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    message: String,
+    amend: bool,
+    push_after: bool,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::git::commit(&workspace_root, &message, amend, push_after)
+}
+
+#[tauri::command]
+pub fn git_stash(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    message: String,
+    include_untracked: bool,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::git::stash(&workspace_root, &message, include_untracked)
+}
+
+#[tauri::command]
+pub fn git_list_branches(
+    state: State<'_, AppState>,
+    workspace_root: String,
+) -> Result<Vec<crate::git::GitBranch>, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::git::list_branches(&workspace_root)
+}
+
+#[tauri::command]
+pub fn git_create_branch(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    name: String,
+) -> Result<Vec<crate::git::GitBranch>, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::git::create_branch(&workspace_root, &name)
+}
+
+#[tauri::command]
+pub fn git_checkout_branch(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    name: String,
+    confirmation: String,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::git::checkout_branch(&workspace_root, &name, &confirmation)
+}
+
+#[tauri::command]
+pub fn git_fetch(
+    state: State<'_, AppState>,
+    workspace_root: String,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::git::fetch(&workspace_root)
+}
+
+#[tauri::command]
+pub fn git_pull(
+    state: State<'_, AppState>,
+    workspace_root: String,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::git::pull(&workspace_root)
+}
+
+#[tauri::command]
+pub fn git_push(
+    state: State<'_, AppState>,
+    workspace_root: String,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::git::push(&workspace_root)
+}
+
+#[tauri::command]
+pub fn git_commit_graph(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    limit: usize,
+) -> Result<Vec<crate::git::GitCommitSummary>, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::git::commit_graph(&workspace_root, limit)
+}
+
+#[tauri::command]
+pub fn git_reset_hard(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    confirmation: String,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::git::reset_hard(&workspace_root, &confirmation)
+}
+
+#[tauri::command]
+pub fn git_rebase_onto(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    target: String,
+    confirmation: String,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::git::rebase_onto(&workspace_root, &target, &confirmation)
+}
+
+#[tauri::command]
 pub fn watch_workspace(
     app: AppHandle,
     app_state: State<'_, AppState>,
