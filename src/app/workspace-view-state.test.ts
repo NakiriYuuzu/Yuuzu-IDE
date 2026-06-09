@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { replaceAgentSessions } from "../features/agents/agent-model";
 import { replaceDocsIndex } from "../features/docs/docs-model";
 import {
   createLanguageState,
@@ -161,6 +162,30 @@ describe("createWorkspaceViewStore", () => {
 
     expect(store.getState().viewFor("workspace-a").docs.index).toHaveLength(1);
     expect(store.getState().viewFor("workspace-b").docs.index).toEqual([]);
+  });
+
+  test("agent sessions are restored per workspace", () => {
+    const store = createWorkspaceViewStore();
+
+    store.getState().updateAgent("workspace-a", (agent) =>
+      replaceAgentSessions(agent, [
+        {
+          id: "agent-1",
+          workspace_root: "/repo-a",
+          mode: "plan",
+          prompt: "Plan",
+          context_items: [],
+          transcript: [],
+          created_ms: 1,
+          updated_ms: 1,
+        },
+      ]),
+    );
+
+    expect(store.getState().viewFor("workspace-a").agent.activeSessionId).toBe(
+      "agent-1",
+    );
+    expect(store.getState().viewFor("workspace-b").agent.sessions).toEqual([]);
   });
 
   test("unknown workspace task defaults cannot be mutated across future defaults", () => {

@@ -1,6 +1,10 @@
 import { create, type StoreApi, useStore } from "zustand";
 
 import {
+  createAgentState,
+  type AgentViewState,
+} from "../features/agents/agent-model";
+import {
   createDocsState,
   type DocsViewState,
 } from "../features/docs/docs-model";
@@ -36,6 +40,7 @@ export type WorkspaceViewState = {
   panelOpen: boolean;
   surface: Surface;
   editor: EditorFileState;
+  agent: AgentViewState;
   terminal: TerminalViewState;
   task: TaskViewState;
   git: GitViewState;
@@ -74,6 +79,10 @@ type WorkspaceViewStore = {
     workspaceId: string | null,
     update: (language: LanguageViewState) => LanguageViewState,
   ) => void;
+  updateAgent: (
+    workspaceId: string | null,
+    update: (agent: AgentViewState) => AgentViewState,
+  ) => void;
 };
 
 function defaultWorkspaceView(): WorkspaceViewState {
@@ -82,6 +91,7 @@ function defaultWorkspaceView(): WorkspaceViewState {
     panelOpen: true,
     surface: "empty",
     editor: { tabs: [], activePath: null },
+    agent: createAgentState(),
     terminal: createTerminalState(),
     task: createTaskState(),
     git: createGitState(),
@@ -150,6 +160,20 @@ function freezeWorkspaceView(view: WorkspaceViewState): WorkspaceViewState {
   }
   Object.freeze(view.language.serverLogs);
   Object.freeze(view.language);
+  Object.freeze(view.agent.selectedContextIds);
+  for (const session of view.agent.sessions) {
+    Object.freeze(session.context_items);
+    for (const contextItem of session.context_items) {
+      Object.freeze(contextItem);
+    }
+    Object.freeze(session.transcript);
+    for (const transcript of session.transcript) {
+      Object.freeze(transcript);
+    }
+    Object.freeze(session);
+  }
+  Object.freeze(view.agent.sessions);
+  Object.freeze(view.agent);
   return Object.freeze(view);
 }
 
@@ -244,6 +268,18 @@ export function createWorkspaceViewStore() {
           views: {
             ...state.views,
             [key]: { ...current, language: update(current.language) },
+          },
+        };
+      }),
+    updateAgent: (workspaceId, update) =>
+      set((state) => {
+        const key = workspaceId ?? shellKey;
+        const current = state.views[key] ?? defaultView;
+
+        return {
+          views: {
+            ...state.views,
+            [key]: { ...current, agent: update(current.agent) },
           },
         };
       }),
