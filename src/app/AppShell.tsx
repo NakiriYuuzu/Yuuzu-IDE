@@ -258,10 +258,30 @@ const panelTitles: Record<ActivityId, string> = {
 
 function languageForPath(path: string): string {
   const lower = path.toLowerCase();
-  if (lower.endsWith(".ts") || lower.endsWith(".tsx")) return "typescript";
-  if (lower.endsWith(".js") || lower.endsWith(".jsx")) return "javascript";
+  if (
+    lower.endsWith(".ts") ||
+    lower.endsWith(".tsx") ||
+    lower.endsWith(".mts") ||
+    lower.endsWith(".cts")
+  ) {
+    return "typescript";
+  }
+  if (
+    lower.endsWith(".js") ||
+    lower.endsWith(".jsx") ||
+    lower.endsWith(".mjs") ||
+    lower.endsWith(".cjs")
+  ) {
+    return "javascript";
+  }
   if (lower.endsWith(".rs")) return "rust";
-  if (lower.endsWith(".py") || lower.endsWith(".pyi")) return "python";
+  if (
+    lower.endsWith(".py") ||
+    lower.endsWith(".pyw") ||
+    lower.endsWith(".pyi")
+  ) {
+    return "python";
+  }
   if (lower.endsWith(".json")) return "json";
   if (lower.endsWith(".md")) return "markdown";
   if (lower.endsWith(".css")) return "css";
@@ -270,15 +290,6 @@ function languageForPath(path: string): string {
   if (lower.endsWith(".toml")) return "toml";
   if (lower.endsWith(".yaml") || lower.endsWith(".yml")) return "yaml";
   return "plaintext";
-}
-
-function isLspSupportedLanguage(language: string): boolean {
-  return (
-    language === "rust" ||
-    language === "typescript" ||
-    language === "javascript" ||
-    language === "python"
-  );
 }
 
 function localStorageOrNull(): Storage | null {
@@ -1458,11 +1469,13 @@ export function AppShell() {
         path,
         result.path,
       )) {
-        void closeLanguageDocument({
-          workspaceId: activeWorkspaceId,
-          workspaceRoot: activeWorkspace.path,
-          path: change.closePath,
-        }).catch(() => {});
+        if (change.closePath) {
+          void closeLanguageDocument({
+            workspaceId: activeWorkspaceId,
+            workspaceRoot: activeWorkspace.path,
+            path: change.closePath,
+          }).catch(() => {});
+        }
 
         if (
           change.openPath &&
@@ -1541,11 +1554,13 @@ export function AppShell() {
         path,
         null,
       )) {
-        void closeLanguageDocument({
-          workspaceId: activeWorkspaceId,
-          workspaceRoot: activeWorkspace.path,
-          path: change.closePath,
-        }).catch(() => {});
+        if (change.closePath) {
+          void closeLanguageDocument({
+            workspaceId: activeWorkspaceId,
+            workspaceRoot: activeWorkspace.path,
+            path: change.closePath,
+          }).catch(() => {});
+        }
       }
     }
     updateEditor(activeWorkspaceId, (editor) => removeEditorPath(editor, path));
@@ -1565,7 +1580,7 @@ export function AppShell() {
   function closeEditorTab(path: string) {
     const nextEditor = closeFileTab(view.editor, path);
     if (
-      isLspSupportedLanguage(languageForPath(path)) &&
+      isLspSupportedDocumentPath(path) &&
       activeWorkspaceId &&
       activeWorkspace
     ) {
@@ -2618,7 +2633,7 @@ export function AppShell() {
       return Promise.resolve(null);
     }
 
-    if (!isLspSupportedLanguage(loadedFile.language)) {
+    if (!isLspSupportedDocumentPath(loadedFile.path)) {
       return Promise.resolve(null);
     }
 
@@ -2637,7 +2652,7 @@ export function AppShell() {
       !activeWorkspaceId ||
       !loadedFile ||
       loadedFile.workspaceId !== activeWorkspaceId ||
-      !isLspSupportedLanguage(loadedFile.language)
+      !isLspSupportedDocumentPath(loadedFile.path)
     ) {
       return Promise.resolve();
     }
@@ -2657,7 +2672,7 @@ export function AppShell() {
       !activeWorkspaceId ||
       !loadedFile ||
       loadedFile.workspaceId !== activeWorkspaceId ||
-      !isLspSupportedLanguage(loadedFile.language)
+      !isLspSupportedDocumentPath(loadedFile.path)
     ) {
       return Promise.resolve();
     }
@@ -2677,7 +2692,7 @@ export function AppShell() {
       !activeWorkspaceId ||
       !loadedFile ||
       loadedFile.workspaceId !== activeWorkspaceId ||
-      !isLspSupportedLanguage(loadedFile.language)
+      !isLspSupportedDocumentPath(loadedFile.path)
     ) {
       return Promise.resolve([]);
     }
@@ -2697,7 +2712,7 @@ export function AppShell() {
       !activeWorkspaceId ||
       !loadedFile ||
       loadedFile.workspaceId !== activeWorkspaceId ||
-      !isLspSupportedLanguage(loadedFile.language)
+      !isLspSupportedDocumentPath(loadedFile.path)
     ) {
       return Promise.resolve([]);
     }
@@ -2717,7 +2732,7 @@ export function AppShell() {
       !activeWorkspaceId ||
       !loadedFile ||
       loadedFile.workspaceId !== activeWorkspaceId ||
-      !isLspSupportedLanguage(loadedFile.language)
+      !isLspSupportedDocumentPath(loadedFile.path)
     ) {
       return Promise.resolve();
     }

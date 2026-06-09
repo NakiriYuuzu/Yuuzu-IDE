@@ -161,24 +161,34 @@ export function lspDocumentChangesForWorkspacePaths(
 ): Array<{
   previousPath: string;
   nextPath: string | null;
-  closePath: string;
+  closePath: string | null;
   openPath: string | null;
 }> {
   return openPaths.flatMap((previousPath) => {
-    if (
-      !isSameOrDescendantPath(previousPath, affectedPath) ||
-      !isLspSupportedDocumentPath(previousPath)
-    ) {
+    if (!isSameOrDescendantPath(previousPath, affectedPath)) {
       return [];
     }
 
     const nextPath = replacementPath
       ? replaceDocumentPathPrefix(previousPath, affectedPath, replacementPath)
       : null;
+    const closePath = isLspSupportedDocumentPath(previousPath)
+      ? lspDocumentPathForWorkspace(workspaceRoot, previousPath)
+      : null;
+    const openPath =
+      nextPath && isLspSupportedDocumentPath(nextPath)
+        ? lspDocumentPathForWorkspace(workspaceRoot, nextPath)
+        : null;
+
+    if (!closePath && !openPath) {
+      return [];
+    }
+
     return [{
       previousPath,
       nextPath,
-      ...lspDocumentChangeForWorkspace(workspaceRoot, previousPath, nextPath),
+      closePath,
+      openPath,
     }];
   });
 }

@@ -5,6 +5,7 @@ import {
   replaceDiagnostics,
   replaceServerStatuses,
   diagnosticsForPath,
+  isLspSupportedDocumentPath,
   lspDocumentChangeForWorkspace,
   lspDocumentChangesForWorkspacePaths,
   lspDocumentPathForWorkspace,
@@ -83,6 +84,14 @@ describe("language model", () => {
     );
   });
 
+  test("detects LSP supported document paths from extensions", () => {
+    expect(isLspSupportedDocumentPath("/workspace/src/app.mts")).toBe(true);
+    expect(isLspSupportedDocumentPath("/workspace/src/app.cjs")).toBe(true);
+    expect(isLspSupportedDocumentPath("/workspace/src/app.pyw")).toBe(true);
+    expect(isLspSupportedDocumentPath("/workspace/src/types.pyi")).toBe(true);
+    expect(isLspSupportedDocumentPath("/workspace/README.md")).toBe(false);
+  });
+
   test("builds LSP document lifecycle paths for rename and delete", () => {
     expect(
       lspDocumentChangeForWorkspace(
@@ -110,6 +119,7 @@ describe("language model", () => {
     const openPaths = [
       "/workspace/src/a.ts",
       "/workspace/src/b.ts",
+      "/workspace/src/nested/c.ts",
       "/workspace/README.md",
     ];
 
@@ -132,6 +142,33 @@ describe("language model", () => {
       lspDocumentChangesForWorkspacePaths(
         "/workspace",
         openPaths,
+        "/workspace/src",
+        "/workspace/lib",
+      ),
+    ).toEqual([
+      {
+        previousPath: "/workspace/src/a.ts",
+        nextPath: "/workspace/lib/a.ts",
+        closePath: "src/a.ts",
+        openPath: "lib/a.ts",
+      },
+      {
+        previousPath: "/workspace/src/b.ts",
+        nextPath: "/workspace/lib/b.ts",
+        closePath: "src/b.ts",
+        openPath: "lib/b.ts",
+      },
+      {
+        previousPath: "/workspace/src/nested/c.ts",
+        nextPath: "/workspace/lib/nested/c.ts",
+        closePath: "src/nested/c.ts",
+        openPath: "lib/nested/c.ts",
+      },
+    ]);
+    expect(
+      lspDocumentChangesForWorkspacePaths(
+        "/workspace",
+        openPaths,
         "/workspace/src/a.ts",
         null,
       ),
@@ -139,6 +176,36 @@ describe("language model", () => {
       {
         previousPath: "/workspace/src/a.ts",
         nextPath: null,
+        closePath: "src/a.ts",
+        openPath: null,
+      },
+    ]);
+    expect(
+      lspDocumentChangesForWorkspacePaths(
+        "/workspace",
+        ["/workspace/src/a.txt"],
+        "/workspace/src/a.txt",
+        "/workspace/src/a.ts",
+      ),
+    ).toEqual([
+      {
+        previousPath: "/workspace/src/a.txt",
+        nextPath: "/workspace/src/a.ts",
+        closePath: null,
+        openPath: "src/a.ts",
+      },
+    ]);
+    expect(
+      lspDocumentChangesForWorkspacePaths(
+        "/workspace",
+        ["/workspace/src/a.ts"],
+        "/workspace/src/a.ts",
+        "/workspace/src/a.md",
+      ),
+    ).toEqual([
+      {
+        previousPath: "/workspace/src/a.ts",
+        nextPath: "/workspace/src/a.md",
         closePath: "src/a.ts",
         openPath: null,
       },

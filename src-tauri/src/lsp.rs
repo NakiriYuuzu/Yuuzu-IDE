@@ -30,7 +30,7 @@ pub fn detect_language(path: &str) -> Option<LanguageId> {
         "rs" => Some(LanguageId::Rust),
         "ts" | "tsx" | "mts" | "cts" => Some(LanguageId::TypeScript),
         "js" | "jsx" | "mjs" | "cjs" => Some(LanguageId::JavaScript),
-        "py" | "pyw" => Some(LanguageId::Python),
+        "py" | "pyw" | "pyi" => Some(LanguageId::Python),
         _ => None,
     }
 }
@@ -646,10 +646,14 @@ mod tests {
         assert_eq!(detect_language("src/app.mts"), Some(LanguageId::TypeScript));
         assert_eq!(detect_language("src/app.cts"), Some(LanguageId::TypeScript));
         assert_eq!(detect_language("src/app.js"), Some(LanguageId::JavaScript));
+        assert_eq!(detect_language("src/app.mjs"), Some(LanguageId::JavaScript));
+        assert_eq!(detect_language("src/app.cjs"), Some(LanguageId::JavaScript));
         assert_eq!(
             detect_language("scripts/build.py"),
             Some(LanguageId::Python)
         );
+        assert_eq!(detect_language("scripts/build.pyw"), Some(LanguageId::Python));
+        assert_eq!(detect_language("typings/build.pyi"), Some(LanguageId::Python));
         assert_eq!(detect_language("README.md"), None);
     }
 
