@@ -1,5 +1,6 @@
 mod commands;
 mod file_system;
+mod file_watcher;
 mod metrics;
 mod pty;
 mod search;
@@ -17,6 +18,7 @@ pub fn run() {
         .setup(|app| {
             let config_dir = app.path().app_config_dir().map_err(|err| err.to_string())?;
             app.manage(commands::AppState::new(config_dir)?);
+            app.manage(file_watcher::FileWatcherState::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -31,6 +33,8 @@ pub fn run() {
             commands::scan_workspace,
             commands::scan_directory,
             commands::search_workspace,
+            commands::watch_workspace,
+            commands::unwatch_workspace,
             commands::terminal_probe,
             commands::metric_snapshot,
             commands::read_text_file,

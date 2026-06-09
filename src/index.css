@@ -761,6 +761,10 @@ button {
   color: var(--txt);
 }
 
+.tab.external .tlabel {
+  color: var(--c-attr);
+}
+
 .dirtydot {
   width: 6px;
   height: 6px;

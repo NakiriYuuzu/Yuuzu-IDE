@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event";
 import {
   Bell,
   ChevronDown,
@@ -28,6 +29,8 @@ import {
   deletePath,
   renamePath,
   readTextFile,
+  unwatchWorkspace,
+  watchWorkspace,
   writeTextFile,
 } from "../features/files/file-api";
 import {
@@ -39,6 +42,7 @@ import {
 import {
   applySavedVersion,
   closeFileTab,
+  markExternalChange,
   markFileDirty,
   openFileTab,
 } from "../features/files/file-model";
@@ -58,8 +62,13 @@ import {
   workspaceViewStore,
   type Surface,
 } from "./workspace-view-state";
-import { useWorkspaceStore } from "./workspace-store";
+import { useWorkspaceStore, workspaceStore } from "./workspace-store";
 import { WorkspaceSwitcher } from "./workspace-switcher";
+
+type FileChangedPayload = {
+  workspace_root: string;
+  path: string;
+};
 
 const EditorTab = lazy(() =>
   import("../features/editor/EditorTab").then((module) => ({
@@ -246,6 +255,43 @@ export function AppShell() {
     setFindFocusRequest(0);
     setFindQuery("");
   }, [activeWorkspaceId]);
+
+  useEffect(() => {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    void watchWorkspace(workspaceRoot).catch(() => {});
+    const unlisten = listen<FileChangedPayload>(
+      "workspace://file-changed",
+      (event) => {
+        const currentRegistry = workspaceStore.getState().registry;
+        const currentWorkspace =
+          currentRegistry.workspaces.find(
+            (workspace) => workspace.id === workspaceId,
+          ) ?? null;
+
+        if (
+          currentRegistry.active_workspace_id !== workspaceId ||
+          currentWorkspace?.path !== workspaceRoot ||
+          event.payload.workspace_root !== workspaceRoot
+        ) {
+          return;
+        }
+
+        updateEditor(workspaceId, (editor) =>
+          markExternalChange(editor, event.payload.path),
+        );
+      },
+    );
+
+    return () => {
+      void unlisten.then((dispose) => dispose()).catch(() => {});
+      void unwatchWorkspace(workspaceRoot).catch(() => {});
+    };
+  }, [activeWorkspaceId, activeWorkspace?.path, updateEditor]);
 
   async function openFile(path: string) {
     if (!activeWorkspace || !activeWorkspaceId) {
@@ -665,7 +711,9 @@ export function AppShell() {
 
                 return (
                   <div
-                    className={`tab${isActive ? " active" : ""}`}
+                    className={`tab${isActive ? " active" : ""}${
+                      tab.externalChange ? " external" : ""
+                    }`}
                     key={tab.path}
                     role="tab"
                     aria-selected={isActive}
@@ -686,6 +734,9 @@ export function AppShell() {
                     <span className={`tlabel mono${tab.dirty ? " dirty" : ""}`}>
                       {tab.name}
                     </span>
+                    {tab.externalChange ? (
+                      <span className="meta">changed</span>
+                    ) : null}
                     {tab.dirty ? (
                       <span
                         className="dirtydot"

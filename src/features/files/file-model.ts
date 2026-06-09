@@ -67,6 +67,18 @@ export function markFileDirty(
   };
 }
 
+export function markExternalChange(
+  state: EditorFileState,
+  path: string,
+): EditorFileState {
+  return {
+    ...state,
+    tabs: state.tabs.map((item) =>
+      item.path === path ? { ...item, externalChange: true } : item,
+    ),
+  };
+}
+
 export function applySavedVersion(
   state: EditorFileState,
   path: string,

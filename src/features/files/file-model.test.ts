@@ -6,6 +6,7 @@ import {
   activateFileTab,
   applySavedVersion,
   closeFileTab,
+  markExternalChange,
   markFileDirty,
   openFileTab,
   type EditorFileTab,
@@ -59,5 +60,13 @@ describe("file model", () => {
     const state = { tabs: [tab], activePath: tab.path };
 
     expect(activateFileTab(state, "/workspace/missing.ts")).toEqual(state);
+  });
+
+  test("marks open file as externally changed", () => {
+    const state = { tabs: [tab], activePath: tab.path };
+
+    const next = markExternalChange(state, tab.path);
+
+    expect(next.tabs[0].externalChange).toBe(true);
   });
 });

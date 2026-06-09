@@ -3,9 +3,10 @@ use std::{
     sync::Mutex,
 };
 
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::file_system::{self, FileOperationResult, FileVersion, TextFileRead};
+use crate::file_watcher::FileWatcherState;
 use crate::metrics::{snapshot, AppMetricSnapshot};
 use crate::search::WorkspaceSearchResult;
 use crate::settings::{AppSettings, SettingsStore};
@@ -214,6 +215,27 @@ pub fn search_workspace(
         100,
         file_system::EDITABLE_TEXT_LIMIT_BYTES,
     )
+}
+
+#[tauri::command]
+pub fn watch_workspace(
+    app: AppHandle,
+    app_state: State<'_, AppState>,
+    watcher_state: State<'_, FileWatcherState>,
+    workspace_root: String,
+) -> Result<(), String> {
+    let workspace_root = app_state.trusted_workspace_root(&workspace_root)?;
+    watcher_state.watch_workspace(app, workspace_root)
+}
+
+#[tauri::command]
+pub fn unwatch_workspace(
+    app_state: State<'_, AppState>,
+    watcher_state: State<'_, FileWatcherState>,
+    workspace_root: String,
+) -> Result<(), String> {
+    let workspace_root = app_state.trusted_workspace_root(&workspace_root)?;
+    watcher_state.unwatch_workspace(workspace_root)
 }
 
 #[tauri::command]
