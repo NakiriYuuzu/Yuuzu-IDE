@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { upsertTerminal } from "../features/terminal/terminal-model";
 import { createWorkspaceViewStore } from "./workspace-view-state";
 
 describe("createWorkspaceViewStore", () => {
@@ -94,6 +95,26 @@ describe("createWorkspaceViewStore", () => {
     expect(store.getState().viewFor("b").editor.activePath).toBeNull();
   });
 
+  test("terminal sessions are restored per workspace", () => {
+    const store = createWorkspaceViewStore();
+
+    store.getState().updateTerminal("workspace-a", (terminal) =>
+      upsertTerminal(terminal, {
+        id: "workspace-a:terminal-1",
+        workspace_id: "workspace-a",
+        name: "zsh 1",
+        cwd: "/repo-a",
+        shell: "/bin/zsh",
+        running: true,
+      }),
+    );
+
+    expect(store.getState().viewFor("workspace-a").terminal.activeTerminalId).toBe(
+      "workspace-a:terminal-1",
+    );
+    expect(store.getState().viewFor("workspace-b").terminal.sessions).toEqual([]);
+  });
+
   test("unknown workspace defaults use a stable reference", () => {
     const store = createWorkspaceViewStore();
 
@@ -122,11 +143,32 @@ describe("createWorkspaceViewStore", () => {
       });
     }).toThrow(TypeError);
 
+    expect(() => {
+      unknownView.terminal.cwdInput = "/unknown";
+    }).toThrow(TypeError);
+
+    expect(() => {
+      unknownView.terminal.sessions.push({
+        id: "unknown:terminal-1",
+        workspace_id: "unknown",
+        name: "zsh 1",
+        cwd: "/unknown",
+        shell: "/bin/zsh",
+        running: true,
+      });
+    }).toThrow(TypeError);
+
     expect(store.getState().viewFor("other-unknown")).toMatchObject({
       surface: "empty",
       activeActivity: "explorer",
       panelOpen: true,
       editor: { tabs: [], activePath: null },
+      terminal: {
+        sessions: [],
+        activeTerminalId: null,
+        outputBySessionId: {},
+        cwdInput: "",
+      },
     });
   });
 });
