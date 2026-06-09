@@ -1,21 +1,40 @@
+import type { Terminal as XtermTerminal } from "@xterm/xterm";
 import { useEffect, useRef, useState } from "react";
 
-import { call } from "../../lib/tauri";
 import { loadXterm } from "./load-xterm";
 import {
   terminalLoadFailureCopy,
   type TerminalLoadFailureCopy,
 } from "./terminal-error";
-import { createTerminalCleanup } from "./terminal-lifecycle";
+import {
+  createTerminalCleanup,
+  createTerminalInputCleanup,
+} from "./terminal-lifecycle";
 
-export function TerminalTab() {
+type TerminalTabProps = {
+  sessionId: string;
+  output: string;
+  onInput: (sessionId: string, data: string) => void;
+};
+
+export function TerminalTab({ sessionId, output, onInput }: TerminalTabProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const terminalRef = useRef<XtermTerminal | null>(null);
+  const writtenRef = useRef("");
+  const latestOutputRef = useRef(output);
+  const onInputRef = useRef(onInput);
   const [loadFailure, setLoadFailure] =
     useState<TerminalLoadFailureCopy | null>(null);
+
+  latestOutputRef.current = output;
+  onInputRef.current = onInput;
 
   useEffect(() => {
     let disposed = false;
     let cleanup: (() => void) | undefined;
+    let inputCleanup: (() => void) | undefined;
+
+    setLoadFailure(null);
 
     async function startTerminal() {
       try {
@@ -36,31 +55,28 @@ export function TerminalTab() {
             selectionBackground: "#34421d",
           },
         });
-        cleanup = createTerminalCleanup(terminal);
         const fitAddon = new FitAddon();
 
         terminal.loadAddon(fitAddon);
         terminal.open(hostRef.current);
         fitAddon.fit();
 
+        terminalRef.current = terminal;
+        cleanup = createTerminalCleanup(terminal);
+        terminal.write(latestOutputRef.current);
+        writtenRef.current = latestOutputRef.current;
+
+        const dataDisposable = terminal.onData((data) => {
+          onInputRef.current(sessionId, data);
+        });
+        inputCleanup = createTerminalInputCleanup(dataDisposable);
+
         const resizeObserver = new ResizeObserver(() => fitAddon.fit());
         resizeObserver.observe(hostRef.current);
-
         cleanup = createTerminalCleanup(terminal, resizeObserver);
-
-        try {
-          const shell = await call<string>("terminal_probe");
-          if (!disposed) {
-            terminal.writeln(`Yuuzu-IDE PTY probe: ${shell}`);
-            terminal.writeln("Full terminal streaming is implemented after Node 0.");
-          }
-        } catch (error) {
-          if (!disposed) {
-            terminal.writeln(`Yuuzu-IDE PTY probe failed: ${String(error)}`);
-          }
-        }
       } catch (error) {
         if (!disposed) {
+          inputCleanup?.();
           cleanup?.();
           setLoadFailure(terminalLoadFailureCopy(error));
         }
@@ -71,9 +87,28 @@ export function TerminalTab() {
 
     return () => {
       disposed = true;
+      inputCleanup?.();
       cleanup?.();
+      terminalRef.current = null;
+      writtenRef.current = "";
     };
-  }, []);
+  }, [sessionId]);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) {
+      return;
+    }
+
+    const previous = writtenRef.current;
+    if (output.startsWith(previous)) {
+      terminal.write(output.slice(previous.length));
+    } else {
+      terminal.clear();
+      terminal.write(output);
+    }
+    writtenRef.current = output;
+  }, [output]);
 
   if (loadFailure) {
     return (

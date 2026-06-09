@@ -61,6 +61,20 @@ import {
 } from "../features/workspace/file-tree-model";
 import { FileTreePanel } from "../features/workspace/FileTreePanel";
 import { SearchPanel } from "../features/workspace/SearchPanel";
+import { TerminalPanel } from "../features/terminal/TerminalPanel";
+import {
+  closeTerminalSession,
+  onTerminalOutput,
+  spawnTerminalSession,
+  writeTerminalSession,
+} from "../features/terminal/terminal-api";
+import {
+  activateTerminal,
+  appendTerminalOutput,
+  closeTerminal,
+  type TerminalSessionInfo,
+  upsertTerminal,
+} from "../features/terminal/terminal-model";
 import {
   useWorkspaceViewStore,
   workspaceViewStore,
@@ -162,25 +176,71 @@ function tryClearDraft(workspaceId: string, path: string): void {
   }
 }
 
+function workspaceIdFromTerminalSessionId(sessionId: string): string | null {
+  const marker = ":terminal-";
+  const markerIndex = sessionId.indexOf(marker);
+  return markerIndex > 0 ? sessionId.slice(0, markerIndex) : null;
+}
+
+function knownWorkspaceIdForTerminal(sessionId: string): string | null {
+  const { views } = workspaceViewStore.getState();
+  const match = Object.entries(views).find(([, workspaceView]) =>
+    workspaceView.terminal.sessions.some((session) => session.id === sessionId),
+  );
+
+  return match?.[0] ?? workspaceIdFromTerminalSessionId(sessionId);
+}
+
 function PanelBody({
   active,
   refreshKey,
   activeFilePath,
+  terminalSessions,
+  activeTerminalId,
+  terminalCwdInput,
   onOpenFile,
   onCreateFile,
   onRenamePath,
   onDeletePath,
+  onTerminalCwdInputChange,
+  onNewTerminal,
+  onActivateTerminal,
+  onCloseTerminal,
+  onRestartTerminal,
 }: {
   active: ActivityId;
   refreshKey: number;
   activeFilePath: string | null;
+  terminalSessions: TerminalSessionInfo[];
+  activeTerminalId: string | null;
+  terminalCwdInput: string;
   onOpenFile: (path: string) => void;
   onCreateFile: (relativePath: string) => Promise<void>;
   onRenamePath: (path: string, newName: string) => Promise<void>;
   onDeletePath: (path: string) => Promise<void>;
+  onTerminalCwdInputChange: (value: string) => void;
+  onNewTerminal: () => void;
+  onActivateTerminal: (id: string) => void;
+  onCloseTerminal: (id: string) => void;
+  onRestartTerminal: (id: string) => void;
 }) {
   if (active === "search") {
     return <SearchPanel onOpenFile={onOpenFile} />;
+  }
+
+  if (active === "terminal") {
+    return (
+      <TerminalPanel
+        sessions={terminalSessions}
+        activeTerminalId={activeTerminalId}
+        cwdInput={terminalCwdInput}
+        onCwdInputChange={onTerminalCwdInputChange}
+        onNewTerminal={onNewTerminal}
+        onActivateTerminal={onActivateTerminal}
+        onCloseTerminal={onCloseTerminal}
+        onRestartTerminal={onRestartTerminal}
+      />
+    );
   }
 
   if (active !== "explorer") {
@@ -221,6 +281,18 @@ export function AppShell() {
   const activeActivity = view.activeActivity;
   const panelOpen = view.panelOpen;
   const surface = view.surface;
+  const terminalSessions = view.terminal.sessions;
+  const activeTerminal =
+    terminalSessions.find(
+      (session) => session.id === view.terminal.activeTerminalId,
+    ) ??
+    terminalSessions[0] ??
+    null;
+  const activeTerminalId = activeTerminal?.id ?? null;
+  const activeTerminalOutput = activeTerminal
+    ? (view.terminal.outputBySessionId[activeTerminal.id] ?? "")
+    : "";
+  const activeTerminalName = activeTerminal?.name ?? "terminal";
 
   function setActiveActivity(activeActivity: ActivityId) {
     updateView(activeWorkspaceId, { activeActivity });
@@ -233,6 +305,10 @@ export function AppShell() {
   function setSurface(surface: Surface) {
     updateView(activeWorkspaceId, { surface });
   }
+
+  const updateTerminal = useWorkspaceViewStore(
+    (state) => state.updateTerminal,
+  );
 
   const activeWorkspace = useMemo(
     () =>
@@ -260,6 +336,40 @@ export function AppShell() {
     setFindFocusRequest(0);
     setFindQuery("");
   }, [activeWorkspaceId]);
+
+  useEffect(() => {
+    let disposed = false;
+    const unlisten = onTerminalOutput((event) => {
+      if (disposed) {
+        return;
+      }
+
+      const workspaceId = knownWorkspaceIdForTerminal(event.session_id);
+      if (!workspaceId) {
+        return;
+      }
+
+      const currentView = workspaceViewStore.getState().viewFor(workspaceId);
+      if (
+        !currentView.terminal.sessions.some(
+          (session) => session.id === event.session_id,
+        )
+      ) {
+        return;
+      }
+
+      workspaceViewStore
+        .getState()
+        .updateTerminal(workspaceId, (terminal) =>
+          appendTerminalOutput(terminal, event.session_id, event.chunk),
+        );
+    });
+
+    return () => {
+      disposed = true;
+      void unlisten.then((dispose) => dispose()).catch(() => {});
+    };
+  }, []);
 
   useEffect(() => {
     if (!activeWorkspace || !activeWorkspaceId) {
@@ -605,6 +715,136 @@ export function AppShell() {
     setSurface("empty");
   }
 
+  function updateTerminalCwdInput(value: string) {
+    updateTerminal(activeWorkspaceId, (terminal) => ({
+      ...terminal,
+      cwdInput: value,
+    }));
+  }
+
+  function activateTerminalById(sessionId: string) {
+    const workspaceId = knownWorkspaceIdForTerminal(sessionId);
+    if (!workspaceId) {
+      return;
+    }
+
+    updateTerminal(workspaceId, (terminal) =>
+      activateTerminal(terminal, sessionId),
+    );
+    updateView(workspaceId, {
+      activeActivity: "terminal",
+      surface: "terminal",
+    });
+  }
+
+  async function newTerminal() {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const currentView = workspaceViewStore.getState().viewFor(workspaceId);
+    const cwd = currentView.terminal.cwdInput.trim() || workspaceRoot;
+
+    try {
+      const session = await spawnTerminalSession({
+        workspaceId,
+        workspaceRoot,
+        cwd,
+        rows: 24,
+        cols: 80,
+      });
+
+      updateTerminal(workspaceId, (terminal) =>
+        activateTerminal(upsertTerminal(terminal, session), session.id),
+      );
+      updateView(workspaceId, {
+        activeActivity: "terminal",
+        surface: "terminal",
+      });
+    } catch (error) {
+      console.error("Failed to start terminal session", error);
+    }
+  }
+
+  async function closeTerminalById(sessionId: string) {
+    const workspaceId = knownWorkspaceIdForTerminal(sessionId);
+
+    try {
+      await closeTerminalSession(sessionId);
+    } catch (error) {
+      console.error("Failed to close terminal session", error);
+    }
+
+    if (!workspaceId) {
+      return;
+    }
+
+    updateTerminal(workspaceId, (terminal) =>
+      closeTerminal(terminal, sessionId),
+    );
+  }
+
+  async function restartTerminalById(sessionId: string) {
+    const workspaceId = knownWorkspaceIdForTerminal(sessionId);
+    if (!workspaceId) {
+      return;
+    }
+
+    const currentView = workspaceViewStore.getState().viewFor(workspaceId);
+    const previousSession =
+      currentView.terminal.sessions.find((session) => session.id === sessionId) ??
+      null;
+    const workspace =
+      workspaceStore
+        .getState()
+        .registry.workspaces.find(
+          (item) => item.id === (previousSession?.workspace_id ?? workspaceId),
+        ) ?? null;
+
+    if (!workspace) {
+      return;
+    }
+
+    try {
+      await closeTerminalSession(sessionId);
+    } catch (error) {
+      console.error("Failed to stop terminal session before restart", error);
+    }
+
+    updateTerminal(workspaceId, (terminal) =>
+      closeTerminal(terminal, sessionId),
+    );
+
+    try {
+      const session = await spawnTerminalSession({
+        workspaceId,
+        workspaceRoot: workspace.path,
+        cwd: previousSession?.cwd ?? workspace.path,
+        name: previousSession?.name,
+        rows: 24,
+        cols: 80,
+      });
+
+      updateTerminal(workspaceId, (terminal) =>
+        activateTerminal(upsertTerminal(terminal, session), session.id),
+      );
+      updateView(workspaceId, {
+        activeActivity: "terminal",
+        surface: "terminal",
+      });
+    } catch (error) {
+      console.error("Failed to restart terminal session", error);
+    }
+  }
+
+  function writeTerminalInput(sessionId: string, data: string) {
+    void writeTerminalSession(sessionId, data).catch((error) => {
+      console.error("Failed to write terminal input", error);
+    });
+  }
+
   function runCommand(id: string) {
     switch (id) {
       case "save-file":
@@ -624,6 +864,7 @@ export function AppShell() {
         break;
       case "open-terminal":
         setSurface("terminal");
+        setActiveActivity("terminal");
         break;
       case "toggle-sidebar":
         setPanelOpen(!panelOpen);
@@ -728,10 +969,18 @@ export function AppShell() {
               active={activeActivity}
               refreshKey={fileTreeRefreshKey}
               activeFilePath={view.editor.activePath}
+              terminalSessions={terminalSessions}
+              activeTerminalId={activeTerminalId}
+              terminalCwdInput={view.terminal.cwdInput}
               onOpenFile={openFile}
               onCreateFile={createFileFromExplorer}
               onRenamePath={renamePathFromExplorer}
               onDeletePath={deletePathFromExplorer}
+              onTerminalCwdInputChange={updateTerminalCwdInput}
+              onNewTerminal={() => void newTerminal()}
+              onActivateTerminal={activateTerminalById}
+              onCloseTerminal={(id) => void closeTerminalById(id)}
+              onRestartTerminal={(id) => void restartTerminalById(id)}
             />
           </aside>
         ) : null}
@@ -794,9 +1043,9 @@ export function AppShell() {
                 );
               })}
               {surface === "terminal" ? (
-                <div className="tab active">
+                <div className="tab active" title={activeTerminal?.cwd}>
                   <SquareTerminal className="ftype" aria-hidden="true" />
-                  <span className="tlabel mono">terminal</span>
+                  <span className="tlabel mono">{activeTerminalName}</span>
                   <button
                     type="button"
                     className="close"
@@ -823,7 +1072,10 @@ export function AppShell() {
                   className="iconbtn"
                   title="Open terminal"
                   aria-label="Open terminal"
-                  onClick={() => setSurface("terminal")}
+                  onClick={() => {
+                    setSurface("terminal");
+                    setActiveActivity("terminal");
+                  }}
                 >
                   <SquareTerminal aria-hidden="true" />
                 </button>
@@ -849,7 +1101,7 @@ export function AppShell() {
                 {activeEditorTab
                   ? activeEditorName
                   : surface === "terminal"
-                    ? "shell"
+                    ? activeTerminalName
                     : surface === "editor"
                       ? "No file open"
                       : "Start"}
@@ -917,13 +1169,69 @@ export function AppShell() {
                   )}
                 </>
               ) : surface === "terminal" ? (
-                <Suspense
-                  fallback={
-                    <div className="editor-loading">Loading terminal</div>
-                  }
-                >
-                  <TerminalTab />
-                </Suspense>
+                <div className="terminal-surface">
+                  {activeTerminal ? (
+                    <>
+                      <div className="term-tabs" role="tablist">
+                        {terminalSessions.map((session) => {
+                          const selected = session.id === activeTerminal.id;
+
+                          return (
+                            <button
+                              type="button"
+                              className={`tt${selected ? " active" : ""}`}
+                              role="tab"
+                              aria-selected={selected}
+                              title={session.cwd}
+                              key={session.id}
+                              onClick={() => activateTerminalById(session.id)}
+                            >
+                              <SquareTerminal aria-hidden="true" />
+                              <span className="tt-label">{session.name}</span>
+                            </button>
+                          );
+                        })}
+                        <div className="term-tabs-spacer" />
+                        <button
+                          type="button"
+                          className="iconbtn"
+                          title="New terminal"
+                          aria-label="New terminal"
+                          onClick={() => void newTerminal()}
+                        >
+                          <Plus aria-hidden="true" />
+                        </button>
+                      </div>
+                      <Suspense
+                        fallback={
+                          <div className="editor-loading">
+                            Loading terminal
+                          </div>
+                        }
+                      >
+                        <TerminalTab
+                          key={activeTerminal.id}
+                          sessionId={activeTerminal.id}
+                          output={activeTerminalOutput}
+                          onInput={writeTerminalInput}
+                        />
+                      </Suspense>
+                    </>
+                  ) : (
+                    <div className="terminal-empty-state">
+                      <SquareTerminal aria-hidden="true" />
+                      <span>No terminal sessions</span>
+                      <button
+                        type="button"
+                        className="btn primary"
+                        onClick={() => void newTerminal()}
+                      >
+                        <Play aria-hidden="true" />
+                        Start terminal
+                      </button>
+                    </div>
+                  )}
+                </div>
               ) : (
                 <>
                   <div className="workspace-hero">
@@ -947,7 +1255,10 @@ export function AppShell() {
                       <button
                         type="button"
                         className="btn"
-                        onClick={() => setSurface("terminal")}
+                        onClick={() => {
+                          setSurface("terminal");
+                          setActiveActivity("terminal");
+                        }}
                       >
                         <SquareTerminal aria-hidden="true" />
                         Open terminal
