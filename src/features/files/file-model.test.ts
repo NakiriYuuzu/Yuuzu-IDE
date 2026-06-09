@@ -7,8 +7,10 @@ import {
   applySavedVersion,
   closeFileTab,
   markExternalChange,
+  markExternalChangeFromDisk,
   markFileDirty,
   openFileTab,
+  shouldApplyWorkspaceFileChangedEvent,
   type EditorFileTab,
 } from "./file-model";
 
@@ -66,6 +68,39 @@ describe("file model", () => {
     const state = { tabs: [tab], activePath: tab.path };
 
     const next = markExternalChange(state, tab.path);
+
+    expect(next.tabs[0].externalChange).toBe(true);
+  });
+
+  test("accepts canonical watcher events for lexical registry paths", () => {
+    const rawRegistryRoot = "/workspace-link/../workspace-link";
+    const canonicalWatchedRoot = "/real/workspace";
+
+    expect(
+      shouldApplyWorkspaceFileChangedEvent({
+        activeWorkspaceId: "workspace",
+        eventWorkspaceRoot: canonicalWatchedRoot,
+        watchedWorkspace: {
+          workspaceId: "workspace",
+          registryRoot: rawRegistryRoot,
+          watchedRoot: canonicalWatchedRoot,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  test("ignores file change events with the saved tab version", () => {
+    const state = { tabs: [tab], activePath: tab.path };
+
+    const next = markExternalChangeFromDisk(state, tab.path, tab.version);
+
+    expect(next.tabs[0].externalChange).toBe(false);
+  });
+
+  test("marks matching file changed when event has no version", () => {
+    const state = { tabs: [tab], activePath: tab.path };
+
+    const next = markExternalChangeFromDisk(state, tab.path, null);
 
     expect(next.tabs[0].externalChange).toBe(true);
   });

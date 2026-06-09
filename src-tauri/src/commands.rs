@@ -223,9 +223,11 @@ pub fn watch_workspace(
     app_state: State<'_, AppState>,
     watcher_state: State<'_, FileWatcherState>,
     workspace_root: String,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let workspace_root = app_state.trusted_workspace_root(&workspace_root)?;
-    watcher_state.watch_workspace(app, workspace_root)
+    watcher_state
+        .watch_workspace(app, workspace_root)
+        .map(|root| root.to_string_lossy().into_owned())
 }
 
 #[tauri::command]

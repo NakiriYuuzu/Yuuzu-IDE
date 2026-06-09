@@ -17,6 +17,12 @@ export type EditorFileState = {
   activePath: string | null;
 };
 
+export type WatchedWorkspaceIdentity = {
+  workspaceId: string;
+  registryRoot: string;
+  watchedRoot: string;
+};
+
 export function openFileTab(
   state: EditorFileState,
   tab: EditorFileTab,
@@ -77,6 +83,49 @@ export function markExternalChange(
       item.path === path ? { ...item, externalChange: true } : item,
     ),
   };
+}
+
+export function shouldApplyWorkspaceFileChangedEvent({
+  activeWorkspaceId,
+  eventWorkspaceRoot,
+  watchedWorkspace,
+}: {
+  activeWorkspaceId: string | null;
+  eventWorkspaceRoot: string;
+  watchedWorkspace: WatchedWorkspaceIdentity | null;
+}): boolean {
+  return (
+    watchedWorkspace !== null &&
+    activeWorkspaceId === watchedWorkspace.workspaceId &&
+    eventWorkspaceRoot === watchedWorkspace.watchedRoot
+  );
+}
+
+export function shouldMarkExternalChange(
+  tabVersion: FileVersion | null,
+  eventVersion: FileVersion | null,
+): boolean {
+  if (!tabVersion || !eventVersion) {
+    return true;
+  }
+
+  return (
+    tabVersion.modified_ms !== eventVersion.modified_ms ||
+    tabVersion.len !== eventVersion.len
+  );
+}
+
+export function markExternalChangeFromDisk(
+  state: EditorFileState,
+  path: string,
+  eventVersion: FileVersion | null,
+): EditorFileState {
+  const tab = state.tabs.find((item) => item.path === path);
+  if (!tab || !shouldMarkExternalChange(tab.version, eventVersion)) {
+    return state;
+  }
+
+  return markExternalChange(state, path);
 }
 
 export function applySavedVersion(

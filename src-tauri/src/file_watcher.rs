@@ -1,3 +1,4 @@
+use crate::file_system::{self, FileVersion};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::{
@@ -11,6 +12,7 @@ use tauri::{AppHandle, Emitter};
 pub struct FileChangedEvent {
     pub workspace_root: PathBuf,
     pub path: PathBuf,
+    pub version: Option<FileVersion>,
 }
 
 pub struct FileWatcherState {
@@ -24,13 +26,15 @@ impl FileWatcherState {
         }
     }
 
-    pub fn watch_workspace(&self, app: AppHandle, workspace_root: PathBuf) -> Result<(), String> {
-        let root = workspace_root
-            .canonicalize()
-            .map_err(|err| err.to_string())?;
+    pub fn watch_workspace(
+        &self,
+        app: AppHandle,
+        workspace_root: PathBuf,
+    ) -> Result<PathBuf, String> {
+        let root = canonical_workspace_root(&workspace_root)?;
         let mut watchers = self.watchers.lock().map_err(|err| err.to_string())?;
         if watchers.contains_key(&root) {
-            return Ok(());
+            return Ok(root);
         }
 
         let emit_root = root.clone();
@@ -44,10 +48,7 @@ impl FileWatcherState {
                     if let Some(path) = normalize_event_path(&emit_root, &path) {
                         let _ = app.emit(
                             "workspace://file-changed",
-                            FileChangedEvent {
-                                workspace_root: emit_root.clone(),
-                                path,
-                            },
+                            file_changed_event(emit_root.clone(), path),
                         );
                     }
                 }
@@ -57,17 +58,29 @@ impl FileWatcherState {
         watcher
             .watch(&root, RecursiveMode::Recursive)
             .map_err(|err| err.to_string())?;
-        watchers.insert(root, watcher);
-        Ok(())
+        watchers.insert(root.clone(), watcher);
+        Ok(root)
     }
 
     pub fn unwatch_workspace(&self, workspace_root: PathBuf) -> Result<(), String> {
-        let root = workspace_root
-            .canonicalize()
-            .map_err(|err| err.to_string())?;
+        let root = canonical_workspace_root(&workspace_root)?;
         let mut watchers = self.watchers.lock().map_err(|err| err.to_string())?;
         watchers.remove(&root);
         Ok(())
+    }
+}
+
+pub fn canonical_workspace_root(workspace_root: &Path) -> Result<PathBuf, String> {
+    workspace_root.canonicalize().map_err(|err| err.to_string())
+}
+
+pub fn file_changed_event(workspace_root: PathBuf, path: PathBuf) -> FileChangedEvent {
+    let version = file_system::file_version(&path).ok();
+
+    FileChangedEvent {
+        workspace_root,
+        path,
+        version,
     }
 }
 
@@ -132,7 +145,19 @@ pub fn normalize_event_path(root: &Path, path: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    #[test]
+    fn canonical_workspace_root_normalizes_lexical_root() {
+        let root = tempdir().expect("tempdir");
+        let lexical = root.path().join(".");
+
+        let canonical = super::canonical_workspace_root(&lexical).expect("canonical");
+
+        assert_eq!(canonical, root.path().canonicalize().expect("root"));
+    }
 
     #[test]
     fn event_path_inside_root_is_normalized() {
@@ -150,5 +175,19 @@ mod tests {
         let path = PathBuf::from("/other/src/main.ts");
 
         assert!(super::normalize_event_path(&root, &path).is_none());
+    }
+
+    #[test]
+    fn file_changed_event_includes_file_version_when_path_exists() {
+        let root = tempdir().expect("tempdir");
+        let path = root.path().join("note.txt");
+        fs::write(&path, "saved").expect("write");
+
+        let event = super::file_changed_event(root.path().to_path_buf(), path.clone());
+
+        assert_eq!(
+            event.version,
+            Some(crate::file_system::file_version(&path).expect("version"))
+        );
     }
 }

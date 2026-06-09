@@ -74,8 +74,8 @@ export function searchWorkspace(
   });
 }
 
-export function watchWorkspace(workspaceRoot: string): Promise<void> {
-  return call<void>("watch_workspace", { workspaceRoot });
+export function watchWorkspace(workspaceRoot: string): Promise<string> {
+  return call<string>("watch_workspace", { workspaceRoot });
 }
 
 export function unwatchWorkspace(workspaceRoot: string): Promise<void> {

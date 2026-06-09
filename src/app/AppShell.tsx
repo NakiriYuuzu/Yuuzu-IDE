@@ -42,9 +42,12 @@ import {
 import {
   applySavedVersion,
   closeFileTab,
-  markExternalChange,
+  markExternalChangeFromDisk,
   markFileDirty,
   openFileTab,
+  shouldApplyWorkspaceFileChangedEvent,
+  type FileVersion,
+  type WatchedWorkspaceIdentity,
 } from "../features/files/file-model";
 import {
   fileIconClassFromName,
@@ -68,6 +71,7 @@ import { WorkspaceSwitcher } from "./workspace-switcher";
 type FileChangedPayload = {
   workspace_root: string;
   path: string;
+  version: FileVersion | null;
 };
 
 const EditorTab = lazy(() =>
@@ -263,31 +267,57 @@ export function AppShell() {
 
     const workspaceId = activeWorkspaceId;
     const workspaceRoot = activeWorkspace.path;
-    void watchWorkspace(workspaceRoot).catch(() => {});
+    let disposed = false;
+    let watchedWorkspace: WatchedWorkspaceIdentity | null = null;
+
+    void watchWorkspace(workspaceRoot)
+      .then((watchedRoot) => {
+        if (disposed) {
+          void unwatchWorkspace(workspaceRoot).catch(() => {});
+          return;
+        }
+
+        watchedWorkspace = {
+          workspaceId,
+          registryRoot: workspaceRoot,
+          watchedRoot,
+        };
+      })
+      .catch(() => {});
+
     const unlisten = listen<FileChangedPayload>(
       "workspace://file-changed",
       (event) => {
         const currentRegistry = workspaceStore.getState().registry;
+        const watched = watchedWorkspace;
         const currentWorkspace =
           currentRegistry.workspaces.find(
             (workspace) => workspace.id === workspaceId,
           ) ?? null;
 
         if (
-          currentRegistry.active_workspace_id !== workspaceId ||
-          currentWorkspace?.path !== workspaceRoot ||
-          event.payload.workspace_root !== workspaceRoot
+          currentWorkspace?.path !== watched?.registryRoot ||
+          !shouldApplyWorkspaceFileChangedEvent({
+            activeWorkspaceId: currentRegistry.active_workspace_id,
+            eventWorkspaceRoot: event.payload.workspace_root,
+            watchedWorkspace: watched,
+          })
         ) {
           return;
         }
 
         updateEditor(workspaceId, (editor) =>
-          markExternalChange(editor, event.payload.path),
+          markExternalChangeFromDisk(
+            editor,
+            event.payload.path,
+            event.payload.version,
+          ),
         );
       },
     );
 
     return () => {
+      disposed = true;
       void unlisten.then((dispose) => dispose()).catch(() => {});
       void unwatchWorkspace(workspaceRoot).catch(() => {});
     };
