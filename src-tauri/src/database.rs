@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     ffi::OsString,
     fs::{self, OpenOptions},
     io::Write,
@@ -8,12 +9,18 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use futures_util::stream::TryStreamExt;
 use keyring_core::{get_default_store, Entry};
+
+use csv::Writer;
+use rusqlite::{params_from_iter, types::ValueRef, Connection, OpenFlags};
+use tiberius::{AuthMethod, Client as TiberiusClient, Config as TiberiusConfig, QueryItem};
+use tokio::net::TcpStream;
+use tokio_postgres::{Config as PostgresConfig, NoTls};
+use tokio_util::compat::TokioAsyncWriteCompatExt;
 
 #[cfg(not(test))]
 use keyring::use_native_store;
-#[cfg(test)]
-use std::collections::HashMap;
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -176,6 +183,76 @@ pub struct DatabaseQueryResult {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DatabaseExport {
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DatabaseQueryHistoryEntry {
+    pub id: String,
+    pub profile_id: String,
+    pub sql: String,
+    pub kind: QueryKind,
+    pub executed_ms: u64,
+    pub affected_rows: Option<u64>,
+    pub row_count: Option<u64>,
+}
+
+#[derive(Clone, Default)]
+pub struct DatabaseQueryHistoryStore {
+    entries: Arc<Mutex<HashMap<String, Vec<DatabaseQueryHistoryEntry>>>>,
+}
+
+impl DatabaseQueryHistoryStore {
+    pub fn new() -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub fn record(
+        &self,
+        profile_id: impl Into<String>,
+        sql: impl Into<String>,
+        kind: QueryKind,
+        executed_ms: u64,
+        affected_rows: Option<u64>,
+        row_count: Option<u64>,
+    ) -> String {
+        let profile_id = profile_id.into();
+        let id = uuid::Uuid::new_v4().to_string();
+        let entry = DatabaseQueryHistoryEntry {
+            id: id.clone(),
+            profile_id: profile_id.clone(),
+            sql: sql.into(),
+            kind,
+            executed_ms,
+            affected_rows,
+            row_count,
+        };
+
+        let mut entries = self.entries.lock().expect("database query history lock");
+        let bucket = entries.entry(profile_id).or_default();
+        bucket.push(entry);
+        if bucket.len() > MAX_QUERY_HISTORY {
+            let overflow = bucket.len() - MAX_QUERY_HISTORY;
+            bucket.drain(0..overflow);
+        }
+
+        id
+    }
+
+    pub fn list(&self, profile_id: &str) -> Vec<DatabaseQueryHistoryEntry> {
+        self.entries
+            .lock()
+            .expect("database query history lock")
+            .get(profile_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DatabaseRow {
     pub cells: Vec<DatabaseCell>,
 }
@@ -210,6 +287,55 @@ impl DatabaseCell {
 
 impl DatabaseQueryResult {
     pub fn from_rows(columns: Vec<String>, rows: Vec<Vec<DatabaseCell>>, executed_ms: u64) -> Self {
+        let (bounded_rows, truncated) = Self::bounded_rows_and_truncated(rows);
+
+        Self {
+            profile_id: String::new(),
+            sql: String::new(),
+            columns,
+            rows: bounded_rows,
+            affected_rows: None,
+            truncated,
+            executed_ms,
+            history_id: String::new(),
+            classification: QueryClassification {
+                kind: QueryKind::Read,
+                requires_confirmation: false,
+                confirmation_text: String::new(),
+                reason: String::new(),
+            },
+        }
+    }
+
+    pub fn from_rows_for_profile(
+        profile_id: impl Into<String>,
+        sql: impl Into<String>,
+        classification: QueryClassification,
+        columns: Vec<String>,
+        rows: Vec<Vec<DatabaseCell>>,
+        executed_ms: u64,
+        history_id: impl Into<String>,
+    ) -> Self {
+        let (rows, truncated) = Self::bounded_rows_and_truncated(rows);
+        Self {
+            profile_id: profile_id.into(),
+            sql: sql.into(),
+            classification,
+            columns,
+            rows,
+            affected_rows: None,
+            truncated,
+            executed_ms,
+            history_id: history_id.into(),
+        }
+    }
+
+    fn with_truncated(mut self, truncated: bool) -> Self {
+        self.truncated = truncated;
+        self
+    }
+
+    fn bounded_rows_and_truncated(rows: Vec<Vec<DatabaseCell>>) -> (Vec<DatabaseRow>, bool) {
         let truncated = rows.len() > MAX_DATABASE_ROWS;
         let bounded_rows = rows
             .into_iter()
@@ -228,22 +354,7 @@ impl DatabaseQueryResult {
             })
             .collect();
 
-        Self {
-            profile_id: String::new(),
-            sql: String::new(),
-            columns,
-            rows: bounded_rows,
-            affected_rows: None,
-            truncated,
-            executed_ms,
-            history_id: String::new(),
-            classification: QueryClassification {
-                kind: QueryKind::Read,
-                requires_confirmation: false,
-                confirmation_text: String::new(),
-                reason: String::new(),
-            },
-        }
+        (bounded_rows, truncated)
     }
 }
 
@@ -542,6 +653,830 @@ impl DatabaseProfileStore {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TcpConnectionParts {
+    pub host: String,
+    pub port: u16,
+    pub database: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+impl TcpConnectionParts {
+    pub fn redacted_label(&self) -> String {
+        let mut label = format!("{}:{}", self.host, self.port);
+        if let Some(username) = self.username.as_deref() {
+            label = format!("{username}@{label}");
+        }
+        label.push('/');
+        label.push_str(&self.database);
+        label
+    }
+}
+
+pub fn postgres_connection_parts(
+    profile: &DatabaseProfile,
+    password: Option<String>,
+) -> Result<TcpConnectionParts, String> {
+    match &profile.source {
+        DatabaseConnectionSource::Tcp {
+            host,
+            port,
+            database,
+            username,
+            ..
+        } => Ok(TcpConnectionParts {
+            host: host.clone(),
+            port: *port,
+            database: database.clone(),
+            username: username.clone(),
+            password,
+        }),
+        _ => Err("profile is not TCP based".to_string()),
+    }
+}
+
+pub fn mssql_connection_parts(
+    profile: &DatabaseProfile,
+    password: Option<String>,
+) -> Result<TcpConnectionParts, String> {
+    postgres_connection_parts(profile, password)
+}
+
+fn profile_secret(
+    profile: &DatabaseProfile,
+    secrets: &dyn DatabaseSecretStore,
+) -> Result<Option<String>, String> {
+    match profile.source.secret_id() {
+        Some(secret_id) => Ok(Some(secrets.get_secret(secret_id)?)),
+        None => Ok(None),
+    }
+}
+
+pub fn inspect_database_schema(
+    profile: &DatabaseProfile,
+    secrets: &dyn DatabaseSecretStore,
+) -> Result<DatabaseSchema, String> {
+    match profile.kind {
+        DatabaseKind::SQLite => inspect_sqlite_schema(profile),
+        DatabaseKind::PostgreSQL => {
+            let password = profile_secret(profile, secrets)?;
+            let runtime = tokio::runtime::Runtime::new().map_err(|err| err.to_string())?;
+            runtime.block_on(async { inspect_postgres_schema(profile, password).await })
+        }
+        DatabaseKind::MsSql => {
+            let password = profile_secret(profile, secrets)?;
+            let runtime = tokio::runtime::Runtime::new().map_err(|err| err.to_string())?;
+            runtime.block_on(async { inspect_mssql_schema(profile, password).await })
+        }
+    }
+}
+
+pub fn execute_database_query(
+    profile: &DatabaseProfile,
+    mut request: DatabaseQueryRequest,
+    secrets: &dyn DatabaseSecretStore,
+) -> Result<DatabaseQueryResult, String> {
+    request.limit = request.limit.min(MAX_DATABASE_ROWS);
+    let classification = validate_query_request(profile, &request)?;
+
+    match profile.kind {
+        DatabaseKind::SQLite => execute_sqlite_query(profile, request, &classification),
+        DatabaseKind::PostgreSQL => {
+            let password = profile_secret(profile, secrets)?;
+            let runtime = tokio::runtime::Runtime::new().map_err(|err| err.to_string())?;
+            runtime.block_on(async {
+                execute_postgres_query(profile, request, &classification, password).await
+            })
+        }
+        DatabaseKind::MsSql => {
+            let password = profile_secret(profile, secrets)?;
+            let runtime = tokio::runtime::Runtime::new().map_err(|err| err.to_string())?;
+            runtime.block_on(async {
+                execute_mssql_query(profile, request, &classification, password).await
+            })
+        }
+    }
+}
+
+pub async fn inspect_database_schema_async(
+    profile: &DatabaseProfile,
+    secrets: &dyn DatabaseSecretStore,
+) -> Result<DatabaseSchema, String> {
+    let password = profile_secret(profile, secrets)?;
+    match profile.kind {
+        DatabaseKind::SQLite => inspect_sqlite_schema(profile),
+        DatabaseKind::PostgreSQL => inspect_postgres_schema(profile, password).await,
+        DatabaseKind::MsSql => inspect_mssql_schema(profile, password).await,
+    }
+}
+
+pub async fn execute_database_query_async(
+    profile: &DatabaseProfile,
+    mut request: DatabaseQueryRequest,
+    secrets: &dyn DatabaseSecretStore,
+) -> Result<DatabaseQueryResult, String> {
+    request.limit = request.limit.min(MAX_DATABASE_ROWS);
+    let classification = validate_query_request(profile, &request)?;
+
+    let password = profile_secret(profile, secrets)?;
+    match profile.kind {
+        DatabaseKind::SQLite => execute_sqlite_query(profile, request, &classification),
+        DatabaseKind::PostgreSQL => {
+            execute_postgres_query(profile, request, &classification, password).await
+        }
+        DatabaseKind::MsSql => {
+            execute_mssql_query(profile, request, &classification, password).await
+        }
+    }
+}
+
+pub fn export_query_result_csv(
+    export_root: impl AsRef<Path>,
+    result: &DatabaseQueryResult,
+) -> Result<PathBuf, String> {
+    let export_root = export_root.as_ref();
+    if !export_root.exists() {
+        fs::create_dir_all(export_root).map_err(|err| err.to_string())?;
+    }
+
+    let filename = format!(
+        "database-query-{}-{}.csv",
+        database_now_ms(),
+        uuid::Uuid::new_v4()
+    );
+    let path = export_root.join(filename);
+
+    let mut writer = Writer::from_path(&path).map_err(|err| err.to_string())?;
+    writer
+        .write_record(&result.columns)
+        .map_err(|err| err.to_string())?;
+    for row in &result.rows {
+        let values: Vec<_> = row
+            .cells
+            .iter()
+            .map(|cell| match cell.kind {
+                DatabaseCellKind::Null => String::new(),
+                DatabaseCellKind::Text => cell.display.clone(),
+            })
+            .collect();
+        writer
+            .write_record(&values)
+            .map_err(|err| err.to_string())?;
+    }
+    writer.flush().map_err(|err| err.to_string())?;
+    Ok(path)
+}
+
+fn inspect_sqlite_schema(profile: &DatabaseProfile) -> Result<DatabaseSchema, String> {
+    let DatabaseConnectionSource::SQLite { path } = &profile.source else {
+        return Err("profile is not SQLite".to_string());
+    };
+
+    let flags = if profile.read_only {
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+    } else {
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE
+    };
+    let connection = Connection::open_with_flags(path, flags)
+        .map_err(|err| format!("failed to open sqlite database: {err}"))?;
+
+    let mut tables = Vec::new();
+    let mut table_statement = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        .map_err(|err| format!("failed to enumerate sqlite tables: {err}"))?;
+    let table_rows = table_statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|err| format!("failed to enumerate sqlite tables: {err}"))?;
+
+    let mut table_names = Vec::new();
+    for table_row in table_rows {
+        table_names
+            .push(table_row.map_err(|err| format!("failed to read sqlite table name: {err}"))?);
+    }
+
+    for table_name in table_names {
+        let quoted_table = quote_sqlite_identifier(&table_name);
+        let mut columns = Vec::new();
+
+        let mut column_statement = connection
+            .prepare(&format!("PRAGMA table_info({quoted_table})"))
+            .map_err(|err| format!("failed to read sqlite columns: {err}"))?;
+        let columns_rows = column_statement
+            .query_map([], |row| {
+                Ok(DatabaseColumn {
+                    name: row.get::<_, String>(1)?,
+                    data_type: row.get::<_, String>(2)?,
+                    nullable: !row.get::<_, bool>(3)?,
+                    primary_key: row.get::<_, i32>(5)? > 0,
+                })
+            })
+            .map_err(|err| format!("failed to enumerate sqlite columns for {table_name}: {err}"))?;
+
+        for column in columns_rows {
+            columns.push(
+                column.map_err(|err| {
+                    format!("failed to read sqlite column for {table_name}: {err}")
+                })?,
+            );
+        }
+
+        let row_count = inspect_sqlite_table_row_count(&connection, &quoted_table)
+            .map_err(|err| format!("failed to count rows for {table_name}: {err}"))?;
+
+        tables.push(DatabaseTable {
+            schema: None,
+            name: table_name,
+            row_count: Some(row_count),
+            columns,
+        });
+    }
+
+    Ok(DatabaseSchema {
+        profile_id: profile.id.clone(),
+        tables,
+        refreshed_ms: database_now_ms(),
+    })
+}
+
+fn inspect_sqlite_table_row_count(
+    connection: &Connection,
+    quoted_table_name: &str,
+) -> Result<u64, String> {
+    let count = connection
+        .query_row(
+            &format!("SELECT COUNT(*) FROM {quoted_table_name}"),
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|err| format!("failed to count sqlite rows: {err}"))?;
+    Ok(count as u64)
+}
+
+fn execute_sqlite_query(
+    profile: &DatabaseProfile,
+    request: DatabaseQueryRequest,
+    classification: &QueryClassification,
+) -> Result<DatabaseQueryResult, String> {
+    let DatabaseConnectionSource::SQLite { path } = &profile.source else {
+        return Err("profile is not SQLite".to_string());
+    };
+
+    let flags = if profile.read_only {
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+    } else {
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+    };
+    let connection = Connection::open_with_flags(path, flags)
+        .map_err(|err| format!("failed to open sqlite database: {err}"))?;
+    let start = database_now_ms();
+
+    if matches!(classification.kind, QueryKind::Read) {
+        let mut rows_value = Vec::new();
+        let limit = request.limit.min(MAX_DATABASE_ROWS);
+        let mut statement = connection
+            .prepare(&request.sql)
+            .map_err(|err| format!("failed to prepare SQL: {err}"))?;
+        let column_count = statement.column_count();
+        let columns = statement
+            .column_names()
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect::<Vec<_>>();
+        let mut rows = statement
+            .query([])
+            .map_err(|err| format!("failed to execute SQL: {err}"))?;
+        while rows_value.len() < limit + 1 {
+            let row = rows.next().map_err(|err| {
+                format!(
+                    "failed to collect sqlite rows for {}: {err}",
+                    request.profile_id
+                )
+            })?;
+            let Some(row) = row else {
+                break;
+            };
+
+            let mut cells = Vec::new();
+            for index in 0..column_count {
+                let value = row
+                    .get_ref(index)
+                    .map_err(|err| format!("failed to read sqlite value: {err}"))?;
+                cells.push(sqlite_cell_to_text(value));
+            }
+            rows_value.push(cells);
+        }
+
+        let truncated = rows_value.len() > limit;
+        if truncated {
+            rows_value.truncate(limit);
+        }
+
+        Ok(DatabaseQueryResult::from_rows_for_profile(
+            &request.profile_id,
+            request.sql.clone(),
+            classification.clone(),
+            columns,
+            rows_value,
+            database_now_ms().saturating_sub(start),
+            String::new(),
+        )
+        .with_truncated(truncated))
+    } else {
+        let affected_rows = connection
+            .execute(&request.sql, params_from_iter(std::iter::empty::<&str>()))
+            .map_err(|err| format!("failed to execute SQL: {err}"))?;
+        Ok(DatabaseQueryResult {
+            profile_id: request.profile_id,
+            sql: request.sql,
+            classification: classification.clone(),
+            columns: Vec::new(),
+            rows: Vec::new(),
+            affected_rows: Some(affected_rows as u64),
+            truncated: false,
+            executed_ms: database_now_ms().saturating_sub(start),
+            history_id: String::new(),
+        })
+    }
+}
+
+fn sqlite_cell_to_text(value: ValueRef<'_>) -> DatabaseCell {
+    match value {
+        ValueRef::Null => DatabaseCell::null(),
+        ValueRef::Integer(value) => DatabaseCell::text(value.to_string()),
+        ValueRef::Real(value) => DatabaseCell::text(value.to_string()),
+        ValueRef::Text(value) => DatabaseCell::text(String::from_utf8_lossy(value).into_owned()),
+        ValueRef::Blob(value) => DatabaseCell::text(format!("<blob:{}>", value.len())),
+    }
+}
+
+async fn inspect_postgres_schema(
+    profile: &DatabaseProfile,
+    password: Option<String>,
+) -> Result<DatabaseSchema, String> {
+    let parts = postgres_connection_parts(profile, password)?;
+    let mut config = PostgresConfig::new();
+    config.host(&parts.host);
+    config.port(parts.port);
+    config.dbname(&parts.database);
+    if let Some(username) = parts.username.as_deref() {
+        config.user(username);
+    }
+    if let Some(password) = parts.password.as_deref() {
+        config.password(password);
+    }
+
+    let (client, connection) = config.connect(NoTls).await.map_err(|err| err.to_string())?;
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let tables = client
+        .query(
+            "SELECT table_schema, table_name FROM information_schema.tables \
+            WHERE table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema') \
+            ORDER BY table_schema, table_name",
+            &[],
+        )
+        .await
+        .map_err(|err| err.to_string())?;
+    let mut schema = Vec::new();
+    for table in tables {
+        let table_schema = table
+            .try_get::<_, String>(0)
+            .map_err(|err| err.to_string())?;
+        let table_name = table
+            .try_get::<_, String>(1)
+            .map_err(|err| err.to_string())?;
+        let columns_rows = client
+            .query(
+                "SELECT column_name, data_type, is_nullable, ordinal_position FROM information_schema.columns \
+                WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position",
+                &[&table_schema, &table_name],
+            )
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let mut columns = Vec::new();
+        for column in columns_rows {
+            let name = column
+                .try_get::<_, String>(0)
+                .map_err(|err| err.to_string())?;
+            let data_type = column
+                .try_get::<_, String>(1)
+                .map_err(|err| err.to_string())?;
+            let nullable = column
+                .try_get::<_, String>(2)
+                .map_err(|err| err.to_string())?
+                .eq_ignore_ascii_case("YES");
+            columns.push(DatabaseColumn {
+                name,
+                data_type,
+                nullable,
+                primary_key: false,
+            });
+        }
+
+        schema.push(DatabaseTable {
+            schema: Some(table_schema),
+            name: table_name,
+            row_count: None,
+            columns,
+        });
+    }
+
+    Ok(DatabaseSchema {
+        profile_id: profile.id.clone(),
+        tables: schema,
+        refreshed_ms: database_now_ms(),
+    })
+}
+
+async fn execute_postgres_query(
+    profile: &DatabaseProfile,
+    request: DatabaseQueryRequest,
+    classification: &QueryClassification,
+    password: Option<String>,
+) -> Result<DatabaseQueryResult, String> {
+    let parts = postgres_connection_parts(profile, password)?;
+    let mut config = PostgresConfig::new();
+    config.host(&parts.host);
+    config.port(parts.port);
+    config.dbname(&parts.database);
+    if let Some(username) = parts.username.as_deref() {
+        config.user(username);
+    }
+    if let Some(password) = parts.password.as_deref() {
+        config.password(password);
+    }
+
+    let (client, connection) = config.connect(NoTls).await.map_err(|err| err.to_string())?;
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let start = database_now_ms();
+    if matches!(classification.kind, QueryKind::Read) {
+        let limit = request.limit.min(MAX_DATABASE_ROWS);
+        let rows = client
+            .query(&request.sql, &[])
+            .await
+            .map_err(|err| format!("failed to execute SQL: {err}"))?;
+        let mut columns = Vec::new();
+        if let Some(first) = rows.first() {
+            columns.extend(
+                first
+                    .columns()
+                    .iter()
+                    .map(|column| column.name().to_string()),
+            );
+        }
+
+        let mut row_values = Vec::new();
+        for row in rows.into_iter().take(limit + 1) {
+            let mut cells = Vec::new();
+            for index in 0..row.columns().len() {
+                cells.push(database_cell_from_postgres_value(&row, index));
+            }
+            row_values.push(cells);
+        }
+
+        let truncated = row_values.len() > limit;
+        if truncated {
+            row_values.truncate(limit);
+        }
+
+        Ok(DatabaseQueryResult {
+            profile_id: request.profile_id,
+            sql: request.sql,
+            classification: classification.clone(),
+            columns,
+            rows: row_values
+                .into_iter()
+                .map(|row| DatabaseRow { cells: row })
+                .collect(),
+            affected_rows: None,
+            truncated,
+            executed_ms: database_now_ms().saturating_sub(start),
+            history_id: String::new(),
+        })
+    } else {
+        let affected_rows = client
+            .execute(&request.sql, &[])
+            .await
+            .map_err(|err| format!("failed to execute SQL: {err}"))?;
+
+        Ok(DatabaseQueryResult {
+            profile_id: request.profile_id,
+            sql: request.sql,
+            classification: classification.clone(),
+            columns: Vec::new(),
+            rows: Vec::new(),
+            affected_rows: Some(affected_rows as u64),
+            truncated: false,
+            executed_ms: database_now_ms().saturating_sub(start),
+            history_id: String::new(),
+        })
+    }
+}
+
+fn database_cell_from_postgres_value(row: &tokio_postgres::Row, index: usize) -> DatabaseCell {
+    if let Ok(value) = row.try_get::<_, Option<String>>(index) {
+        return value.map_or_else(DatabaseCell::null, DatabaseCell::text);
+    }
+    if let Ok(value) = row.try_get::<_, Option<bool>>(index) {
+        return value.map_or_else(DatabaseCell::null, |value| {
+            DatabaseCell::text(value.to_string())
+        });
+    }
+    if let Ok(value) = row.try_get::<_, Option<i32>>(index) {
+        return value.map_or_else(DatabaseCell::null, |value| {
+            DatabaseCell::text(value.to_string())
+        });
+    }
+    if let Ok(value) = row.try_get::<_, Option<i64>>(index) {
+        return value.map_or_else(DatabaseCell::null, |value| {
+            DatabaseCell::text(value.to_string())
+        });
+    }
+    if let Ok(value) = row.try_get::<_, Option<f32>>(index) {
+        return value.map_or_else(DatabaseCell::null, |value| {
+            DatabaseCell::text(value.to_string())
+        });
+    }
+    if let Ok(value) = row.try_get::<_, Option<f64>>(index) {
+        return value.map_or_else(DatabaseCell::null, |value| {
+            DatabaseCell::text(value.to_string())
+        });
+    }
+    if let Ok(value) = row.try_get::<_, Option<Vec<u8>>>(index) {
+        return value.map_or_else(DatabaseCell::null, |value| {
+            String::from_utf8(value)
+                .map_or_else(|_| DatabaseCell::text("<binary>"), DatabaseCell::text)
+        });
+    }
+
+    DatabaseCell::text("<unsupported>")
+}
+
+async fn inspect_mssql_schema(
+    profile: &DatabaseProfile,
+    password: Option<String>,
+) -> Result<DatabaseSchema, String> {
+    let parts = mssql_connection_parts(profile, password)?;
+    let mut config = TiberiusConfig::new();
+    config.host(&parts.host);
+    config.port(parts.port);
+    config.database(&parts.database);
+    if let Some(username) = parts.username.as_deref() {
+        config.authentication(AuthMethod::sql_server(
+            username,
+            parts.password.as_deref().unwrap_or_default(),
+        ));
+    }
+
+    let stream = TcpStream::connect((parts.host.as_str(), parts.port))
+        .await
+        .map_err(|err| err.to_string())?;
+    let mut client = TiberiusClient::connect(config, stream.compat_write())
+        .await
+        .map_err(|err| err.to_string())?;
+
+    let mut table_stream = client
+        .query(
+            "SELECT TABLE_SCHEMA, TABLE_NAME \
+            FROM INFORMATION_SCHEMA.TABLES \
+            WHERE TABLE_TYPE = 'BASE TABLE' \
+            AND TABLE_SCHEMA NOT IN ('sys', 'information_schema') \
+            ORDER BY TABLE_SCHEMA, TABLE_NAME",
+            &[],
+        )
+        .await
+        .map_err(|err| err.to_string())?;
+
+    let mut table_rows = Vec::new();
+    while let Some(item) = table_stream
+        .try_next()
+        .await
+        .map_err(|err| format!("failed to enumerate mssql tables: {err}"))?
+    {
+        let QueryItem::Row(row) = item else {
+            continue;
+        };
+
+        let schema: String = row
+            .try_get::<&str, _>("TABLE_SCHEMA")
+            .map_err(|err| format!("failed to read mssql schema name: {err}"))?
+            .ok_or_else(|| "missing mssql table schema".to_string())?
+            .to_string();
+        let table: String = row
+            .try_get::<&str, _>("TABLE_NAME")
+            .map_err(|err| format!("failed to read mssql table name: {err}"))?
+            .ok_or_else(|| "missing mssql table name".to_string())?
+            .to_string();
+
+        table_rows.push((schema, table));
+    }
+    drop(table_stream);
+
+    let mut tables = Vec::new();
+    for (schema, table) in table_rows {
+        let mut columns_query = client
+            .query(
+                "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, ORDINAL_POSITION \
+                FROM INFORMATION_SCHEMA.COLUMNS \
+                WHERE TABLE_SCHEMA = @P1 AND TABLE_NAME = @P2 \
+                ORDER BY ORDINAL_POSITION",
+                &[&schema, &table],
+            )
+            .await
+            .map_err(|err| format!("failed to read mssql columns for {schema}.{table}: {err}"))?;
+
+        let mut columns = Vec::new();
+        while let Some(column_item) = columns_query
+            .try_next()
+            .await
+            .map_err(|err| format!("failed to read mssql columns for {schema}.{table}: {err}"))?
+        {
+            let QueryItem::Row(column_row) = column_item else {
+                continue;
+            };
+
+            let name: String = column_row
+                .try_get::<&str, _>("COLUMN_NAME")
+                .map_err(|err| {
+                    format!("failed to read mssql column name for {schema}.{table}: {err}")
+                })?
+                .ok_or_else(|| "missing mssql column name".to_string())?
+                .to_string();
+            let data_type: String = column_row
+                .try_get::<&str, _>("DATA_TYPE")
+                .map_err(|err| {
+                    format!("failed to read mssql data type for {schema}.{table}.{name}: {err}")
+                })?
+                .ok_or_else(|| "missing mssql data type".to_string())?
+                .to_string();
+            let nullable: String = column_row
+                .try_get::<&str, _>("IS_NULLABLE")
+                .map_err(|err| {
+                    format!("failed to read mssql nullable flag for {schema}.{table}.{name}: {err}")
+                })?
+                .ok_or_else(|| "missing mssql nullability".to_string())?
+                .to_string();
+
+            columns.push(DatabaseColumn {
+                name,
+                data_type,
+                nullable: nullable.eq_ignore_ascii_case("YES"),
+                primary_key: false,
+            });
+        }
+
+        tables.push(DatabaseTable {
+            schema: Some(schema),
+            name: table,
+            row_count: None,
+            columns,
+        });
+    }
+
+    Ok(DatabaseSchema {
+        profile_id: profile.id.clone(),
+        tables,
+        refreshed_ms: database_now_ms(),
+    })
+}
+
+async fn execute_mssql_query(
+    profile: &DatabaseProfile,
+    request: DatabaseQueryRequest,
+    classification: &QueryClassification,
+    password: Option<String>,
+) -> Result<DatabaseQueryResult, String> {
+    let parts = mssql_connection_parts(profile, password)?;
+    let mut config = TiberiusConfig::new();
+    config.host(&parts.host);
+    config.port(parts.port);
+    config.database(&parts.database);
+    if let Some(username) = parts.username.as_deref() {
+        config.authentication(AuthMethod::sql_server(
+            username,
+            parts.password.as_deref().unwrap_or_default(),
+        ));
+    }
+
+    let stream = TcpStream::connect((parts.host.as_str(), parts.port))
+        .await
+        .map_err(|err| err.to_string())?;
+    let mut client = TiberiusClient::connect(config, stream.compat_write())
+        .await
+        .map_err(|err| err.to_string())?;
+
+    let start = database_now_ms();
+    if matches!(classification.kind, QueryKind::Read) {
+        let limit = request.limit.min(MAX_DATABASE_ROWS);
+        let mut stream = client
+            .query(&request.sql, &[])
+            .await
+            .map_err(|err| format!("failed to execute SQL: {err}"))?;
+        let columns = stream
+            .columns()
+            .await
+            .map_err(|err| format!("failed to read mssql columns: {err}"))?
+            .unwrap_or_default()
+            .iter()
+            .map(|column| column.name().to_string())
+            .collect::<Vec<_>>();
+
+        let mut row_values = Vec::new();
+        let mut truncated = false;
+        while let Some(item) = stream
+            .try_next()
+            .await
+            .map_err(|err| format!("failed to collect mssql query rows: {err}"))?
+        {
+            let QueryItem::Row(row) = item else {
+                continue;
+            };
+
+            if row_values.len() == limit {
+                truncated = true;
+                break;
+            }
+
+            let mut cells = Vec::new();
+            for index in 0..row.columns().len() {
+                cells.push(database_cell_from_mssql_value(&row, index));
+            }
+            row_values.push(cells);
+        }
+
+        Ok(DatabaseQueryResult {
+            profile_id: request.profile_id,
+            sql: request.sql,
+            classification: classification.clone(),
+            columns,
+            rows: row_values
+                .into_iter()
+                .map(|cells| DatabaseRow { cells })
+                .collect(),
+            affected_rows: None,
+            truncated,
+            executed_ms: database_now_ms().saturating_sub(start),
+            history_id: String::new(),
+        })
+    } else {
+        let affected_rows = client
+            .execute(&request.sql, &[])
+            .await
+            .map_err(|err| format!("failed to execute SQL: {err}"))?
+            .total();
+
+        Ok(DatabaseQueryResult {
+            profile_id: request.profile_id,
+            sql: request.sql,
+            classification: classification.clone(),
+            columns: Vec::new(),
+            rows: Vec::new(),
+            affected_rows: Some(affected_rows),
+            truncated: false,
+            executed_ms: database_now_ms().saturating_sub(start),
+            history_id: String::new(),
+        })
+    }
+}
+
+fn database_cell_from_mssql_value(row: &tiberius::Row, index: usize) -> DatabaseCell {
+    macro_rules! cell_from_optional_scalar {
+        ($type:ty) => {
+            if let Ok(Some(value)) = row.try_get::<$type, _>(index) {
+                return DatabaseCell::text(value.to_string());
+            }
+        };
+    }
+
+    if let Ok(Some(value)) = row.try_get::<&str, _>(index) {
+        return DatabaseCell::text(value.to_string());
+    }
+
+    cell_from_optional_scalar!(bool);
+    cell_from_optional_scalar!(i16);
+    cell_from_optional_scalar!(i32);
+    cell_from_optional_scalar!(f32);
+    cell_from_optional_scalar!(f64);
+
+    if let Ok(Some(value)) = row.try_get::<&[u8], _>(index) {
+        return String::from_utf8(value.to_vec())
+            .map_or_else(|_| DatabaseCell::text("<binary>"), DatabaseCell::text);
+    }
+
+    DatabaseCell::text("<unsupported>")
+}
+
+fn quote_sqlite_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
 fn validate_not_raw_dsn(field: &str, value: &str) -> Result<(), String> {
     if has_raw_dsn_prefix(value) {
         return Err(format!("raw database DSNs are not accepted in {field}"));
@@ -761,8 +1696,14 @@ pub fn validate_query_request(
     if classification.requires_confirmation
         && request.confirmation.as_deref() != Some(classification.confirmation_text.as_str())
     {
+        let action = match classification.kind {
+            QueryKind::Mutation => "mutating SQL",
+            QueryKind::Destructive => "destructive SQL",
+            QueryKind::Read => "read-only SQL",
+        };
+
         return Err(format!(
-            "confirmation required: {}",
+            "{action} requires confirmation text: {}",
             classification.confirmation_text
         ));
     }
@@ -1095,7 +2036,6 @@ fn truncate_cell(value: String) -> String {
 mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
-    #[cfg(unix)]
     use std::path::Path;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
@@ -1775,6 +2715,174 @@ mod tests {
             result.expect_err("expected initialization failure"),
             "native store unavailable"
         );
+    }
+
+    #[test]
+    fn sqlite_schema_lists_tables_columns_and_row_counts() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let db_path = temp.path().join("local.db");
+        seed_sqlite_database(&db_path);
+        let profile = sqlite_profile("profile-1", &db_path, true);
+
+        let schema = inspect_sqlite_schema(&profile).expect("schema");
+
+        let users = schema
+            .tables
+            .into_iter()
+            .find(|table| table.name == "users")
+            .expect("users table");
+
+        assert_eq!(users.row_count, Some(2));
+        assert!(users
+            .columns
+            .iter()
+            .any(|column| column.name == "id" && column.primary_key));
+        assert!(users
+            .columns
+            .iter()
+            .any(|column| column.name == "email" && !column.nullable));
+    }
+
+    #[test]
+    fn sqlite_query_returns_bounded_rows_for_selects() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let db_path = temp.path().join("local.db");
+        seed_sqlite_database(&db_path);
+        let profile = sqlite_profile("profile-1", &db_path, true);
+
+        let result = execute_sqlite_query(
+            &profile,
+            DatabaseQueryRequest {
+                profile_id: profile.id.clone(),
+                sql: "SELECT id, email FROM users ORDER BY id".to_string(),
+                limit: 100,
+                confirmation: None,
+            },
+            &classify_sql("SELECT id, email FROM users ORDER BY id"),
+        )
+        .expect("query");
+
+        assert_eq!(result.columns, vec!["id", "email"]);
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0].cells[1].display, "a@example.test");
+        assert_eq!(result.classification.kind, QueryKind::Read);
+    }
+
+    #[test]
+    fn sqlite_mutation_requires_visible_confirmation() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let db_path = temp.path().join("local.db");
+        seed_sqlite_database(&db_path);
+        let profile = sqlite_profile("profile-1", &db_path, false);
+
+        let request = DatabaseQueryRequest {
+            profile_id: profile.id.clone(),
+            sql: "UPDATE users SET email = 'x@example.test' WHERE id = 1".to_string(),
+            limit: 100,
+            confirmation: None,
+        };
+
+        let result = validate_query_request(&profile, &request);
+        assert_eq!(
+            result.expect_err("confirmation required"),
+            "mutating SQL requires confirmation text: RUN MUTATION"
+        );
+    }
+
+    #[test]
+    fn csv_export_writes_headers_and_rows_without_secrets() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let result = DatabaseQueryResult::from_rows_for_profile(
+            "profile-1",
+            "SELECT email FROM users",
+            classify_sql("SELECT email FROM users"),
+            vec!["email".to_string()],
+            vec![vec![DatabaseCell::text("a@example.test")]],
+            12,
+            "history-1".to_string(),
+        );
+
+        let path = export_query_result_csv(temp.path(), &result).expect("export");
+        let csv = std::fs::read_to_string(path).expect("csv");
+
+        assert!(csv.starts_with("email\n"));
+        assert!(csv.contains("a@example.test"));
+        assert!(!csv.contains("profile-1"));
+    }
+
+    #[test]
+    fn postgres_connection_parts_keep_password_out_of_redacted_labels() {
+        let profile = tcp_profile(DatabaseKind::PostgreSQL, 5432, Some("secret-1"));
+        let parts = postgres_connection_parts(&profile, Some("pw".to_string())).expect("parts");
+
+        assert_eq!(parts.host, "localhost");
+        assert_eq!(parts.port, 5432);
+        assert_eq!(parts.password.as_deref(), Some("pw"));
+        assert!(!parts.redacted_label().contains("pw"));
+        assert!(parts.redacted_label().contains("localhost:5432"));
+    }
+
+    #[test]
+    fn mssql_connection_parts_use_profile_host_port_database_and_username() {
+        let profile = tcp_profile(DatabaseKind::MsSql, 1433, Some("secret-1"));
+        let parts = mssql_connection_parts(&profile, Some("pw".to_string())).expect("parts");
+
+        assert_eq!(parts.host, "localhost");
+        assert_eq!(parts.port, 1433);
+        assert_eq!(parts.database, "app");
+        assert_eq!(parts.username.as_deref(), Some("yuuzu"));
+    }
+
+    fn seed_sqlite_database(path: &Path) {
+        let connection = Connection::open(path).expect("open sqlite");
+        connection
+            .execute_batch(
+                "DROP TABLE IF EXISTS users;\
+                CREATE TABLE users (\
+                    id INTEGER PRIMARY KEY NOT NULL,\
+                    email TEXT NOT NULL\
+                );\
+                INSERT INTO users (id, email) VALUES\
+                    (1, 'a@example.test'),\
+                    (2, 'b@example.test');",
+            )
+            .expect("seed users table");
+    }
+
+    fn sqlite_profile(id: &str, path: &Path, read_only: bool) -> DatabaseProfile {
+        DatabaseProfile {
+            id: id.to_string(),
+            workspace_root: "/workspace".to_string(),
+            name: "SQLite".to_string(),
+            kind: DatabaseKind::SQLite,
+            source: DatabaseConnectionSource::SQLite {
+                path: path.to_path_buf(),
+            },
+            read_only,
+            production: false,
+            created_ms: 1,
+            updated_ms: 1,
+        }
+    }
+
+    fn tcp_profile(kind: DatabaseKind, port: u16, secret_id: Option<&str>) -> DatabaseProfile {
+        DatabaseProfile {
+            id: format!("{kind:?}-{port}"),
+            workspace_root: "/workspace".to_string(),
+            name: "Profile".to_string(),
+            kind,
+            source: DatabaseConnectionSource::Tcp {
+                host: "localhost".to_string(),
+                port,
+                database: "app".to_string(),
+                username: Some("yuuzu".to_string()),
+                secret_id: secret_id.map(str::to_string),
+            },
+            read_only: false,
+            production: false,
+            created_ms: 1,
+            updated_ms: 1,
+        }
     }
 
     fn database_profile(

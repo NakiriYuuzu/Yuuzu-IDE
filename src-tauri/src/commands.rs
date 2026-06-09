@@ -1,3 +1,5 @@
+#[cfg(test)]
+use rusqlite::Connection;
 use std::{
     path::{Component, Path, PathBuf},
     sync::Mutex,
@@ -25,6 +27,7 @@ pub struct AppState {
     agent_store: crate::agent::AgentSessionStore,
     database_profiles: crate::database::DatabaseProfileStore,
     database_secrets: crate::database::KeyringDatabaseSecretStore,
+    database_query_history: crate::database::DatabaseQueryHistoryStore,
 }
 
 impl AppState {
@@ -43,6 +46,7 @@ impl AppState {
         );
         let database_secrets =
             crate::database::KeyringDatabaseSecretStore::new("yuuzu-ide.database");
+        let database_query_history = crate::database::DatabaseQueryHistoryStore::new();
 
         Ok(Self {
             registry: Mutex::new(registry),
@@ -53,6 +57,7 @@ impl AppState {
             agent_store,
             database_profiles,
             database_secrets,
+            database_query_history,
         })
     }
 
@@ -567,6 +572,81 @@ impl AppState {
         )
     }
 
+    fn database_profile_in_active_workspace(
+        &self,
+        profile_id: &str,
+    ) -> Result<crate::database::DatabaseProfile, String> {
+        let profile = self.database_profiles.get_profile(profile_id)?;
+        let active_workspace_root = self.active_workspace_root()?;
+
+        if profile.workspace_root == active_workspace_root.to_string_lossy() {
+            Ok(profile)
+        } else {
+            Err("database profile does not belong to active workspace".to_string())
+        }
+    }
+
+    pub fn inspect_database_schema(
+        &self,
+        profile_id: &str,
+    ) -> Result<crate::database::DatabaseSchema, String> {
+        let profile = self.database_profile_in_active_workspace(profile_id)?;
+
+        crate::database::inspect_database_schema(&profile, &self.database_secrets)
+    }
+
+    pub fn execute_database_query(
+        &self,
+        request: crate::database::DatabaseQueryRequest,
+    ) -> Result<crate::database::DatabaseQueryResult, String> {
+        let profile = self.database_profile_in_active_workspace(&request.profile_id)?;
+        let mut result =
+            crate::database::execute_database_query(&profile, request, &self.database_secrets)?;
+
+        let affected_rows = result.affected_rows;
+        let row_count = if matches!(result.classification.kind, crate::database::QueryKind::Read) {
+            Some(result.rows.len() as u64)
+        } else {
+            None
+        };
+        let history_id = self.database_query_history.record(
+            &result.profile_id,
+            &result.sql,
+            result.classification.kind.clone(),
+            result.executed_ms,
+            affected_rows,
+            row_count,
+        );
+        result.history_id = history_id;
+        Ok(result)
+    }
+
+    pub fn list_database_query_history(
+        &self,
+        profile_id: &str,
+    ) -> Result<Vec<crate::database::DatabaseQueryHistoryEntry>, String> {
+        self.database_profile_in_active_workspace(profile_id)?;
+        Ok(self.database_query_history.list(profile_id))
+    }
+
+    pub fn export_database_query_result(
+        &self,
+        workspace_root: &str,
+        result: &crate::database::DatabaseQueryResult,
+    ) -> Result<crate::database::DatabaseExport, String> {
+        let workspace_root = self.trusted_workspace_root(workspace_root)?;
+        self.database_profile_in_active_workspace(&result.profile_id)?;
+        let export_root = workspace_root
+            .join(".yuuzu-ide")
+            .join("exports")
+            .join("database");
+        let export_path = crate::database::export_query_result_csv(export_root, result)?;
+
+        Ok(crate::database::DatabaseExport {
+            path: export_path.to_string_lossy().to_string(),
+        })
+    }
+
     pub fn start_agent_session(
         &self,
         workspace_root: &str,
@@ -835,6 +915,39 @@ pub fn delete_database_profile(
     profile_id: String,
 ) -> Result<(), String> {
     state.delete_database_profile(&workspace_root, &profile_id)
+}
+
+#[tauri::command]
+pub async fn inspect_database_schema(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<crate::database::DatabaseSchema, String> {
+    state.inspect_database_schema(&profile_id)
+}
+
+#[tauri::command]
+pub async fn execute_database_query(
+    state: State<'_, AppState>,
+    request: crate::database::DatabaseQueryRequest,
+) -> Result<crate::database::DatabaseQueryResult, String> {
+    state.execute_database_query(request)
+}
+
+#[tauri::command]
+pub fn list_database_query_history(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<Vec<crate::database::DatabaseQueryHistoryEntry>, String> {
+    state.list_database_query_history(&profile_id)
+}
+
+#[tauri::command]
+pub fn export_database_query_result(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    result: crate::database::DatabaseQueryResult,
+) -> Result<crate::database::DatabaseExport, String> {
+    state.export_database_query_result(&workspace_root, &result)
 }
 
 #[tauri::command]
@@ -1797,6 +1910,239 @@ mod tests {
         fn assert_flat_signature(_command: FlatDeleteDatabaseProfileCommand) {}
 
         assert_flat_signature(super::delete_database_profile);
+    }
+
+    #[test]
+    fn inspect_database_schema_preserves_flat_command_signature() {
+        fn assert_flat_signature<T>(_command: T) {
+            let _ = _command;
+        }
+
+        assert_flat_signature(super::inspect_database_schema);
+    }
+
+    #[test]
+    fn execute_database_query_preserves_flat_command_signature() {
+        fn assert_flat_signature<T>(_command: T) {
+            let _ = _command;
+        }
+
+        assert_flat_signature(super::execute_database_query);
+    }
+
+    #[test]
+    fn list_database_query_history_preserves_flat_command_signature() {
+        type FlatListDatabaseQueryHistoryCommand =
+            fn(
+                State<'_, AppState>,
+                String,
+            ) -> Result<Vec<crate::database::DatabaseQueryHistoryEntry>, String>;
+
+        fn assert_flat_signature(_command: FlatListDatabaseQueryHistoryCommand) {}
+
+        assert_flat_signature(super::list_database_query_history);
+    }
+
+    #[test]
+    fn export_database_query_result_preserves_flat_command_signature() {
+        type FlatExportDatabaseQueryResultCommand =
+            fn(
+                State<'_, AppState>,
+                String,
+                crate::database::DatabaseQueryResult,
+            ) -> Result<crate::database::DatabaseExport, String>;
+
+        fn assert_flat_signature(_command: FlatExportDatabaseQueryResultCommand) {}
+
+        assert_flat_signature(super::export_database_query_result);
+    }
+
+    #[test]
+    fn inspect_database_schema_rejects_profile_outside_active_workspace() {
+        let config = tempdir().expect("config dir");
+        let workspace_a = config.path().join("workspace-a");
+        let workspace_b = config.path().join("workspace-b");
+        std::fs::create_dir_all(&workspace_a).expect("workspace a");
+        std::fs::create_dir_all(&workspace_b).expect("workspace b");
+
+        let state = AppState::new(config.path()).expect("state");
+        state
+            .open_workspace_path(workspace_a.clone())
+            .expect("open workspace a");
+        state
+            .open_workspace_path(workspace_b.clone())
+            .expect("open workspace b");
+
+        let profile = state
+            .save_database_profile(crate::database::DatabaseProfileInput {
+                id: Some("profile-1".to_string()),
+                workspace_root: workspace_a
+                    .canonicalize()
+                    .expect("canonical workspace a")
+                    .to_string_lossy()
+                    .to_string(),
+                name: "legacy".to_string(),
+                kind: crate::database::DatabaseKind::PostgreSQL,
+                sqlite_path: None,
+                host: Some("localhost".to_string()),
+                port: Some(5432),
+                database: Some("app".to_string()),
+                username: Some("user".to_string()),
+                password: None,
+                read_only: false,
+                production: false,
+            })
+            .expect("save profile");
+
+        let registry = state.registry_snapshot().expect("registry");
+        let workspace_b_id = registry
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.path == workspace_b)
+            .map(|workspace| workspace.id.clone())
+            .expect("workspace b id");
+
+        state
+            .mutate_registry(|registry| {
+                if registry.switch_workspace(&workspace_b_id) {
+                    Ok(())
+                } else {
+                    Err(format!("workspace not found: {workspace_b_id}"))
+                }
+            })
+            .expect("switch workspace");
+
+        let result = state.inspect_database_schema(&profile.id);
+        assert!(result
+            .expect_err("profile outside active workspace should be rejected")
+            .contains("does not belong to active workspace"));
+    }
+
+    #[test]
+    fn execute_database_query_records_history() {
+        let config = tempdir().expect("config dir");
+        let workspace = config.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let db_path = workspace.join("app.sqlite");
+        Connection::open(&db_path)
+            .expect("seed sqlite open")
+            .execute_batch(
+                "DROP TABLE IF EXISTS items;\
+                 CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);\
+                 INSERT INTO items(id, name) VALUES (1, 'a'), (2, 'b');",
+            )
+            .expect("seed sqlite");
+
+        let state = AppState::new(config.path()).expect("state");
+        state
+            .open_workspace_path(workspace.clone())
+            .expect("open workspace");
+        let profile = state
+            .save_database_profile(crate::database::DatabaseProfileInput {
+                id: Some("profile-1".to_string()),
+                workspace_root: workspace
+                    .canonicalize()
+                    .expect("canonical workspace")
+                    .to_string_lossy()
+                    .to_string(),
+                name: "sqlite".to_string(),
+                kind: crate::database::DatabaseKind::SQLite,
+                sqlite_path: Some(db_path.to_string_lossy().to_string()),
+                host: None,
+                port: None,
+                database: None,
+                username: None,
+                password: None,
+                read_only: false,
+                production: false,
+            })
+            .expect("save profile");
+
+        let result = state
+            .execute_database_query(crate::database::DatabaseQueryRequest {
+                profile_id: profile.id,
+                sql: "SELECT id, name FROM items ORDER BY id".to_string(),
+                limit: 1,
+                confirmation: None,
+            })
+            .expect("query");
+
+        let history = state
+            .list_database_query_history(&result.profile_id)
+            .expect("list history");
+
+        assert_eq!(result.history_id, history.last().expect("history entry").id);
+        assert_eq!(history.len(), 1);
+    }
+
+    #[test]
+    fn export_database_query_result_writes_csv_in_workspace_exports_dir() {
+        let config = tempdir().expect("config dir");
+        let workspace = config.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let db_path = workspace.join("app.sqlite");
+        let workspace_root = workspace
+            .canonicalize()
+            .expect("canonical workspace")
+            .to_string_lossy()
+            .to_string();
+        Connection::open(&db_path)
+            .expect("seed sqlite open")
+            .execute_batch(
+                "DROP TABLE IF EXISTS users;\
+                 CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);\
+                 INSERT INTO users(id, email) VALUES (1, 'a@example.test'), (2, 'b@example.test');",
+            )
+            .expect("seed sqlite");
+        let state = AppState::new(config.path()).expect("state");
+        state
+            .open_workspace_path(workspace.clone())
+            .expect("open workspace");
+        let profile = state
+            .save_database_profile(crate::database::DatabaseProfileInput {
+                id: Some("profile-1".to_string()),
+                workspace_root: workspace
+                    .canonicalize()
+                    .expect("canonical workspace")
+                    .to_string_lossy()
+                    .to_string(),
+                name: "SQLite".to_string(),
+                kind: crate::database::DatabaseKind::SQLite,
+                sqlite_path: Some(db_path.to_string_lossy().to_string()),
+                host: None,
+                port: None,
+                database: None,
+                username: None,
+                password: None,
+                read_only: false,
+                production: false,
+            })
+            .expect("save profile");
+
+        let result = state
+            .execute_database_query(crate::database::DatabaseQueryRequest {
+                profile_id: profile.id,
+                sql: "SELECT id, email FROM users ORDER BY id LIMIT 1".to_string(),
+                limit: 100,
+                confirmation: None,
+            })
+            .expect("query");
+
+        let export = state
+            .export_database_query_result(workspace_root.as_str(), &result)
+            .expect("export");
+
+        let export_path = Path::new(&export.path);
+        let workspace = workspace.canonicalize().expect("workspace canonicalized");
+        let export_dir = workspace
+            .join(".yuuzu-ide")
+            .join("exports")
+            .join("database");
+        assert!(export_path.exists());
+        assert!(export_path.starts_with(export_dir));
+        assert!(!std::fs::read_to_string(export_path)
+            .expect("read csv")
+            .contains("profile-1"));
     }
 
     #[test]
