@@ -349,6 +349,7 @@ describe("browser webview adapter geometry", () => {
             if (event === "tauri://created") {
               listener(undefined);
             }
+            return Promise.resolve(() => {});
           },
         };
       },
@@ -404,6 +405,7 @@ describe("browser webview adapter geometry", () => {
             if (event === "tauri://error") {
               triggerError = listener;
             }
+            return Promise.resolve(() => {});
           },
         };
       },
@@ -430,5 +432,51 @@ describe("browser webview adapter geometry", () => {
 
     await adapter.reload("http://localhost:5173");
     expect(openedUrls).toHaveLength(1);
+  });
+
+  test("preserves webview `this` receiver when registering events", async () => {
+    const fakeWindow = {} as BrowserAdapterWindow;
+    let sawCreated = false;
+
+    const adapter = createTauriBrowserPreviewAdapterWithDependencies({
+      getCurrentWindow: () => fakeWindow,
+      createWebview: (_window, _label, _options) => {
+        const handle = {
+          close: mock(async () => {}),
+          once(
+            event: "tauri://created" | "tauri://error",
+            listener: (event: unknown) => void,
+          ) {
+            if (this !== handle) {
+              throw new Error("lost webview receiver");
+            }
+
+            if (event === "tauri://created") {
+              sawCreated = true;
+              listener(undefined);
+            }
+
+            return Promise.resolve(() => {});
+          },
+        };
+
+        return handle;
+      },
+    });
+
+    await expect(
+      adapter.attach({
+        workspaceId: "workspace-1",
+        url: "http://localhost:5173",
+        webviewBounds: {
+          x: 0,
+          y: 0,
+          width: 640,
+          height: 360,
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(sawCreated).toBe(true);
   });
 });

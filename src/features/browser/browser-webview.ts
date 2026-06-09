@@ -1,4 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { type UnlistenFn } from "@tauri-apps/api/event";
 import { Webview } from "@tauri-apps/api/webview";
 import type { Window as TauriWindow } from "@tauri-apps/api/window";
 
@@ -7,7 +8,7 @@ type BrowserWebviewHandle = {
   once?: (
     event: "tauri://created" | "tauri://error",
     listener: (event: unknown) => void,
-  ) => void;
+  ) => Promise<UnlistenFn>;
 };
 
 export type BrowserWebviewBounds = {
@@ -123,9 +124,7 @@ function ensureCreateCompletes(
   }
 
   return new Promise((resolve, reject) => {
-    const once = view.once;
-
-    if (!once) {
+    if (!view.once) {
       return;
     }
 
@@ -145,8 +144,8 @@ function ensureCreateCompletes(
       finish(() => reject(new Error(eventPayloadToMessage(event))));
     };
 
-    once("tauri://created", onCreated);
-    once("tauri://error", onError);
+    void view.once("tauri://created", onCreated);
+    void view.once("tauri://error", onError);
   });
 }
 
