@@ -638,7 +638,10 @@ impl AppState {
         result: &crate::database::DatabaseQueryResult,
     ) -> Result<crate::database::DatabaseExport, String> {
         let workspace_root = self.trusted_workspace_root(workspace_root)?;
-        self.database_profile_in_active_workspace(&result.profile_id)?;
+        let profile = self.database_profile_in_active_workspace(&result.profile_id)?;
+        if workspace_root.to_string_lossy() != profile.workspace_root {
+            return Err("database profile does not belong to workspace".to_string());
+        }
         let export_root = workspace_root
             .join(".yuuzu-ide")
             .join("exports")
@@ -2125,7 +2128,11 @@ mod tests {
             .list_database_query_history(&result.profile_id)
             .expect("list history");
 
-        assert_eq!(result.history_id, history.last().expect("history entry").id);
+        let last = history.last().expect("history entry");
+        assert_eq!(last.sql, "SELECT id, name FROM items ORDER BY id");
+        assert_eq!(last.kind, crate::database::QueryKind::Read);
+        assert_eq!(last.affected_rows, None);
+        assert_eq!(last.row_count, Some(1));
         assert_eq!(history.len(), 1);
     }
 
@@ -2198,6 +2205,87 @@ mod tests {
         assert!(!std::fs::read_to_string(export_path)
             .expect("read csv")
             .contains("profile-1"));
+    }
+
+    #[tokio::test]
+    async fn export_database_query_result_rejects_mismatched_workspace_root() {
+        let config = tempdir().expect("config dir");
+        let workspace_a = config.path().join("workspace-a");
+        let workspace_b = config.path().join("workspace-b");
+        std::fs::create_dir_all(&workspace_a).expect("workspace a");
+        std::fs::create_dir_all(&workspace_b).expect("workspace b");
+
+        let db_path = workspace_a.join("app.sqlite");
+        Connection::open(&db_path)
+            .expect("seed sqlite open")
+            .execute_batch(
+                "DROP TABLE IF EXISTS users;\
+                 CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT);\
+                 INSERT INTO users(id, email) VALUES (1, 'a@example.test');",
+            )
+            .expect("seed sqlite");
+
+        let state = AppState::new(config.path()).expect("state");
+        state
+            .open_workspace_path(workspace_a.clone())
+            .expect("open workspace a");
+        state
+            .open_workspace_path(workspace_b.clone())
+            .expect("open workspace b");
+
+        let workspace_a_root = workspace_a.canonicalize().expect("canonical workspace a");
+        let workspace_b_root = workspace_b.canonicalize().expect("canonical workspace b");
+        let registry = state.registry_snapshot().expect("registry");
+        let workspace_a_id = registry
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.path == workspace_a)
+            .map(|workspace| workspace.id.clone())
+            .expect("workspace a id");
+        state
+            .mutate_registry(|registry| {
+                if registry.switch_workspace(&workspace_a_id) {
+                    Ok(())
+                } else {
+                    Err(format!("workspace not found: {workspace_a_id}"))
+                }
+            })
+            .expect("switch workspace");
+
+        let profile = state
+            .save_database_profile(crate::database::DatabaseProfileInput {
+                id: Some("profile-1".to_string()),
+                workspace_root: workspace_a_root.to_string_lossy().to_string(),
+                name: "sqlite".to_string(),
+                kind: crate::database::DatabaseKind::SQLite,
+                sqlite_path: Some(db_path.to_string_lossy().to_string()),
+                host: None,
+                port: None,
+                database: None,
+                username: None,
+                password: None,
+                read_only: false,
+                production: false,
+            })
+            .expect("save profile");
+
+        let result = state
+            .execute_database_query(crate::database::DatabaseQueryRequest {
+                profile_id: profile.id,
+                sql: "SELECT id, email FROM users".to_string(),
+                limit: 100,
+                confirmation: None,
+            })
+            .await
+            .expect("query");
+
+        let export = state
+            .export_database_query_result(workspace_b_root.to_string_lossy().as_ref(), &result);
+
+        assert!(export.is_err());
+        assert!(export
+            .expect_err("workspace mismatch should be rejected")
+            .contains("does not belong to workspace"));
     }
 
     #[test]

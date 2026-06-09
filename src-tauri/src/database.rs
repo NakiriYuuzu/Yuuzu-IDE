@@ -189,8 +189,6 @@ pub struct DatabaseExport {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DatabaseQueryHistoryEntry {
-    pub id: String,
-    pub profile_id: String,
     pub sql: String,
     pub kind: QueryKind,
     pub executed_ms: u64,
@@ -222,8 +220,6 @@ impl DatabaseQueryHistoryStore {
         let profile_id = profile_id.into();
         let id = uuid::Uuid::new_v4().to_string();
         let entry = DatabaseQueryHistoryEntry {
-            id: id.clone(),
-            profile_id: profile_id.clone(),
             sql: sql.into(),
             kind,
             executed_ms,
@@ -1118,8 +1114,10 @@ async fn execute_postgres_query(
     let start = database_now_ms();
     if matches!(classification.kind, QueryKind::Read) {
         let limit = request.limit.min(MAX_DATABASE_ROWS);
+        let read_limit = limit + 1;
+        let bounded_sql = bounded_postgres_read_sql(&request.sql, read_limit);
         let rows = client
-            .query(&request.sql, &[])
+            .query(&bounded_sql, &[])
             .await
             .map_err(|err| format!("failed to execute SQL: {err}"))?;
         let mut columns = Vec::new();
@@ -1178,6 +1176,16 @@ async fn execute_postgres_query(
             history_id: String::new(),
         })
     }
+}
+
+fn bounded_postgres_read_sql(sql: &str, max_rows: usize) -> String {
+    let normalized = sql
+        .trim()
+        .trim_end_matches(|character: char| character == ';' || character.is_ascii_whitespace());
+    format!(
+        "SELECT * FROM ({normalized}) AS __yuuzu_database_read LIMIT {}",
+        max_rows
+    )
 }
 
 fn database_cell_from_postgres_value(row: &tokio_postgres::Row, index: usize) -> DatabaseCell {
@@ -1449,14 +1457,29 @@ async fn execute_mssql_query(
 fn database_cell_from_mssql_value(row: &tiberius::Row, index: usize) -> DatabaseCell {
     macro_rules! cell_from_optional_scalar {
         ($type:ty) => {
-            if let Ok(Some(value)) = row.try_get::<$type, _>(index) {
-                return DatabaseCell::text(value.to_string());
+            if let Ok(value) = row.try_get::<$type, _>(index) {
+                return database_cell_from_optional_scalar(value);
             }
         };
     }
 
-    if let Ok(Some(value)) = row.try_get::<&str, _>(index) {
-        return DatabaseCell::text(value.to_string());
+    macro_rules! cell_from_text_scalar {
+        ($type:ty) => {
+            if let Ok(value) = row.try_get::<$type, _>(index) {
+                return database_cell_from_optional_scalar(value.map(ToString::to_string));
+            }
+        };
+    }
+
+    cell_from_text_scalar!(&str);
+
+    if let Ok(value) = row.try_get::<&[u8], _>(index) {
+        return match value {
+            Some(value) => DatabaseCell::text(
+                String::from_utf8(value.to_vec()).unwrap_or_else(|_| "<binary>".to_string()),
+            ),
+            None => DatabaseCell::null(),
+        };
     }
 
     cell_from_optional_scalar!(bool);
@@ -1465,12 +1488,17 @@ fn database_cell_from_mssql_value(row: &tiberius::Row, index: usize) -> Database
     cell_from_optional_scalar!(f32);
     cell_from_optional_scalar!(f64);
 
-    if let Ok(Some(value)) = row.try_get::<&[u8], _>(index) {
-        return String::from_utf8(value.to_vec())
-            .map_or_else(|_| DatabaseCell::text("<binary>"), DatabaseCell::text);
-    }
-
     DatabaseCell::text("<unsupported>")
+}
+
+fn database_cell_from_optional_scalar<T>(value: Option<T>) -> DatabaseCell
+where
+    T: ToString,
+{
+    match value {
+        Some(value) => DatabaseCell::text(value.to_string()),
+        None => DatabaseCell::null(),
+    }
 }
 
 fn quote_sqlite_identifier(identifier: &str) -> String {
@@ -1631,25 +1659,16 @@ pub fn classify_sql(sql: &str) -> QueryClassification {
     let mut kind = QueryKind::Read;
 
     for statement in split_sql_statements(sql) {
-        if let Some(token) = first_sql_token(statement) {
-            has_executable_statement = true;
-            let statement_kind = match token.as_str() {
-                "SELECT" | "WITH" | "EXPLAIN" | "SHOW" | "DESCRIBE" => QueryKind::Read,
-                "INSERT" | "UPDATE" | "DELETE" | "MERGE" | "CALL" => QueryKind::Mutation,
-                "DROP" | "TRUNCATE" | "ALTER" | "CREATE" | "REINDEX" | "VACUUM" => {
-                    QueryKind::Destructive
-                }
-                _ => QueryKind::Destructive,
-            };
+        let statement_kind = statement_query_kind(statement);
+        has_executable_statement = true;
 
-            if matches!(statement_kind, QueryKind::Destructive) {
-                kind = QueryKind::Destructive;
-                break;
-            }
+        if matches!(statement_kind, QueryKind::Destructive) {
+            kind = QueryKind::Destructive;
+            break;
+        }
 
-            if matches!(statement_kind, QueryKind::Mutation) && matches!(kind, QueryKind::Read) {
-                kind = QueryKind::Mutation;
-            }
+        if matches!(statement_kind, QueryKind::Mutation) && matches!(kind, QueryKind::Read) {
+            kind = QueryKind::Mutation;
         }
     }
 
@@ -1811,57 +1830,85 @@ fn split_sql_statements(sql: &str) -> Vec<&str> {
     statements
 }
 
-pub fn database_now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis() as u64)
+fn statement_query_kind(statement: &str) -> QueryKind {
+    let bytes = statement.as_bytes();
+    let mut index = 0;
+    let first = match next_token(bytes, &mut index) {
+        Some(token) if !token.is_empty() => token,
+        _ => return QueryKind::Destructive,
+    };
+
+    match first.as_str() {
+        "WITH" => query_kind_with_statement(bytes, index),
+        "EXPLAIN" => query_kind_after_explain(bytes, index),
+        _ => classify_query_token(&first),
+    }
 }
 
-fn first_sql_token(sql: &str) -> Option<String> {
-    let bytes = sql.as_bytes();
-    let mut index = 0;
-    let first = next_token(bytes, &mut index)?;
-    if first != "WITH" {
-        return Some(first);
+fn classify_query_token(token: &str) -> QueryKind {
+    match token {
+        "SELECT" | "SHOW" | "DESCRIBE" => QueryKind::Read,
+        "INSERT" | "UPDATE" | "DELETE" | "MERGE" | "CALL" => QueryKind::Mutation,
+        "DROP" | "TRUNCATE" | "ALTER" | "CREATE" | "REINDEX" | "VACUUM" => QueryKind::Destructive,
+        _ => QueryKind::Destructive,
     }
+}
 
+fn query_kind_with_statement(bytes: &[u8], index: usize) -> QueryKind {
     let mut current = skip_whitespace_and_comments(bytes, index).unwrap_or(index);
-
     let mut recursive_probe = current;
     if next_token(bytes, &mut recursive_probe).as_deref() == Some("RECURSIVE") {
         current = skip_whitespace_and_comments(bytes, recursive_probe).unwrap_or(recursive_probe);
     }
 
+    let mut cte_kind = QueryKind::Read;
     loop {
         current = skip_whitespace_and_comments(bytes, current).unwrap_or(current);
         if current >= bytes.len() {
-            return None;
+            return QueryKind::Destructive;
         }
 
-        next_token(bytes, &mut current)?;
-
+        let _name = next_token(bytes, &mut current);
         current = skip_whitespace_and_comments(bytes, current).unwrap_or(current);
         if matches_current_char(bytes, current, b'(') {
-            current = skip_nested_parentheses(bytes, current)?;
+            current = match skip_nested_parentheses(bytes, current) {
+                Some(next) => next,
+                None => return QueryKind::Destructive,
+            };
             current = skip_whitespace_and_comments(bytes, current).unwrap_or(current);
         }
 
-        if next_token(bytes, &mut current).as_deref() != Some("AS") {
-            return None;
+        if current >= bytes.len() {
+            return QueryKind::Destructive;
+        }
+
+        let Some(_body) = next_token(bytes, &mut current) else {
+            return QueryKind::Destructive;
+        };
+        if _body != "AS" {
+            return QueryKind::Destructive;
         }
 
         current = skip_whitespace_and_comments(bytes, current).unwrap_or(current);
         if !matches_current_char(bytes, current, b'(') {
-            return None;
+            return QueryKind::Destructive;
         }
 
-        current = skip_nested_parentheses(bytes, current)?;
-        current = skip_whitespace_and_comments(bytes, current).unwrap_or(current);
-        if current >= bytes.len() {
-            return None;
-        }
+        let body_start = current + 1;
+        let body_end = match skip_nested_parentheses(bytes, current) {
+            Some(end) => end,
+            None => return QueryKind::Destructive,
+        };
+        let body_sql = if body_start < body_end {
+            std::str::from_utf8(&bytes[body_start..body_end - 1]).unwrap_or("")
+        } else {
+            ""
+        };
+        let inner_kind = statement_query_kind(body_sql);
+        cte_kind = combine_query_kinds(cte_kind, inner_kind);
+        current = skip_whitespace_and_comments(bytes, body_end).unwrap_or(body_end);
 
-        if bytes[current] == b',' {
+        if matches_current_char(bytes, current, b',') {
             current += 1;
             continue;
         }
@@ -1869,7 +1916,48 @@ fn first_sql_token(sql: &str) -> Option<String> {
         break;
     }
 
-    next_token(bytes, &mut current)
+    if let Some(outer_token) = next_token(bytes, &mut current) {
+        let outer_kind = match outer_token.as_str() {
+            "WITH" => query_kind_with_statement(bytes, current),
+            _ => classify_query_token(&outer_token),
+        };
+        combine_query_kinds(cte_kind, outer_kind)
+    } else {
+        cte_kind
+    }
+}
+
+fn query_kind_after_explain(bytes: &[u8], mut index: usize) -> QueryKind {
+    loop {
+        let token = match next_token(bytes, &mut index) {
+            Some(token) if !token.is_empty() => token,
+            _ => return QueryKind::Destructive,
+        };
+
+        match token.as_str() {
+            "ANALYZE" | "FORMAT" | "COSTS" | "BUFFERS" | "SETTINGS" | "TIMING" | "SUMMARY" => {
+                continue;
+            }
+            "WITH" => return query_kind_with_statement(bytes, index),
+            _ => return classify_query_token(&token),
+        }
+    }
+}
+
+fn combine_query_kinds(lhs: QueryKind, rhs: QueryKind) -> QueryKind {
+    match (lhs, rhs) {
+        (_, QueryKind::Destructive) | (QueryKind::Destructive, _) => QueryKind::Destructive,
+        (QueryKind::Read, QueryKind::Mutation) => QueryKind::Mutation,
+        (QueryKind::Mutation, QueryKind::Read) => QueryKind::Mutation,
+        (QueryKind::Mutation, QueryKind::Mutation) => QueryKind::Mutation,
+        (QueryKind::Read, QueryKind::Read) => QueryKind::Read,
+    }
+}
+
+pub fn database_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis() as u64)
 }
 
 fn skip_nested_parentheses(bytes: &[u8], start: usize) -> Option<usize> {
@@ -2079,6 +2167,23 @@ mod tests {
     }
 
     #[test]
+    fn classify_explain_analyze_dml_as_mutation() {
+        let result = classify_sql("EXPLAIN ANALYZE DELETE FROM users");
+
+        assert_eq!(result.kind, QueryKind::Mutation);
+        assert!(result.requires_confirmation);
+        assert_eq!(result.confirmation_text, "RUN MUTATION");
+    }
+
+    #[test]
+    fn classify_plain_explain_select_is_read() {
+        let result = classify_sql("EXPLAIN SELECT 1");
+
+        assert_eq!(result.kind, QueryKind::Read);
+        assert!(!result.requires_confirmation);
+    }
+
+    #[test]
     fn with_cte_with_mutation_is_not_read() {
         let result = classify_sql("WITH cte AS (SELECT 1) DELETE FROM users");
 
@@ -2089,6 +2194,16 @@ mod tests {
             QueryKind::Destructive => assert_eq!(result.confirmation_text, "RUN DESTRUCTIVE SQL"),
             QueryKind::Read => unreachable!(),
         }
+    }
+
+    #[test]
+    fn with_data_modifying_cte_is_not_read() {
+        let result =
+            classify_sql("WITH deleted AS (DELETE FROM users RETURNING *) SELECT * FROM deleted");
+
+        assert_eq!(result.kind, QueryKind::Mutation);
+        assert!(result.requires_confirmation);
+        assert_eq!(result.confirmation_text, "RUN MUTATION");
     }
 
     #[test]
@@ -2140,6 +2255,47 @@ mod tests {
             &DatabaseQueryRequest {
                 profile_id: profile.id.clone(),
                 sql: "WITH cte AS (SELECT 1) DELETE FROM users".to_string(),
+                limit: 100,
+                confirmation: Some("RUN DESTRUCTIVE SQL".to_string()),
+            },
+        );
+
+        assert_eq!(
+            result.expect_err("read-only profile blocks mutation"),
+            "read-only database profile blocks mutating SQL"
+        );
+    }
+
+    #[test]
+    fn readonly_profiles_reject_with_explain_analyze_mutation() {
+        let profile = database_profile("profile-1", DatabaseKind::PostgreSQL, true, true);
+
+        let result = validate_query_request(
+            &profile,
+            &DatabaseQueryRequest {
+                profile_id: profile.id.clone(),
+                sql: "EXPLAIN ANALYZE DELETE FROM users".to_string(),
+                limit: 100,
+                confirmation: Some("RUN MUTATION".to_string()),
+            },
+        );
+
+        assert_eq!(
+            result.expect_err("read-only profile blocks mutation"),
+            "read-only database profile blocks mutating SQL"
+        );
+    }
+
+    #[test]
+    fn readonly_profiles_reject_mutating_cte_with_read_outer_select() {
+        let profile = database_profile("profile-1", DatabaseKind::PostgreSQL, true, true);
+
+        let result = validate_query_request(
+            &profile,
+            &DatabaseQueryRequest {
+                profile_id: profile.id.clone(),
+                sql: "WITH deleted AS (DELETE FROM users RETURNING *) SELECT * FROM deleted"
+                    .to_string(),
                 limit: 100,
                 confirmation: Some("RUN DESTRUCTIVE SQL".to_string()),
             },
@@ -2790,6 +2946,17 @@ mod tests {
     }
 
     #[test]
+    fn bounded_postgres_read_sql_caps_to_max_rows() {
+        let wrapped = bounded_postgres_read_sql("SELECT * FROM users", MAX_DATABASE_ROWS + 1);
+
+        assert_eq!(
+            wrapped,
+            "SELECT * FROM (SELECT * FROM users) AS __yuuzu_database_read LIMIT 501"
+        );
+        assert!(!wrapped.contains("password"));
+    }
+
+    #[test]
     fn csv_export_writes_headers_and_rows_without_secrets() {
         let temp = tempfile::tempdir().expect("temp dir");
         let result = DatabaseQueryResult::from_rows_for_profile(
@@ -2831,6 +2998,19 @@ mod tests {
         assert_eq!(parts.port, 1433);
         assert_eq!(parts.database, "app");
         assert_eq!(parts.username.as_deref(), Some("yuuzu"));
+    }
+
+    #[test]
+    fn database_cell_from_nullable_scalar_maps_none_to_null() {
+        let value: Option<&str> = None;
+        let cell = database_cell_from_optional_scalar(value);
+
+        assert_eq!(cell.kind, DatabaseCellKind::Null);
+        assert_eq!(cell, DatabaseCell::null());
+        assert_eq!(
+            database_cell_from_optional_scalar(Some("value")),
+            DatabaseCell::text("value")
+        );
     }
 
     fn seed_sqlite_database(path: &Path) {
