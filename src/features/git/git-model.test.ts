@@ -9,6 +9,7 @@ import {
   replaceGitStatus,
   selectDiff,
   statusBranchLabel,
+  storeDiff,
 } from "./git-model";
 import type { GitRepositoryStatus } from "./git-model";
 
@@ -108,6 +109,19 @@ describe("git-model", () => {
     });
 
     expect(state.selectedDiff).toEqual({ path: "README.md", staged: false });
+  });
+
+  test("stores diff content by public diff cache key", () => {
+    const state = storeDiff(createGitState(), {
+      path: "README.md",
+      original_path: null,
+      staged: false,
+      binary: false,
+      truncated: false,
+      raw: "diff --git a/README.md b/README.md\n+hello\n",
+    });
+
+    expect(state.diffByKey["unstaged:README.md"]?.raw).toContain("+hello");
   });
 
   test("replaces status and preserves commit message", () => {

@@ -79,7 +79,7 @@ export type GitViewState = {
   error: string | null;
   commitMessage: string;
   selectedDiff: GitDiffSelection | null;
-  diffsByKey: Record<string, GitDiff>;
+  diffByKey: Record<string, GitDiff>;
   branches: GitBranch[];
   graph: GitCommitSummary[];
 };
@@ -93,7 +93,7 @@ export function createGitState(): GitViewState {
     error: null,
     commitMessage: "",
     selectedDiff: null,
-    diffsByKey: {},
+    diffByKey: {},
     branches: [],
     graph: [],
   };
@@ -137,8 +137,8 @@ export function selectDiff(
 export function storeDiff(state: GitViewState, diff: GitDiff): GitViewState {
   return {
     ...state,
-    diffsByKey: {
-      ...state.diffsByKey,
+    diffByKey: {
+      ...state.diffByKey,
       [diffKey(diff.path, diff.staged)]: diff,
     },
   };

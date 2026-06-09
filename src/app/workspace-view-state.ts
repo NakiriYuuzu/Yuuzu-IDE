@@ -89,7 +89,7 @@ function freezeWorkspaceView(view: WorkspaceViewState): WorkspaceViewState {
     Object.freeze(view.git.status.changes);
     Object.freeze(view.git.status);
   }
-  Object.freeze(view.git.diffsByKey);
+  Object.freeze(view.git.diffByKey);
   Object.freeze(view.git.branches);
   for (const commit of view.git.graph) {
     Object.freeze(commit.refs);
