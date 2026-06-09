@@ -10,6 +10,7 @@ use crate::file_watcher::{FileWatcherState, WatchWorkspaceHandle};
 use crate::metrics::{snapshot, AppMetricSnapshot};
 use crate::search::WorkspaceSearchResult;
 use crate::settings::{AppSettings, SettingsStore};
+use crate::tasks::{TaskRun, TaskState, WorkspaceTask};
 use crate::terminal::{TerminalSessionInfo, TerminalState};
 use crate::workspace::{Workspace, WorkspaceRegistry};
 use crate::workspace_scan::{self, FileTreeEntry};
@@ -289,6 +290,48 @@ pub fn close_terminal_session(
 }
 
 #[tauri::command]
+pub fn list_workspace_tasks(
+    state: State<'_, AppState>,
+    workspace_root: String,
+) -> Result<Vec<WorkspaceTask>, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    crate::tasks::detect_tasks(&workspace_root)
+}
+
+#[tauri::command]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Tauri command exposes the planned flat frontend API contract"
+)]
+pub fn run_workspace_task(
+    app: AppHandle,
+    app_state: State<'_, AppState>,
+    task_state: State<'_, TaskState>,
+    workspace_id: String,
+    workspace_root: String,
+    label: String,
+    command: String,
+    cwd: String,
+) -> Result<TaskRun, String> {
+    let workspace_root = app_state.trusted_workspace_root(&workspace_root)?;
+    let cwd = file_system::workspace_child_for_existing_dir(&workspace_root, Path::new(&cwd))?;
+    task_state.run_task(app, workspace_id, label, command, cwd)
+}
+
+#[tauri::command]
+pub fn stop_task_run(task_state: State<'_, TaskState>, run_id: String) -> Result<TaskRun, String> {
+    task_state.stop_task(&run_id)
+}
+
+#[tauri::command]
+pub fn list_task_runs(
+    task_state: State<'_, TaskState>,
+    workspace_id: String,
+) -> Result<Vec<TaskRun>, String> {
+    task_state.list_runs(&workspace_id)
+}
+
+#[tauri::command]
 pub fn metric_snapshot() -> Result<AppMetricSnapshot, String> {
     Ok(snapshot())
 }
@@ -545,6 +588,25 @@ mod tests {
         fn assert_flat_signature(_command: FlatSpawnTerminalSessionCommand) {}
 
         assert_flat_signature(super::spawn_terminal_session);
+    }
+
+    #[test]
+    fn run_workspace_task_preserves_flat_command_signature() {
+        type FlatRunWorkspaceTaskCommand =
+            for<'app_state, 'task_state> fn(
+                AppHandle,
+                State<'app_state, AppState>,
+                State<'task_state, crate::tasks::TaskState>,
+                String,
+                String,
+                String,
+                String,
+                String,
+            ) -> Result<crate::tasks::TaskRun, String>;
+
+        fn assert_flat_signature(_command: FlatRunWorkspaceTaskCommand) {}
+
+        assert_flat_signature(super::run_workspace_task);
     }
 
     #[cfg(unix)]

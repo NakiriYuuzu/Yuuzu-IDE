@@ -5,6 +5,7 @@ mod metrics;
 mod pty;
 mod search;
 mod settings;
+mod tasks;
 mod terminal;
 mod workspace;
 mod workspace_scan;
@@ -20,6 +21,7 @@ pub fn run() {
             let config_dir = app.path().app_config_dir().map_err(|err| err.to_string())?;
             app.manage(commands::AppState::new(config_dir)?);
             app.manage(file_watcher::FileWatcherState::new());
+            app.manage(tasks::TaskState::new());
             app.manage(terminal::TerminalState::new());
             Ok(())
         })
@@ -42,6 +44,10 @@ pub fn run() {
             commands::spawn_terminal_session,
             commands::write_terminal_session,
             commands::close_terminal_session,
+            commands::list_workspace_tasks,
+            commands::run_workspace_task,
+            commands::stop_task_run,
+            commands::list_task_runs,
             commands::metric_snapshot,
             commands::read_text_file,
             commands::write_text_file,
