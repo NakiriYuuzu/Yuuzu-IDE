@@ -5,6 +5,7 @@ import {
   replaceDiagnostics,
   replaceServerStatuses,
   diagnosticsForPath,
+  lspDocumentPathForWorkspace,
   severityToMonacoMarker,
   selectDiagnosticBadge,
   storeHover,
@@ -69,6 +70,15 @@ describe("language model", () => {
     expect(diagnosticsForPath(state, "src/lib.rs")).toEqual([]);
     expect(severityToMonacoMarker("error")).toBe(8);
     expect(severityToMonacoMarker("warning")).toBe(4);
+  });
+
+  test("normalizes absolute editor paths to workspace-relative LSP document paths", () => {
+    expect(
+      lspDocumentPathForWorkspace("/workspace", "/workspace/src/main.rs"),
+    ).toBe("src/main.rs");
+    expect(lspDocumentPathForWorkspace("/workspace", "src/main.rs")).toBe(
+      "src/main.rs",
+    );
   });
 
   test("stores server status, hover, and logs without mutating defaults", () => {

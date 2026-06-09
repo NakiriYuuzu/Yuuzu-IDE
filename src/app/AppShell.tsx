@@ -67,6 +67,7 @@ import {
   nextLanguageRefreshRequest,
   replaceDiagnostics,
   diagnosticsForPath,
+  lspDocumentPathForWorkspace,
   replaceServerStatuses,
   selectDiagnosticBadge,
   type LspDiagnostic,
@@ -662,9 +663,6 @@ export function AppShell() {
     ? (view.task.problemsByRunId[activeTaskRun.id] ?? [])
     : [];
   const languageDiagnosticBadge = selectDiagnosticBadge(view.language);
-  const activeFileDiagnostics = loadedFile
-    ? diagnosticsForPath(view.language, loadedFile.path)
-    : [];
   const contextPackNameById = useMemo(
     () =>
       Object.fromEntries(
@@ -713,6 +711,13 @@ export function AppShell() {
       ),
     [activeWorkspaceId, registry.workspaces],
   );
+  const activeLspDocumentPath =
+    activeWorkspace && loadedFile
+      ? lspDocumentPathForWorkspace(activeWorkspace.path, loadedFile.path)
+      : null;
+  const activeFileDiagnostics = activeLspDocumentPath
+    ? diagnosticsForPath(view.language, activeLspDocumentPath)
+    : [];
   const activeEditorTab =
     view.editor.tabs.find((tab) => tab.path === view.editor.activePath) ?? null;
   const activeEditorName = activeEditorTab?.name ?? "";
@@ -1276,7 +1281,7 @@ export function AppShell() {
         void openLanguageDocument({
           workspaceId: activeWorkspaceId,
           workspaceRoot: activeWorkspace.path,
-          path,
+          path: lspDocumentPathForWorkspace(activeWorkspace.path, path),
           content,
         }).catch(() => {});
       }
@@ -1399,7 +1404,7 @@ export function AppShell() {
           void openLanguageDocument({
             workspaceId: activeWorkspaceId,
             workspaceRoot: activeWorkspace.path,
-            path: activePath,
+            path: lspDocumentPathForWorkspace(activeWorkspace.path, activePath),
             content,
           }).catch(() => {});
         }
@@ -1513,7 +1518,7 @@ export function AppShell() {
       void closeLanguageDocument({
         workspaceId: activeWorkspaceId,
         workspaceRoot: activeWorkspace.path,
-        path,
+        path: lspDocumentPathForWorkspace(activeWorkspace.path, path),
       }).catch(() => {});
     }
     updateEditor(activeWorkspaceId, () => nextEditor);
@@ -2566,7 +2571,7 @@ export function AppShell() {
     return requestLanguageHover({
       workspaceId: activeWorkspaceId,
       workspaceRoot: activeWorkspace.path,
-      path: loadedFile.path,
+      path: lspDocumentPathForWorkspace(activeWorkspace.path, loadedFile.path),
       line,
       character,
     }).then((hover) => hover?.contents ?? null);
@@ -2586,7 +2591,7 @@ export function AppShell() {
     return requestLanguageDefinition({
       workspaceId: activeWorkspaceId,
       workspaceRoot: activeWorkspace.path,
-      path: loadedFile.path,
+      path: lspDocumentPathForWorkspace(activeWorkspace.path, loadedFile.path),
       line,
       character,
     });
@@ -2606,7 +2611,7 @@ export function AppShell() {
     return requestLanguageReferences({
       workspaceId: activeWorkspaceId,
       workspaceRoot: activeWorkspace.path,
-      path: loadedFile.path,
+      path: lspDocumentPathForWorkspace(activeWorkspace.path, loadedFile.path),
       line,
       character,
     });
@@ -2626,7 +2631,7 @@ export function AppShell() {
     return requestLanguageCompletion({
       workspaceId: activeWorkspaceId,
       workspaceRoot: activeWorkspace.path,
-      path: loadedFile.path,
+      path: lspDocumentPathForWorkspace(activeWorkspace.path, loadedFile.path),
       line,
       character,
     });
@@ -2646,7 +2651,7 @@ export function AppShell() {
     return requestLanguageCodeActions({
       workspaceId: activeWorkspaceId,
       workspaceRoot: activeWorkspace.path,
-      path: loadedFile.path,
+      path: lspDocumentPathForWorkspace(activeWorkspace.path, loadedFile.path),
       line,
       character,
     });
@@ -2666,7 +2671,7 @@ export function AppShell() {
     return requestLanguageRename({
       workspaceId: activeWorkspaceId,
       workspaceRoot: activeWorkspace.path,
-      path: loadedFile.path,
+      path: lspDocumentPathForWorkspace(activeWorkspace.path, loadedFile.path),
       line,
       character,
       newName,

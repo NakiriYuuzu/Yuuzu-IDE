@@ -74,6 +74,19 @@ export function severityToMonacoMarker(severity: string): number {
   return 1;
 }
 
+export function lspDocumentPathForWorkspace(
+  workspaceRoot: string,
+  path: string,
+): string {
+  const normalizedRoot = workspaceRoot.replace(/[\\/]+$/, "").replace(/\\/g, "/");
+  const normalizedPath = path.replace(/\\/g, "/");
+  const prefix = `${normalizedRoot}/`;
+
+  return normalizedPath.startsWith(prefix)
+    ? normalizedPath.slice(prefix.length)
+    : path;
+}
+
 export function createLanguageState(): LanguageViewState {
   return {
     diagnosticsByPath: {},
