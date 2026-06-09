@@ -11,7 +11,6 @@ import {
 import {
   activeAgentSession,
   agentContextSummary,
-  approvalEntries,
   type AgentContextItem,
   type AgentMode,
   type AgentTranscriptEntry,
@@ -136,18 +135,22 @@ export function AgentPanel({
   onExport,
 }: AgentPanelProps) {
   const activeSession = activeAgentSession(state);
-  const pendingApprovals = activeSession ? approvalEntries(activeSession) : [];
+  const pendingApprovalsCount = activeSession
+    ? activeSession.transcript.filter((entry) => entry.approval_status === "pending")
+        .length
+    : 0;
   const canStartSession = state.promptDraft.trim().length > 0;
 
   return (
     <div className="panel-body agent-panel">
       <div className="agent-composer">
-        <div className="agent-modes" aria-label="Agent mode">
+        <div className="agent-modes" aria-label="Agent mode" role="group">
           {MODES.map((mode) => (
             <button
               key={mode}
               type="button"
               className={`btn sm ${state.mode === mode ? "primary" : "ghost"}`}
+              aria-pressed={state.mode === mode}
               onClick={() => onModeChange(mode)}
             >
               {mode}
@@ -200,13 +203,19 @@ export function AgentPanel({
         <span>Sessions</span>
         <span className="meta">{state.sessions.length}</span>
       </div>
-      <div className="agent-session-list">
+      <div
+        className="agent-session-list"
+        role="group"
+        aria-label="Agent sessions"
+      >
         {state.sessions.length > 0 ? (
           state.sessions.map((session) => (
             <button
               type="button"
               key={session.id}
               className={`agent-session-row row${state.activeSessionId === session.id ? " active" : ""}`}
+              aria-pressed={state.activeSessionId === session.id}
+              aria-label={`${session.id} ${session.mode} ${agentContextSummary(session)}`}
               onClick={() => onSelectSession(session.id)}
             >
               <Bot aria-hidden="true" />
@@ -226,9 +235,12 @@ export function AgentPanel({
       {activeSession ? (
         <div className="agent-session-detail">
           <div className="agent-session-toolbar">
-            <span className="badge2">
+            <span
+              className="badge2"
+              role="status"
+            >
               <ShieldCheck aria-hidden="true" />
-              {pendingApprovals.length} approvals
+              {pendingApprovalsCount} pending
             </span>
             <button
               type="button"

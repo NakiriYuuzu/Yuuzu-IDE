@@ -2,6 +2,8 @@
 
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { Window as HappyWindow } from "happy-dom";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { AgentPanel } from "./AgentPanel";
 import { createAgentState, type AgentMode, type AgentSession, type AgentViewState } from "./agent-model";
@@ -146,7 +148,7 @@ describe("AgentPanel", () => {
     expect(started).toEqual(["Plan Node 7"]);
   });
 
-  test("switches mode and toggles context selection", () => {
+  test("switches all modes and toggles context selection", () => {
     const modes: AgentMode[] = [];
     const toggles: Array<{ id: string; selected: boolean }> = [];
     renderAgentPanel({
@@ -170,12 +172,75 @@ describe("AgentPanel", () => {
       onToggleContext: (id, selected) => toggles.push({ id, selected }),
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "edit" }));
+    ["plan", "edit", "verify", "review", "report"].forEach((mode) => {
+      fireEvent.click(screen.getByRole("button", { name: mode }));
+    });
+    expect(screen.getByRole("button", { name: "plan" }).getAttribute("aria-pressed")).toBe("true");
+    ["plan", "edit", "verify", "review"].forEach((mode) => {
+      const expected = mode === "plan" ? "true" : "false";
+      expect(screen.getByRole("button", { name: mode }).getAttribute("aria-pressed")).toBe(expected);
+    });
     fireEvent.click(screen.getByLabelText("Use src/app/AppShell.tsx context"));
-    expect(modes).toEqual(["edit"]);
+    expect(modes).toEqual(["plan", "edit", "verify", "review", "report"]);
     expect(toggles).toEqual([
       { id: "file:src/app/AppShell.tsx", selected: true },
     ]);
+  });
+
+  test("renders sessions and selects one to show context summary", () => {
+    const onSelectSession = mock(() => {});
+    const active = session();
+    const second: AgentSession = {
+      ...session(),
+      id: "agent-2",
+      context_items: [
+        active.context_items[0],
+        {
+          id: "doc:docs/architecture/tech-stack.md",
+          kind: "doc",
+          label: "Tech Stack",
+          path: "docs/architecture/tech-stack.md",
+          content: "stack",
+          truncated: false,
+        },
+      ],
+      transcript: [
+        {
+          id: "diff-2",
+          session_id: "agent-2",
+          kind: "diff",
+          title: "Generated diff two",
+          content: "diff --git a/readme.md b/readme.md",
+          status: "pending",
+          approval_status: null,
+          metadata: {},
+          created_ms: 4,
+        },
+      ],
+    };
+
+    renderAgentPanel({
+      state: {
+        ...createAgentState(),
+        sessions: [active, second],
+        activeSessionId: active.id,
+      },
+      onSelectSession,
+    });
+
+    const secondRow = screen.getByRole("button", {
+      name: "agent-2 plan 1 file | 1 doc",
+    });
+    const firstRow = screen.getByRole("button", {
+      name: "agent-1 plan 1 file",
+    });
+    fireEvent.click(secondRow);
+
+    expect(firstRow.getAttribute("aria-pressed")).toBe("true");
+    expect(secondRow.getAttribute("aria-pressed")).toBe("false");
+    expect(onSelectSession).toHaveBeenCalledTimes(1);
+    expect(onSelectSession).toHaveBeenCalledWith("agent-2");
+    expect(screen.getByText("1 file | 1 doc")).toBeTruthy();
   });
 
   test("renders diffs, verification, approvals and export action", () => {
@@ -206,7 +271,93 @@ describe("AgentPanel", () => {
 
     expect(approved).toEqual(["approval-1"]);
     expect(rejected).toEqual(["approval-1"]);
+    expect(screen.getByRole("status").textContent).toBe("1 pending");
     expect(exported).toBe(1);
+  });
+
+  test("keeps non-pending approval actions disabled and inert", () => {
+    const approved: string[] = [];
+    const rejected: string[] = [];
+    const pending: AgentSession = {
+      id: "agent-2",
+      workspace_root: "/repo",
+      mode: "edit",
+      prompt: "Patch",
+      context_items: [],
+      transcript: [
+        {
+          id: "approval-pending",
+          session_id: "agent-2",
+          kind: "approval_request",
+          title: "Pending change",
+          content: "Needs attention",
+          status: "pending",
+          approval_status: "pending",
+          metadata: {},
+          created_ms: 1,
+        },
+        {
+          id: "approval-approved",
+          session_id: "agent-2",
+          kind: "approval_request",
+          title: "Approved change",
+          content: "No action needed",
+          status: "passed",
+          approval_status: "approved",
+          metadata: {},
+          created_ms: 2,
+        },
+        {
+          id: "approval-rejected",
+          session_id: "agent-2",
+          kind: "approval_request",
+          title: "Rejected change",
+          content: "Need review later",
+          status: "failed",
+          approval_status: "rejected",
+          metadata: {},
+          created_ms: 3,
+        },
+      ],
+      created_ms: 1,
+      updated_ms: 3,
+    };
+
+    renderAgentPanel({
+      state: {
+        ...createAgentState(),
+        sessions: [pending],
+        activeSessionId: pending.id,
+      },
+      onApprove: (id) => approved.push(id),
+      onReject: (id) => rejected.push(id),
+    });
+
+    const nonPendingApprove = screen.getByRole("button", {
+      name: "Approve Approved change",
+    });
+    const nonPendingReject = screen.getByRole("button", {
+      name: "Reject Rejected change",
+    });
+    const pendingApprove = screen.getByRole("button", {
+      name: "Approve Pending change",
+    });
+    const pendingReject = screen.getByRole("button", {
+      name: "Reject Pending change",
+    });
+
+    expect(nonPendingApprove.hasAttribute("disabled")).toBe(true);
+    expect(nonPendingReject.hasAttribute("disabled")).toBe(true);
+
+    fireEvent.click(nonPendingApprove);
+    fireEvent.click(nonPendingReject);
+    fireEvent.click(pendingApprove);
+    fireEvent.click(pendingReject);
+
+    expect(nonPendingApprove.hasAttribute("disabled")).toBe(true);
+    expect(nonPendingReject.hasAttribute("disabled")).toBe(true);
+    expect(approved).toEqual(["approval-pending"]);
+    expect(rejected).toEqual(["approval-pending"]);
   });
 });
 
@@ -241,5 +392,20 @@ describe("AgentPanel session validation", () => {
     expect(startButton.hasAttribute("disabled")).toBe(true);
     fireEvent.click(startButton);
     expect(onStartSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("AgentPanel css contract", () => {
+  test("defines compact-safe agent mode buttons and keeps badges visible on mobile", () => {
+    const cssPath = resolve(
+      process.cwd(),
+      "src/index.css",
+    );
+    const source = readFileSync(cssPath, "utf8");
+
+    expect(source.includes(".btn.sm")).toBe(true);
+    expect(source.includes(".btn.ghost")).toBe(true);
+    expect(source.includes(".agent-session-toolbar .badge2")).toBe(true);
+    expect(source.includes(".agent-modes .btn.sm")).toBe(true);
   });
 });

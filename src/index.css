@@ -1562,6 +1562,21 @@ button {
   background: var(--hover);
 }
 
+.btn.sm {
+  height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.btn.ghost {
+  border-color: transparent;
+  background: none;
+}
+
+.btn.ghost:hover {
+  background: var(--hover);
+}
+
 .btn:disabled {
   color: var(--txt-faint);
   cursor: default;
@@ -2166,6 +2181,12 @@ button {
   margin-bottom: 8px;
 }
 
+.agent-modes .btn.sm {
+  width: 100%;
+  min-width: 0;
+  justify-content: center;
+}
+
 .agent-prompt {
   min-height: 88px;
   resize: vertical;
@@ -2274,6 +2295,14 @@ button {
 
 .agent-session-toolbar {
   justify-content: space-between;
+}
+
+.agent-session-toolbar .badge2 {
+  max-width: 130px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-transcript-row {
@@ -2969,6 +2998,10 @@ button {
   .kbd,
   .badge2 {
     display: none;
+  }
+
+  .agent-session-toolbar .badge2 {
+    display: inline-flex;
   }
 
   .panel {
