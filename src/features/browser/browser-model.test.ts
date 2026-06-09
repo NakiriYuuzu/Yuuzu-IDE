@@ -269,6 +269,38 @@ describe("browser model", () => {
     expect(withErrors.screenshots).toHaveLength(1);
   });
 
+  test("adds unique ids to duplicate console errors captured at the same time", () => {
+    const baseState = createBrowserState();
+    const first = addBrowserConsoleError(baseState, {
+      message: "Same message",
+      level: "error",
+      captured_ms: 1700000000000,
+    });
+    const second = addBrowserConsoleError(first, {
+      message: "Same message",
+      level: "error",
+      captured_ms: 1700000000000,
+    });
+
+    expect(first.consoleErrors[0].id).toBeDefined();
+    expect(second.consoleErrors[0].id).toBeDefined();
+    expect(first.consoleErrors[0].id).not.toBe(second.consoleErrors[0].id);
+    expect(second.consoleErrors[0].id).not.toBe(first.consoleErrors[0].id);
+    expect(second.consoleErrors[0].message).toBe("Same message");
+    expect(first.consoleErrors[0].level).toBe("error");
+  });
+
+  test("preserves provided browser console error ids", () => {
+    const state = addBrowserConsoleError(createBrowserState(), {
+      id: "manual-console-id",
+      message: "Manual id",
+      level: "warning",
+      captured_ms: 1700000000001,
+    });
+
+    expect(state.consoleErrors[0].id).toBe("manual-console-id");
+  });
+
   test("updateBrowserBounds accepts null", () => {
     const bounds = { x: 1, y: 2, width: 100, height: 200 };
     const updated = updateBrowserBounds(createBrowserState(), bounds);

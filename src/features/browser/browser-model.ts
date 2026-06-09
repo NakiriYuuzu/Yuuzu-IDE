@@ -21,6 +21,7 @@ export type BrowserScreenshot = {
 };
 
 export type BrowserConsoleError = {
+  id?: string;
   message: string;
   level: BrowserConsoleLevel;
   captured_ms: number;
@@ -62,6 +63,7 @@ export type DevServerTarget = {
 
 export const MAX_SCREENSHOTS = 12;
 export const MAX_CONSOLE_ERRORS = 20;
+let nextBrowserConsoleErrorId = 0;
 
 export function createBrowserState(): BrowserViewState {
   return {
@@ -162,10 +164,20 @@ export function addBrowserConsoleError(
   state: BrowserViewState,
   error: BrowserConsoleError,
 ): BrowserViewState {
+  const nextError = {
+    id: error.id ?? createBrowserConsoleErrorId(),
+    ...error,
+  };
+
   return {
     ...state,
-    consoleErrors: [error, ...state.consoleErrors].slice(0, MAX_CONSOLE_ERRORS),
+    consoleErrors: [nextError, ...state.consoleErrors].slice(0, MAX_CONSOLE_ERRORS),
   };
+}
+
+function createBrowserConsoleErrorId(): string {
+  nextBrowserConsoleErrorId += 1;
+  return `console-${nextBrowserConsoleErrorId}`;
 }
 
 export function browserScreenshotToContext(screenshot: BrowserScreenshot) {

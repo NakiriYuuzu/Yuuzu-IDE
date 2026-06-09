@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
 import { BrowserPanel } from "./BrowserPanel";
-import { createBrowserState } from "./browser-model";
+import { addBrowserConsoleError, createBrowserState } from "./browser-model";
 import { ensureTestDom } from "../../app/test-dom";
 
 ensureTestDom();
@@ -318,23 +318,22 @@ describe("BrowserPanel", () => {
     console.error = consoleError;
 
     try {
+      const state = addBrowserConsoleError(
+        addBrowserConsoleError(createBrowserState(), {
+          message: "Error failed",
+          level: "error",
+          captured_ms: 4,
+        }),
+        {
+          message: "Error failed",
+          level: "error",
+          captured_ms: 4,
+        },
+      );
+
       render(
         <BrowserPanel
-          state={{
-            ...createBrowserState(),
-            consoleErrors: [
-              {
-                message: "Error failed",
-                level: "error" as const,
-                captured_ms: 4,
-              },
-              {
-                message: "Warning slow",
-                level: "warning" as const,
-                captured_ms: 4,
-              },
-            ],
-          }}
+          state={state}
           devServerTargets={[]}
           canCapture={true}
           onUrlInputChange={() => {}}
@@ -347,14 +346,17 @@ describe("BrowserPanel", () => {
         />,
       );
 
+      expect(state.consoleErrors[0].id).toBeDefined();
+      expect(state.consoleErrors[1].id).toBeDefined();
+      expect(state.consoleErrors[0].id).not.toBe(state.consoleErrors[1].id);
+
       const duplicateKeyWarningCalls = consoleError.mock.calls.filter((call) =>
         typeof call[0] === "string" &&
         call[0].includes("Encountered two children with the same key"),
       );
 
       expect(duplicateKeyWarningCalls).toHaveLength(0);
-      expect(screen.getByText("Error failed")).toBeTruthy();
-      expect(screen.getByText("Warning slow")).toBeTruthy();
+      expect(screen.getAllByText("Error failed")).toHaveLength(2);
     } finally {
       console.error = originalError;
     }

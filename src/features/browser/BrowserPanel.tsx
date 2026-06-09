@@ -204,7 +204,7 @@ export function BrowserPanel({
           state.consoleErrors.map((entry) => (
             <div
               className="row browser-console-row"
-              key={`${entry.captured_ms}:${entry.level}:${entry.message}`}
+              key={entry.id ?? `${entry.captured_ms}:${entry.level}:${entry.message}`}
             >
               <span
                 className={`badge2${consoleBadgeLevel(entry) ? ` ${consoleBadgeLevel(entry)}` : ""}`}
