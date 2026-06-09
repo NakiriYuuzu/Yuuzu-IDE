@@ -2152,6 +2152,99 @@ button {
   flex: 0 0 auto;
 }
 
+.language-panel {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.language-server-row,
+.language-diagnostic-row {
+  min-height: 30px;
+  height: auto;
+  align-items: flex-start;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  white-space: normal;
+}
+
+.language-server-row .language-row-main,
+.language-diagnostic-row .language-row-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.15;
+}
+
+.language-server-row .language-row-title,
+.language-diagnostic-row .language-row-title {
+  color: var(--txt);
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.language-server-row .language-row-sub,
+.language-diagnostic-row .language-row-sub {
+  color: var(--txt-faint);
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.language-server-row .badge2 {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.language-server-row .iconbtn {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+}
+
+.language-server-row .iconbtn svg {
+  width: 11px;
+  height: 11px;
+}
+
+.language-diagnostic-row .badge2 {
+  flex: 0 0 auto;
+  max-width: 82px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.language-diagnostic-row .badge2 svg {
+  width: 11px;
+  height: 11px;
+}
+
+.language-log {
+  margin: 0 8px 8px;
+  padding: 8px;
+  min-height: 72px;
+  max-height: 180px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--editor);
+  color: var(--txt-dim);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.language-memory {
+  color: var(--txt-faint);
+}
+
 .docs-source-list {
   min-width: 0;
 }

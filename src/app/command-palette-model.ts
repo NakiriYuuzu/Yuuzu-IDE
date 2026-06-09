@@ -30,7 +30,29 @@ export const node5Commands: CommandItem[] = [
   },
 ];
 
-export const allCommands: CommandItem[] = [...node1Commands, ...node5Commands];
+export const node6Commands: CommandItem[] = [
+  {
+    id: "open-language",
+    label: "Language: Open diagnostics",
+    group: "Language",
+  },
+  {
+    id: "language-refresh",
+    label: "Language: Refresh diagnostics",
+    group: "Language",
+  },
+  {
+    id: "language-restart",
+    label: "Language: Restart active server",
+    group: "Language",
+  },
+];
+
+export const allCommands: CommandItem[] = [
+  ...node1Commands,
+  ...node5Commands,
+  ...node6Commands,
+];
 
 export function filterCommands(
   commands: CommandItem[],

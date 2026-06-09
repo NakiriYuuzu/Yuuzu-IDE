@@ -50,6 +50,15 @@ import {
   type DocsRequestIdentity,
   type DocsViewState,
 } from "../features/docs/docs-model";
+import { getLanguageServerStatus, getWorkspaceDiagnostics } from "../features/language/language-api";
+import {
+  replaceDiagnostics,
+  replaceServerStatuses,
+  selectDiagnosticBadge,
+  type LspDiagnostic,
+  type LanguageServerStatus,
+  type LanguageViewState,
+} from "../features/language/language-model";
 import {
   createLoadedFileKey,
   isLoadedEditorForActiveFile,
@@ -94,6 +103,7 @@ import {
 import { GitDiffView } from "../features/git/GitDiffView";
 import { GitGraphView } from "../features/git/GitGraphView";
 import { GitPanel } from "../features/git/GitPanel";
+import { LanguagePanel } from "../features/language/LanguagePanel";
 import {
   changeBadgeCount,
   confirmationTextForGitAction,
@@ -223,6 +233,7 @@ const panelTitles: Record<ActivityId, string> = {
   terminal: "Terminal",
   tasks: "Tasks",
   docs: "Docs",
+  language: "Language",
   database: "Database",
   settings: "Settings",
 };
@@ -394,6 +405,10 @@ function PanelBody({
   onDocsDeletePack,
   onDocsUsePackForActiveTask,
   onDocsLinkPackToAgentSession,
+  onLanguageOpenDiagnostic,
+  onLanguageRefresh,
+  onLanguageRestartServer,
+  languageState,
 }: {
   active: ActivityId;
   refreshKey: number;
@@ -450,6 +465,10 @@ function PanelBody({
     id: string,
     agentSessionId: string,
   ) => Promise<void>;
+  onLanguageOpenDiagnostic: (diagnostic: LspDiagnostic & { path: string }) => void;
+  onLanguageRefresh: () => void;
+  onLanguageRestartServer: (server: LanguageServerStatus) => void;
+  languageState: LanguageViewState;
 }) {
   if (active === "git") {
     return (
@@ -534,24 +553,35 @@ function PanelBody({
     );
   }
 
-  if (active !== "explorer") {
+  if (active === "language") {
     return (
-      <div className="panel-empty">
-        <span>{panelTitles[active]}</span>
-      </div>
+      <LanguagePanel
+        state={languageState}
+        onOpenDiagnostic={onLanguageOpenDiagnostic}
+        onRefresh={onLanguageRefresh}
+        onRestartServer={onLanguageRestartServer}
+      />
+    );
+  }
+
+  if (active === "explorer") {
+    return (
+      <FileTreePanel
+        refreshKey={refreshKey}
+        activeFilePath={activeFilePath}
+        onOpenFile={onOpenFile}
+        onCreateFile={onCreateFile}
+        onRenamePath={onRenamePath}
+        onDeletePath={onDeletePath}
+        gitDecorations={gitDecorations}
+      />
     );
   }
 
   return (
-    <FileTreePanel
-      refreshKey={refreshKey}
-      activeFilePath={activeFilePath}
-      onOpenFile={onOpenFile}
-      onCreateFile={onCreateFile}
-      onRenamePath={onRenamePath}
-      onDeletePath={onDeletePath}
-      gitDecorations={gitDecorations}
-    />
+    <div className="panel-empty">
+      <span>{panelTitles[active]}</span>
+    </div>
   );
 }
 
@@ -605,6 +635,7 @@ export function AppShell() {
   const activeTaskProblems = activeTaskRun
     ? (view.task.problemsByRunId[activeTaskRun.id] ?? [])
     : [];
+  const languageDiagnosticBadge = selectDiagnosticBadge(view.language);
   const contextPackNameById = useMemo(
     () =>
       Object.fromEntries(
@@ -644,6 +675,7 @@ export function AppShell() {
   const updateTask = useWorkspaceViewStore((state) => state.updateTask);
   const updateGit = useWorkspaceViewStore((state) => state.updateGit);
   const updateDocs = useWorkspaceViewStore((state) => state.updateDocs);
+  const updateLanguage = useWorkspaceViewStore((state) => state.updateLanguage);
 
   const activeWorkspace = useMemo(
     () =>
@@ -2445,6 +2477,78 @@ export function AppShell() {
     }
   }
 
+  function openLanguagePanel() {
+    setActiveActivity("language");
+    setPanelOpen(true);
+  }
+
+  function openLanguageDiagnostic(diagnostic: LspDiagnostic & { path: string }) {
+    setSurface("editor");
+    void openFile(diagnostic.path);
+  }
+
+  async function refreshLanguageData() {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const rootBeforeRefresh = workspaceRoot;
+
+    updateLanguage(workspaceId, (language) => ({
+      ...language,
+      loading: true,
+      error: null,
+    }));
+
+    try {
+      const [servers, diagnostics] = await Promise.all([
+        getLanguageServerStatus(workspaceRoot),
+        getWorkspaceDiagnostics({
+          workspaceId,
+          workspaceRoot,
+        }),
+      ]);
+
+      if (!hasRegisteredWorkspace(workspaceId)) {
+        updateLanguage(workspaceId, (language) => ({ ...language, loading: false }));
+        return;
+      }
+
+      const currentWorkspace = workspaceStore
+        .getState()
+        .registry.workspaces.find((workspace) => workspace.id === workspaceId);
+      if (!currentWorkspace || currentWorkspace.path !== rootBeforeRefresh) {
+        updateLanguage(workspaceId, (language) => ({ ...language, loading: false }));
+        return;
+      }
+
+      updateLanguage(workspaceId, (language) =>
+        replaceDiagnostics(replaceServerStatuses(language, servers), diagnostics),
+      );
+    } catch (error) {
+      if (!hasRegisteredWorkspace(workspaceId)) {
+        updateLanguage(workspaceId, (language) => ({ ...language, loading: false }));
+        return;
+      }
+
+      updateLanguage(workspaceId, (language) => ({
+        ...language,
+        loading: false,
+        error: `Refresh diagnostics failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
+  function restartLanguageServer(_server: LanguageServerStatus) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    void refreshLanguageData();
+  }
+
   function runCommand(id: string) {
     switch (id) {
       case "save-file":
@@ -2498,6 +2602,19 @@ export function AppShell() {
         break;
       case "create-context-pack":
         void createDocsContextPack();
+        break;
+      case "open-language":
+        openLanguagePanel();
+        break;
+      case "language-refresh":
+        void refreshLanguageData();
+        break;
+      case "language-restart":
+        if (view.language.serverStatuses[0]) {
+          restartLanguageServer(view.language.serverStatuses[0]);
+        } else {
+          void refreshLanguageData();
+        }
         break;
       case "open-workspace":
       case "switch-workspace":
@@ -2557,12 +2674,15 @@ export function AppShell() {
           badges={{
             git: changeBadgeCount(view.git.status),
             docs: docsBadgeCount(view.docs),
+            language: languageDiagnosticBadge,
           }}
           onSelect={setActiveActivity}
         />
         {panelOpen ? (
           <aside className="panel">
-            {activeActivity === "git" || activeActivity === "docs" ? null : (
+            {activeActivity === "git" ||
+            activeActivity === "docs" ||
+            activeActivity === "language" ? null : (
               <div className="panel-head">
                 <span className="panel-title">{panelTitles[activeActivity]}</span>
                 <div className="panel-acts">
@@ -2658,6 +2778,10 @@ export function AppShell() {
                 void linkPackToActiveTask(id)
               }
               onDocsLinkPackToAgentSession={linkPackToAgentSession}
+              onLanguageOpenDiagnostic={openLanguageDiagnostic}
+              onLanguageRefresh={() => void refreshLanguageData()}
+              onLanguageRestartServer={restartLanguageServer}
+              languageState={view.language}
             />
           </aside>
         ) : null}
@@ -3088,6 +3212,9 @@ export function AppShell() {
         <div className="sb">registry {registry.workspaces.length}</div>
         <div className="sb">tasks {view.task.runs.length}</div>
         <div className="sb">problems {activeTaskProblems.length}</div>
+        {languageDiagnosticBadge ? (
+          <div className="sb">diagnostics {languageDiagnosticBadge}</div>
+        ) : null}
         <div className="sb-spacer" />
         <div className="sb">
           <span className="live" />

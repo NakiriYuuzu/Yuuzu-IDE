@@ -5,7 +5,9 @@ import { describe, expect, test } from "bun:test";
 import {
   filterCommands,
   node1Commands,
+  allCommands,
   node5Commands,
+  node6Commands,
 } from "./command-palette-model";
 
 describe("filterCommands", () => {
@@ -48,5 +50,28 @@ describe("filterCommands", () => {
         group: "Docs",
       },
     ]);
+  });
+
+  test("includes language commands in palette", () => {
+    expect(node6Commands).toEqual([
+      { id: "open-language", label: "Language: Open diagnostics", group: "Language" },
+      {
+        id: "language-refresh",
+        label: "Language: Refresh diagnostics",
+        group: "Language",
+      },
+      {
+        id: "language-restart",
+        label: "Language: Restart active server",
+        group: "Language",
+      },
+    ]);
+    expect(allCommands.map((command) => command.id)).toContain("open-language");
+    expect(allCommands.map((command) => command.id)).toContain(
+      "language-refresh",
+    );
+    expect(allCommands.map((command) => command.id)).toContain(
+      "language-restart",
+    );
   });
 });
