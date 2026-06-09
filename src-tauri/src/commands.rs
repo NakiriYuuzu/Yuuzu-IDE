@@ -156,10 +156,11 @@ impl AppState {
         workspace_id: &str,
         path: String,
     ) -> Result<Vec<crate::lsp::LspDiagnostic>, String> {
-        let (resolved_workspace_id, _) = self.lsp_workspace_identity(workspace_root)?;
+        let (resolved_workspace_id, resolved_workspace_root) =
+            self.lsp_workspace_identity(workspace_root)?;
         let path = normalize_lsp_document_path(&path)?;
         let _ = workspace_id;
-        Ok(lsp_state.document_diagnostics(&resolved_workspace_id, &path))
+        Ok(lsp_state.document_diagnostics(&resolved_workspace_id, &resolved_workspace_root, &path))
     }
 
     pub fn lsp_workspace_diagnostics(
@@ -168,9 +169,10 @@ impl AppState {
         workspace_root: &str,
         workspace_id: &str,
     ) -> Result<Vec<crate::lsp::LspDiagnostic>, String> {
-        let (resolved_workspace_id, _) = self.lsp_workspace_identity(workspace_root)?;
+        let (resolved_workspace_id, resolved_workspace_root) =
+            self.lsp_workspace_identity(workspace_root)?;
         let _ = workspace_id;
-        Ok(lsp_state.workspace_diagnostics(&resolved_workspace_id))
+        Ok(lsp_state.workspace_diagnostics(&resolved_workspace_id, &resolved_workspace_root))
     }
 
     pub fn lsp_hover(

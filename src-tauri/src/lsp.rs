@@ -158,7 +158,7 @@ pub struct LspDiagnostic {
 struct LanguageServerManagerState {
     test_profiles: HashMap<LanguageId, TestServerProfile>,
     servers: HashMap<LanguageServerKey, LanguageServerRecord>,
-    diagnostics: HashMap<(String, String), Vec<LspDiagnostic>>,
+    diagnostics: HashMap<(String, String, String), Vec<LspDiagnostic>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -461,34 +461,56 @@ impl LanguageServerManager {
     pub fn store_diagnostics(
         &self,
         workspace_id: &str,
+        workspace_root: &str,
         path: &str,
         diagnostics: Vec<LspDiagnostic>,
     ) {
         if let Ok(mut state) = self.state.lock() {
-            state
-                .diagnostics
-                .insert((workspace_id.to_string(), path.to_string()), diagnostics);
+            state.diagnostics.insert(
+                (
+                    workspace_id.to_string(),
+                    workspace_root.to_string(),
+                    path.to_string(),
+                ),
+                diagnostics,
+            );
         }
     }
 
-    pub fn document_diagnostics(&self, workspace_id: &str, path: &str) -> Vec<LspDiagnostic> {
+    pub fn document_diagnostics(
+        &self,
+        workspace_id: &str,
+        workspace_root: &str,
+        path: &str,
+    ) -> Vec<LspDiagnostic> {
         let Ok(state) = self.state.lock() else {
             return Vec::new();
         };
         state
             .diagnostics
-            .get(&(workspace_id.to_string(), path.to_string()))
+            .get(&(
+                workspace_id.to_string(),
+                workspace_root.to_string(),
+                path.to_string(),
+            ))
             .cloned()
             .unwrap_or_default()
     }
 
-    pub fn workspace_diagnostics(&self, workspace_id: &str) -> Vec<LspDiagnostic> {
+    pub fn workspace_diagnostics(
+        &self,
+        workspace_id: &str,
+        workspace_root: &str,
+    ) -> Vec<LspDiagnostic> {
         let Ok(state) = self.state.lock() else {
             return Vec::new();
         };
         let mut diagnostics = Vec::new();
-        for ((candidate_workspace_id, _path), diagnostic) in &state.diagnostics {
-            if candidate_workspace_id == workspace_id {
+        for ((candidate_workspace_id, candidate_workspace_root, _path), diagnostic) in
+            &state.diagnostics
+        {
+            if candidate_workspace_id == workspace_id && candidate_workspace_root == workspace_root
+            {
                 diagnostics.extend(diagnostic.clone());
             }
         }
@@ -575,17 +597,26 @@ impl LspState {
         Ok(manager.document_status(workspace_id, workspace_root, path))
     }
 
-    pub fn document_diagnostics(&self, workspace_id: &str, path: &str) -> Vec<LspDiagnostic> {
+    pub fn document_diagnostics(
+        &self,
+        workspace_id: &str,
+        workspace_root: &str,
+        path: &str,
+    ) -> Vec<LspDiagnostic> {
         self.manager
             .lock()
-            .map(|manager| manager.document_diagnostics(workspace_id, path))
+            .map(|manager| manager.document_diagnostics(workspace_id, workspace_root, path))
             .unwrap_or_default()
     }
 
-    pub fn workspace_diagnostics(&self, workspace_id: &str) -> Vec<LspDiagnostic> {
+    pub fn workspace_diagnostics(
+        &self,
+        workspace_id: &str,
+        workspace_root: &str,
+    ) -> Vec<LspDiagnostic> {
         self.manager
             .lock()
-            .map(|manager| manager.workspace_diagnostics(workspace_id))
+            .map(|manager| manager.workspace_diagnostics(workspace_id, workspace_root))
             .unwrap_or_default()
     }
 
@@ -747,20 +778,52 @@ mod tests {
         let manager = LanguageServerManager::default_for_tests();
         manager.store_diagnostics(
             "workspace-a",
+            "/workspace-a",
             "src/main.rs",
             vec![sample_diagnostic("unused variable")],
         );
         manager.store_diagnostics(
             "workspace-b",
+            "/workspace-b",
             "src/main.rs",
             vec![sample_diagnostic("syntax error")],
         );
 
         assert_eq!(
-            manager.document_diagnostics("workspace-a", "src/main.rs")[0].message,
+            manager.document_diagnostics("workspace-a", "/workspace-a", "src/main.rs")[0].message,
             "unused variable"
         );
-        assert_eq!(manager.workspace_diagnostics("workspace-b").len(), 1);
+        assert_eq!(
+            manager
+                .workspace_diagnostics("workspace-b", "/workspace-b")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn diagnostics_cache_is_scoped_by_workspace_root() {
+        let manager = LanguageServerManager::default_for_tests();
+        manager.store_diagnostics(
+            "workspace",
+            "/old-root",
+            "src/main.rs",
+            vec![sample_diagnostic("old root")],
+        );
+        manager.store_diagnostics(
+            "workspace",
+            "/new-root",
+            "src/main.rs",
+            vec![sample_diagnostic("new root")],
+        );
+
+        let document = manager.document_diagnostics("workspace", "/new-root", "src/main.rs");
+        let workspace = manager.workspace_diagnostics("workspace", "/new-root");
+
+        assert_eq!(document.len(), 1);
+        assert_eq!(document[0].message, "new root");
+        assert_eq!(workspace.len(), 1);
+        assert_eq!(workspace[0].message, "new root");
     }
 
     #[test]
