@@ -181,20 +181,20 @@ impl AppState {
         workspace_root: &str,
         workspace_id: &str,
         path: String,
-        _line: u32,
-        _character: u32,
+        line: u32,
+        character: u32,
     ) -> Result<serde_json::Value, String> {
-        let status = self.lsp_document_status(lsp_state, workspace_root, workspace_id, path)?;
-        if !matches!(
-            status,
-            Some(crate::lsp::LanguageServerStatus {
-                state: crate::lsp::ServerState::Running,
-                ..
-            })
-        ) {
-            return Ok(serde_json::Value::Object(Default::default()));
-        }
-        Ok(serde_json::Value::Object(Default::default()))
+        let (resolved_workspace_id, resolved_workspace_root) =
+            self.lsp_workspace_identity(workspace_root)?;
+        let path = normalize_lsp_document_path(&path)?;
+        let _ = workspace_id;
+        lsp_state.hover(
+            resolved_workspace_id,
+            resolved_workspace_root,
+            path,
+            line,
+            character,
+        )
     }
 
     pub fn lsp_definition(
@@ -203,20 +203,20 @@ impl AppState {
         workspace_root: &str,
         workspace_id: &str,
         path: String,
-        _line: u32,
-        _character: u32,
+        line: u32,
+        character: u32,
     ) -> Result<Vec<serde_json::Value>, String> {
-        let status = self.lsp_document_status(lsp_state, workspace_root, workspace_id, path)?;
-        if !matches!(
-            status,
-            Some(crate::lsp::LanguageServerStatus {
-                state: crate::lsp::ServerState::Running,
-                ..
-            })
-        ) {
-            return Ok(Vec::new());
-        }
-        Ok(Vec::new())
+        let (resolved_workspace_id, resolved_workspace_root) =
+            self.lsp_workspace_identity(workspace_root)?;
+        let path = normalize_lsp_document_path(&path)?;
+        let _ = workspace_id;
+        lsp_state.definition(
+            resolved_workspace_id,
+            resolved_workspace_root,
+            path,
+            line,
+            character,
+        )
     }
 
     pub fn lsp_references(
@@ -225,20 +225,20 @@ impl AppState {
         workspace_root: &str,
         workspace_id: &str,
         path: String,
-        _line: u32,
-        _character: u32,
+        line: u32,
+        character: u32,
     ) -> Result<Vec<serde_json::Value>, String> {
-        let status = self.lsp_document_status(lsp_state, workspace_root, workspace_id, path)?;
-        if !matches!(
-            status,
-            Some(crate::lsp::LanguageServerStatus {
-                state: crate::lsp::ServerState::Running,
-                ..
-            })
-        ) {
-            return Ok(Vec::new());
-        }
-        Ok(Vec::new())
+        let (resolved_workspace_id, resolved_workspace_root) =
+            self.lsp_workspace_identity(workspace_root)?;
+        let path = normalize_lsp_document_path(&path)?;
+        let _ = workspace_id;
+        lsp_state.references(
+            resolved_workspace_id,
+            resolved_workspace_root,
+            path,
+            line,
+            character,
+        )
     }
 
     pub fn lsp_completion(
@@ -247,20 +247,20 @@ impl AppState {
         workspace_root: &str,
         workspace_id: &str,
         path: String,
-        _line: u32,
-        _character: u32,
-    ) -> Result<Vec<serde_json::Value>, String> {
-        let status = self.lsp_document_status(lsp_state, workspace_root, workspace_id, path)?;
-        if !matches!(
-            status,
-            Some(crate::lsp::LanguageServerStatus {
-                state: crate::lsp::ServerState::Running,
-                ..
-            })
-        ) {
-            return Ok(Vec::new());
-        }
-        Ok(Vec::new())
+        line: u32,
+        character: u32,
+    ) -> Result<serde_json::Value, String> {
+        let (resolved_workspace_id, resolved_workspace_root) =
+            self.lsp_workspace_identity(workspace_root)?;
+        let path = normalize_lsp_document_path(&path)?;
+        let _ = workspace_id;
+        lsp_state.completion(
+            resolved_workspace_id,
+            resolved_workspace_root,
+            path,
+            line,
+            character,
+        )
     }
 
     pub fn lsp_code_actions(
@@ -269,31 +269,32 @@ impl AppState {
         workspace_root: &str,
         workspace_id: &str,
         path: String,
-        _line: u32,
-        _character: u32,
+        line: u32,
+        character: u32,
     ) -> Result<Vec<serde_json::Value>, String> {
-        let status = self.lsp_document_status(lsp_state, workspace_root, workspace_id, path)?;
-        if !matches!(
-            status,
-            Some(crate::lsp::LanguageServerStatus {
-                state: crate::lsp::ServerState::Running,
-                ..
-            })
-        ) {
-            return Ok(Vec::new());
-        }
-        Ok(Vec::new())
+        let (resolved_workspace_id, resolved_workspace_root) =
+            self.lsp_workspace_identity(workspace_root)?;
+        let path = normalize_lsp_document_path(&path)?;
+        let _ = workspace_id;
+        lsp_state.code_actions(
+            resolved_workspace_id,
+            resolved_workspace_root,
+            path,
+            line,
+            character,
+        )
     }
 
     pub fn lsp_symbols(
         &self,
-        _lsp_state: &crate::lsp::LspState,
+        lsp_state: &crate::lsp::LspState,
         workspace_root: &str,
         workspace_id: &str,
     ) -> Result<Vec<serde_json::Value>, String> {
-        let _ = self.lsp_workspace_identity(workspace_root)?;
+        let (resolved_workspace_id, resolved_workspace_root) =
+            self.lsp_workspace_identity(workspace_root)?;
         let _ = workspace_id;
-        Ok(Vec::new())
+        lsp_state.symbols(resolved_workspace_id, resolved_workspace_root)
     }
 
     #[expect(
@@ -310,18 +311,18 @@ impl AppState {
         character: u32,
         new_name: String,
     ) -> Result<serde_json::Value, String> {
-        let _ = (line, character, new_name);
-        let status = self.lsp_document_status(lsp_state, workspace_root, workspace_id, path)?;
-        if !matches!(
-            status,
-            Some(crate::lsp::LanguageServerStatus {
-                state: crate::lsp::ServerState::Running,
-                ..
-            })
-        ) {
-            return Ok(serde_json::Value::Object(Default::default()));
-        }
-        Ok(serde_json::Value::Object(Default::default()))
+        let (resolved_workspace_id, resolved_workspace_root) =
+            self.lsp_workspace_identity(workspace_root)?;
+        let path = normalize_lsp_document_path(&path)?;
+        let _ = workspace_id;
+        lsp_state.rename(
+            resolved_workspace_id,
+            resolved_workspace_root,
+            path,
+            line,
+            character,
+            new_name,
+        )
     }
 
     pub fn lsp_restart_server(
@@ -350,20 +351,6 @@ impl AppState {
             self.lsp_workspace_identity(workspace_root)?;
         let _ = workspace_id;
         Ok(lsp_state.server_logs(resolved_workspace_id, resolved_workspace_root))
-    }
-
-    fn lsp_document_status(
-        &self,
-        lsp_state: &crate::lsp::LspState,
-        workspace_root: &str,
-        workspace_id: &str,
-        path: String,
-    ) -> Result<Option<crate::lsp::LanguageServerStatus>, String> {
-        let (resolved_workspace_id, resolved_workspace_root) =
-            self.lsp_workspace_identity(workspace_root)?;
-        let path = normalize_lsp_document_path(&path)?;
-        let _ = workspace_id;
-        lsp_state.document_status(&resolved_workspace_id, &resolved_workspace_root, &path)
     }
 
     fn active_workspace_root(&self) -> Result<PathBuf, String> {
@@ -1130,7 +1117,7 @@ pub fn lsp_completion(
     path: String,
     _line: u32,
     _character: u32,
-) -> Result<Vec<serde_json::Value>, String> {
+) -> Result<serde_json::Value, String> {
     state.lsp_completion(
         &lsp_state,
         &workspace_root,
@@ -1475,6 +1462,55 @@ mod tests {
         );
 
         assert!(result.unwrap_err().contains("workspace not registered"));
+    }
+
+    #[test]
+    fn lsp_provider_commands_restart_stopped_servers() {
+        let config = tempfile::tempdir().expect("config dir");
+        let state = AppState::new(config.path()).expect("state");
+        let lsp_state = crate::lsp::LspState::new_for_tests();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let workspace_root = workspace.path().to_str().expect("workspace path");
+        let registry = state
+            .open_workspace_path(workspace.path().to_path_buf())
+            .expect("open workspace");
+        let workspace_id = registry.active_workspace_id.expect("active workspace");
+        let trusted_root = state
+            .trusted_workspace_root(workspace_root)
+            .expect("trusted root")
+            .to_string_lossy()
+            .to_string();
+
+        state
+            .lsp_open_document(
+                &lsp_state,
+                workspace_root,
+                &workspace_id,
+                "src/main.rs".to_string(),
+                "fn main() {}".to_string(),
+            )
+            .expect("open document");
+        lsp_state.sweep_idle_servers(u64::MAX, 100);
+        assert_eq!(
+            lsp_state.statuses(workspace_id.clone(), trusted_root.clone())[0].state,
+            crate::lsp::ServerState::Stopped
+        );
+
+        state
+            .lsp_hover(
+                &lsp_state,
+                workspace_root,
+                &workspace_id,
+                "src/main.rs".to_string(),
+                0,
+                1,
+            )
+            .expect("hover");
+
+        assert_eq!(
+            lsp_state.statuses(workspace_id, trusted_root)[0].state,
+            crate::lsp::ServerState::Running
+        );
     }
 
     #[test]

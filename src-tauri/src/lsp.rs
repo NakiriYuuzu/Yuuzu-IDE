@@ -1,11 +1,20 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
+    io::{ErrorKind, Read, Write},
     path::Path,
-    sync::Mutex,
-    time::{SystemTime, UNIX_EPOCH},
+    process::{Child, ChildStdin, Command, Stdio},
+    sync::{
+        mpsc::{self, RecvTimeoutError, TryRecvError},
+        Arc, Mutex,
+    },
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+const DEFAULT_LSP_REQUEST_TIMEOUT_MS: u64 = 10_000;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum LanguageId {
@@ -154,6 +163,9 @@ pub struct LspDiagnostic {
     pub source: Option<String>,
 }
 
+type DiagnosticUpdates = Vec<(String, Vec<LspDiagnostic>)>;
+type LspResultWithDiagnostics = (Value, DiagnosticUpdates);
+
 #[derive(Default)]
 struct LanguageServerManagerState {
     test_profiles: HashMap<LanguageId, TestServerProfile>,
@@ -169,21 +181,27 @@ struct LanguageServerKey {
     language: LanguageId,
 }
 
-#[derive(Clone, Debug)]
 struct LanguageServerRecord {
     display_name: String,
+    language: LanguageId,
     state: ServerState,
     pid: Option<u32>,
     memory_bytes: Option<u64>,
     open_documents: HashSet<String>,
+    open_contents: HashMap<String, String>,
+    open_versions: HashMap<String, i32>,
     last_used_at: u64,
     last_error: Option<String>,
+    transport: Option<Box<dyn LspTransport>>,
+    initialized: bool,
+    next_request_id: u64,
 }
 
 impl LanguageServerRecord {
     fn from_profile(profile: &LanguageServerProfile, available: bool) -> Self {
         Self {
             display_name: profile.display_name.clone(),
+            language: profile.language,
             state: if available {
                 ServerState::Running
             } else {
@@ -192,8 +210,13 @@ impl LanguageServerRecord {
             pid: None,
             memory_bytes: None,
             open_documents: HashSet::new(),
+            open_contents: HashMap::new(),
+            open_versions: HashMap::new(),
             last_used_at: current_unix_millis(),
             last_error: None,
+            transport: None,
+            initialized: false,
+            next_request_id: 1,
         }
     }
 
@@ -234,13 +257,548 @@ fn sample_memory_bytes(pid: u32) -> Option<u64> {
     crate::metrics::process_memory_bytes(pid)
 }
 
+fn language_id_for_lsp(language: LanguageId) -> &'static str {
+    match language {
+        LanguageId::Rust => "rust",
+        LanguageId::TypeScript => "typescript",
+        LanguageId::JavaScript => "javascript",
+        LanguageId::Python => "python",
+    }
+}
+
+fn percent_encode_file_path(path: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::new();
+    for byte in path.bytes() {
+        let is_unreserved = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_');
+        if is_unreserved || byte == b'/' {
+            encoded.push(byte as char);
+        } else {
+            encoded.push('%');
+            encoded.push(HEX[(byte >> 4) as usize] as char);
+            encoded.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+    }
+    encoded
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn percent_decode_file_path(path: &str) -> Option<String> {
+    let bytes = path.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let high = *bytes.get(index + 1)?;
+            let low = *bytes.get(index + 2)?;
+            decoded.push(hex_value(high)? * 16 + hex_value(low)?);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn as_file_uri(workspace_root: &str, path: &str) -> String {
+    let absolute = Path::new(workspace_root).join(path.trim_start_matches('/'));
+    let path = absolute.to_string_lossy().replace('\\', "/");
+    format!("file://{}", percent_encode_file_path(&path))
+}
+
+fn relative_path_from_uri(workspace_root: &str, uri: &str) -> Option<String> {
+    let uri_path = uri.strip_prefix("file://")?;
+    let decoded = percent_decode_file_path(uri_path)?;
+    let relative = Path::new(&decoded)
+        .strip_prefix(Path::new(workspace_root))
+        .ok()?;
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    if relative.is_empty() || relative == "." {
+        None
+    } else {
+        Some(relative)
+    }
+}
+
+fn extract_lsp_result(response: Value) -> Result<Value, String> {
+    if response.get("error").is_some() {
+        return Err("language server request returned error".to_string());
+    }
+
+    response
+        .get("result")
+        .cloned()
+        .ok_or_else(|| "language server response missing result".to_string())
+}
+
+fn is_missing_command_error(message: &str) -> bool {
+    message.contains("command not found")
+        || message.contains("No such file")
+        || message.contains("not found")
+}
+
+fn parse_diagnostic_range(value: &Value) -> Option<LspRange> {
+    let start = value.get("start")?;
+    let end = value.get("end")?;
+
+    Some(LspRange {
+        start_line: start.get("line")?.as_u64()?.try_into().ok()?,
+        start_character: start.get("character")?.as_u64()?.try_into().ok()?,
+        end_line: end.get("line")?.as_u64()?.try_into().ok()?,
+        end_character: end.get("character")?.as_u64()?.try_into().ok()?,
+    })
+}
+
+fn parse_diagnostic_severity(value: Option<&Value>) -> String {
+    match value.and_then(|value| value.as_u64()) {
+        Some(1) => "Error".to_string(),
+        Some(2) => "Warning".to_string(),
+        Some(3) => "Information".to_string(),
+        Some(4) => "Hint".to_string(),
+        _ => "Unknown".to_string(),
+    }
+}
+
+fn as_path_or_object_position(line: u32, character: u32) -> Value {
+    serde_json::json!({
+        "line": line,
+        "character": character,
+    })
+}
+
+fn request_payload(method: &str, id: u64, params: Value) -> Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": method,
+        "params": params
+    })
+}
+
+fn notification_payload(method: &str, params: Value) -> Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params
+    })
+}
+
+fn as_result_array(value: Value) -> Vec<Value> {
+    match value {
+        Value::Array(items) => items,
+        Value::Null => Vec::new(),
+        value => vec![value],
+    }
+}
+
+fn is_lsp_response_for(value: &Value, response_id: u64) -> bool {
+    value.get("method").is_none()
+        && value.get("id").and_then(Value::as_u64) == Some(response_id)
+        && (value.get("result").is_some() || value.get("error").is_some())
+}
+
+fn server_request_response(event: &Value) -> Option<Value> {
+    if value_is_lsp_request(event) {
+        let id = event.get("id")?.clone();
+        let method = event.get("method").and_then(Value::as_str)?;
+        let response = match method {
+            "workspace/configuration" => {
+                let items = event
+                    .get("params")
+                    .and_then(|params| params.get("items"))
+                    .and_then(Value::as_array)
+                    .map_or(0usize, |items| items.len());
+
+                let response = (0..items)
+                    .map(|_| serde_json::json!({}))
+                    .collect::<Vec<_>>();
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": response
+                })
+            }
+            _ => serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": -32601,
+                    "message": "Method not found"
+                }
+            }),
+        };
+        return Some(response);
+    }
+    None
+}
+
+fn value_is_lsp_request(value: &Value) -> bool {
+    value.get("result").is_none()
+        && value.get("error").is_none()
+        && value.get("id").is_some()
+        && value.get("method").is_some()
+}
+
+type TransportFactory =
+    dyn Fn(&LanguageServerProfile) -> Result<Box<dyn LspTransport>, String> + Send + Sync;
+
+fn real_transport_factory(
+    profile: &LanguageServerProfile,
+) -> Result<Box<dyn LspTransport>, String> {
+    Ok(Box::new(StdioTransport::new(profile)?))
+}
+
+fn noop_transport_factory(_: &LanguageServerProfile) -> Result<Box<dyn LspTransport>, String> {
+    Ok(Box::new(NoopTransport::new()))
+}
+
+trait LspTransport: Send {
+    fn pid(&self) -> Option<u32>;
+    fn is_running(&mut self) -> bool;
+    fn send(&mut self, value: Value) -> Result<(), String>;
+    fn request(&mut self, payload: Value, timeout: Duration) -> Result<Value, String>;
+    fn poll_events(&mut self) -> Vec<Value>;
+    fn stop(&mut self);
+}
+
+struct StdioTransport {
+    child: Option<Child>,
+    stdin: Arc<Mutex<ChildStdin>>,
+    rx: std::sync::mpsc::Receiver<Value>,
+    queued_events: VecDeque<Value>,
+}
+
+impl StdioTransport {
+    fn new(profile: &LanguageServerProfile) -> Result<Self, String> {
+        let mut command = Command::new(&profile.command);
+        command.args(&profile.args);
+        command.stdin(Stdio::piped());
+        command.stdout(Stdio::piped());
+
+        let mut child = command.spawn().map_err(|err| match err.kind() {
+            ErrorKind::NotFound => "command not found".to_string(),
+            _ => err.to_string(),
+        })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "missing stdin".to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "missing stdout".to_string())?;
+
+        let (tx, rx) = mpsc::channel::<Value>();
+        thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(stdout);
+            let mut buffer = Vec::new();
+            let mut chunk = [0u8; 4096];
+
+            while let Ok(bytes_read) = reader.read(&mut chunk) {
+                if bytes_read == 0 {
+                    break;
+                }
+                buffer.extend_from_slice(&chunk[..bytes_read]);
+
+                loop {
+                    match decode_lsp_message(&mut buffer) {
+                        Ok(Some(message)) => {
+                            if tx.send(message).is_err() {
+                                break;
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(_) => break,
+                    }
+                }
+            }
+        });
+
+        Ok(Self {
+            child: Some(child),
+            stdin: Arc::new(Mutex::new(stdin)),
+            rx,
+            queued_events: VecDeque::new(),
+        })
+    }
+
+    fn frame_and_write(&self, message: Value) -> Result<(), String> {
+        let frame = encode_lsp_message(&message)?;
+        let mut stdin = self.stdin.lock().map_err(|err| err.to_string())?;
+        stdin.write_all(&frame).map_err(|err| err.to_string())?;
+        stdin.flush().map_err(|err| err.to_string())
+    }
+
+    fn take_event_id(value: &Value) -> Option<u64> {
+        value.get("id").and_then(|value| value.as_u64())
+    }
+
+    fn send_server_request_response(&mut self, event: &Value) -> Option<Result<(), String>> {
+        let response = server_request_response(event)?;
+
+        Some(self.send(response))
+    }
+
+    fn restore_deferred_events(&mut self, mut deferred: VecDeque<Value>) {
+        deferred.extend(std::mem::take(&mut self.queued_events));
+        self.queued_events = deferred;
+    }
+
+    fn process_queued_events(
+        &mut self,
+        response_id: u64,
+        deferred: &mut VecDeque<Value>,
+    ) -> Option<Result<Value, String>> {
+        while let Some(event) = self.queued_events.pop_front() {
+            if let Some(result) = self.send_server_request_response(&event) {
+                if let Err(error) = result {
+                    return Some(Err(error));
+                }
+                continue;
+            }
+            if is_lsp_response_for(&event, response_id) {
+                self.restore_deferred_events(std::mem::take(deferred));
+                return Some(Ok(event));
+            }
+            deferred.push_back(event);
+        }
+        None
+    }
+
+    fn process_event(
+        &mut self,
+        event: Value,
+        response_id: u64,
+        deferred: &mut VecDeque<Value>,
+    ) -> Option<Result<Value, String>> {
+        if let Some(result) = self.send_server_request_response(&event) {
+            if let Err(error) = result {
+                return Some(Err(error));
+            }
+            return None;
+        }
+        if is_lsp_response_for(&event, response_id) {
+            return Some(Ok(event));
+        }
+        deferred.push_back(event);
+        None
+    }
+}
+
+impl LspTransport for StdioTransport {
+    fn pid(&self) -> Option<u32> {
+        self.child.as_ref().map(|child| child.id())
+    }
+
+    fn is_running(&mut self) -> bool {
+        let Some(child) = &mut self.child else {
+            return false;
+        };
+        match child.try_wait() {
+            Ok(None) => true,
+            Ok(Some(_)) => false,
+            Err(_) => false,
+        }
+    }
+
+    fn send(&mut self, value: Value) -> Result<(), String> {
+        self.frame_and_write(value)
+    }
+
+    fn request(&mut self, payload: Value, timeout: Duration) -> Result<Value, String> {
+        let response_id = Self::take_event_id(&payload)
+            .ok_or_else(|| "request payload missing numeric id".to_string())?;
+        self.send(payload)?;
+
+        let deadline = Instant::now() + timeout;
+        let mut deferred = VecDeque::new();
+        loop {
+            if let Some(response) = self.process_queued_events(response_id, &mut deferred) {
+                return response;
+            }
+
+            let now = Instant::now();
+            if now >= deadline {
+                self.restore_deferred_events(deferred);
+                return Err("language server request timed out".to_string());
+            }
+
+            let event = match self
+                .rx
+                .recv_timeout(deadline.saturating_duration_since(now))
+            {
+                Ok(event) => event,
+                Err(RecvTimeoutError::Timeout) => {
+                    self.restore_deferred_events(deferred);
+                    return Err("language server request timed out".to_string());
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    self.restore_deferred_events(deferred);
+                    return Err("language server transport disconnected".to_string());
+                }
+            };
+            if let Some(response) = self.process_event(event, response_id, &mut deferred) {
+                self.restore_deferred_events(deferred);
+                return response;
+            }
+        }
+    }
+
+    fn poll_events(&mut self) -> Vec<Value> {
+        let mut events = Vec::new();
+        while let Some(event) = self.queued_events.pop_front() {
+            if self.send_server_request_response(&event).is_some() {
+                continue;
+            }
+            events.push(event);
+        }
+        loop {
+            match self.rx.try_recv() {
+                Ok(event) => {
+                    if self.send_server_request_response(&event).is_none() {
+                        events.push(event);
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        events
+    }
+
+    fn stop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = self.request(
+                request_payload("shutdown", 0, Value::Null),
+                Duration::from_millis(750),
+            );
+            let _ = self.send(notification_payload("exit", Value::Null));
+            for _ in 0..10 {
+                if matches!(child.try_wait(), Ok(Some(_))) {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+impl Drop for StdioTransport {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+struct NoopTransport {
+    responses: Arc<Mutex<VecDeque<Value>>>,
+    outbound_messages: Arc<Mutex<Vec<Value>>>,
+    events: Arc<Mutex<VecDeque<Value>>>,
+    stopped: bool,
+}
+
+impl NoopTransport {
+    fn new() -> Self {
+        Self {
+            responses: Arc::new(Mutex::new(VecDeque::new())),
+            outbound_messages: Arc::new(Mutex::new(Vec::new())),
+            events: Arc::new(Mutex::new(VecDeque::new())),
+            stopped: false,
+        }
+    }
+}
+
+impl LspTransport for NoopTransport {
+    fn pid(&self) -> Option<u32> {
+        Some(42_424)
+    }
+
+    fn is_running(&mut self) -> bool {
+        !self.stopped
+    }
+
+    fn send(&mut self, value: Value) -> Result<(), String> {
+        if self.stopped {
+            return Err("transport stopped".to_string());
+        }
+        self.outbound_messages
+            .lock()
+            .map_err(|err| err.to_string())?
+            .push(value);
+        Ok(())
+    }
+
+    fn request(&mut self, payload: Value, _timeout: Duration) -> Result<Value, String> {
+        if self.stopped {
+            return Err("transport stopped".to_string());
+        }
+        self.outbound_messages
+            .lock()
+            .map_err(|err| err.to_string())?
+            .push(payload);
+
+        let id = self
+            .outbound_messages
+            .lock()
+            .map_err(|err| err.to_string())?
+            .last()
+            .and_then(|message| message.get("id").and_then(Value::as_u64))
+            .unwrap_or(0);
+
+        if let Some(response) = self
+            .responses
+            .lock()
+            .map_err(|err| err.to_string())?
+            .pop_front()
+        {
+            return Ok(response);
+        }
+
+        Ok(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": serde_json::json!({})
+        }))
+    }
+
+    fn poll_events(&mut self) -> Vec<Value> {
+        self.events
+            .lock()
+            .map(|mut events| events.drain(..).collect())
+            .unwrap_or_default()
+    }
+
+    fn stop(&mut self) {
+        self.stopped = true;
+    }
+}
+
 pub struct LanguageServerManager {
     state: Mutex<LanguageServerManagerState>,
+    transport_factory: Arc<TransportFactory>,
 }
 
 impl Default for LanguageServerManager {
     fn default() -> Self {
-        Self::default_for_tests()
+        Self::for_tests_with_factory(
+            vec![
+                TestServerProfile::available(LanguageId::Rust),
+                TestServerProfile::available(LanguageId::TypeScript),
+                TestServerProfile::available(LanguageId::JavaScript),
+                TestServerProfile::available(LanguageId::Python),
+            ],
+            real_transport_factory,
+        )
     }
 }
 
@@ -259,6 +817,16 @@ impl LanguageServerManager {
     }
 
     pub fn for_tests(profiles: Vec<TestServerProfile>) -> Self {
+        Self::for_tests_with_factory(profiles, noop_transport_factory)
+    }
+
+    fn for_tests_with_factory(
+        profiles: Vec<TestServerProfile>,
+        transport_factory: impl Fn(&LanguageServerProfile) -> Result<Box<dyn LspTransport>, String>
+            + Send
+            + Sync
+            + 'static,
+    ) -> Self {
         let mut available = HashMap::new();
         for language in [
             LanguageId::Rust,
@@ -286,7 +854,649 @@ impl LanguageServerManager {
                 diagnostics: HashMap::new(),
                 logs: HashMap::new(),
             }),
+            transport_factory: Arc::new(transport_factory),
         }
+    }
+
+    fn next_request_id(record: &mut LanguageServerRecord) -> u64 {
+        let id = record.next_request_id;
+        record.next_request_id = record.next_request_id.saturating_add(1);
+        id
+    }
+
+    fn stop_transport(record: &mut LanguageServerRecord) {
+        if let Some(mut transport) = record.transport.take() {
+            transport.stop();
+        }
+        record.transport = None;
+        record.pid = None;
+        record.initialized = false;
+        record.memory_bytes = None;
+    }
+
+    fn append_workspace_log(
+        state: &mut LanguageServerManagerState,
+        workspace_id: &str,
+        workspace_root: &str,
+        line: impl Into<String>,
+    ) {
+        append_workspace_log(
+            state
+                .logs
+                .entry((workspace_id.to_string(), workspace_root.to_string()))
+                .or_default(),
+            line,
+        );
+    }
+
+    fn refresh_transport_state(record: &mut LanguageServerRecord) -> Option<String> {
+        let mut stopped_log = None;
+
+        if record.state == ServerState::Running {
+            let mut running = true;
+            if let Some(transport) = record.transport.as_mut() {
+                if !transport.is_running() {
+                    running = false;
+                }
+            } else {
+                running = false;
+            }
+
+            if !running {
+                Self::stop_transport(record);
+                record.state = ServerState::Stopped;
+                stopped_log = Some(format!("{} process stopped", record.display_name));
+            }
+        }
+
+        if record.state == ServerState::Running {
+            if let Some(pid) = record.pid {
+                if let Some(memory_bytes) = sample_memory_bytes(pid) {
+                    record.memory_bytes = Some(memory_bytes);
+                }
+            }
+        }
+
+        stopped_log
+    }
+
+    fn drain_publish_diagnostics(
+        &self,
+        workspace_root: &str,
+        record: &mut LanguageServerRecord,
+    ) -> Vec<(String, Vec<LspDiagnostic>)> {
+        if record.state == ServerState::Running {
+            let Some(transport) = record.transport.as_mut() else {
+                return Vec::new();
+            };
+
+            let mut diagnostics = Vec::new();
+            let events = transport.poll_events();
+            for event in events {
+                if event.get("method").and_then(Value::as_str)
+                    != Some("textDocument/publishDiagnostics")
+                {
+                    continue;
+                }
+
+                let params = match event.get("params") {
+                    Some(params) => params,
+                    None => continue,
+                };
+
+                let uri = match params.get("uri").and_then(Value::as_str) {
+                    Some(uri) => uri,
+                    None => continue,
+                };
+                let path = match relative_path_from_uri(workspace_root, uri) {
+                    Some(path) => path,
+                    None => continue,
+                };
+
+                let values = params
+                    .get("diagnostics")
+                    .and_then(Value::as_array)
+                    .map_or_else(Vec::new, |items| {
+                        items
+                            .iter()
+                            .filter_map(|item| {
+                                Some(LspDiagnostic {
+                                    path: path.clone(),
+                                    range: parse_diagnostic_range(item.get("range")?)?,
+                                    severity: parse_diagnostic_severity(item.get("severity")),
+                                    message: item
+                                        .get("message")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                    source: item
+                                        .get("source")
+                                        .and_then(Value::as_str)
+                                        .map(ToString::to_string),
+                                })
+                            })
+                            .collect()
+                    });
+
+                diagnostics.push((path, values));
+            }
+
+            diagnostics
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn send_initialize(
+        &self,
+        workspace_root: &str,
+        record: &mut LanguageServerRecord,
+    ) -> Result<(), String> {
+        let request_id = Self::next_request_id(record);
+        let response = {
+            let transport = record
+                .transport
+                .as_mut()
+                .ok_or_else(|| "language server transport not running".to_string())?;
+
+            transport.request(
+                request_payload(
+                    "initialize",
+                    request_id,
+                    serde_json::json!({
+                        "processId": serde_json::Value::Null,
+                        "rootPath": workspace_root,
+                        "rootUri": as_file_uri(workspace_root, ""),
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "yuuzu-ide",
+                            "version": "0.1.0",
+                        },
+                    }),
+                ),
+                Duration::from_millis(DEFAULT_LSP_REQUEST_TIMEOUT_MS),
+            )?
+        };
+        extract_lsp_result(response)?;
+        if let Some(transport) = record.transport.as_mut() {
+            transport.send(notification_payload("initialized", serde_json::json!({})))?;
+        }
+        record.initialized = true;
+        Ok(())
+    }
+
+    fn start_transport(
+        &self,
+        workspace_root: &str,
+        profile: &LanguageServerProfile,
+        record: &mut LanguageServerRecord,
+    ) -> Result<(), String> {
+        Self::stop_transport(record);
+
+        let transport = match (self.transport_factory)(profile) {
+            Ok(transport) => transport,
+            Err(error) => {
+                if is_missing_command_error(&error) {
+                    record.state = ServerState::MissingCommand;
+                } else {
+                    record.state = ServerState::Error;
+                }
+                record.last_error = Some(error.clone());
+                return Err(error);
+            }
+        };
+
+        record.pid = transport.pid();
+        record.transport = Some(transport);
+        record.state = ServerState::Running;
+        record.last_error = None;
+        let initialize = self.send_initialize(workspace_root, record);
+        if let Err(error) = initialize {
+            record.state = ServerState::Error;
+            record.last_error = Some(error.clone());
+            Self::stop_transport(record);
+            return Err(error);
+        }
+
+        Ok(())
+    }
+
+    fn ensure_transport(
+        &self,
+        workspace_root: &str,
+        profile: &LanguageServerProfile,
+        profile_available: bool,
+        record: &mut LanguageServerRecord,
+    ) -> (bool, bool) {
+        if !profile_available {
+            record.state = ServerState::MissingCommand;
+            record.last_error = Some("command not available".to_string());
+            return (false, false);
+        }
+
+        Self::refresh_transport_state(record);
+        if record.state == ServerState::Running && record.initialized {
+            if let Some(pid) = record.pid {
+                if let Some(memory_bytes) = sample_memory_bytes(pid) {
+                    record.memory_bytes = Some(memory_bytes);
+                }
+            }
+            return (true, false);
+        }
+
+        if self
+            .start_transport(workspace_root, profile, record)
+            .is_ok()
+        {
+            if let Err(error) = self.replay_open_documents(workspace_root, record) {
+                record.state = ServerState::Error;
+                record.last_error = Some(error);
+                Self::stop_transport(record);
+                return (false, false);
+            }
+            return (true, true);
+        }
+        (false, false)
+    }
+
+    fn send_did_open(
+        &self,
+        workspace_root: &str,
+        path: &str,
+        content: &str,
+        version: i32,
+        record: &mut LanguageServerRecord,
+    ) -> Result<(), String> {
+        let Some(transport) = record.transport.as_mut() else {
+            return Ok(());
+        };
+        transport.send(notification_payload(
+            "textDocument/didOpen",
+            serde_json::json!({
+                "textDocument": {
+                    "uri": as_file_uri(workspace_root, path),
+                    "languageId": language_id_for_lsp(record.language),
+                    "version": version,
+                    "text": content,
+                },
+            }),
+        ))?;
+        Ok(())
+    }
+
+    fn send_did_change(
+        &self,
+        workspace_root: &str,
+        path: &str,
+        content: &str,
+        version: i32,
+        record: &mut LanguageServerRecord,
+    ) -> Result<(), String> {
+        let Some(transport) = record.transport.as_mut() else {
+            return Ok(());
+        };
+        transport.send(notification_payload(
+            "textDocument/didChange",
+            serde_json::json!({
+                "textDocument": {
+                    "uri": as_file_uri(workspace_root, path),
+                    "version": version,
+                },
+                "contentChanges": [{
+                    "text": content,
+                }],
+            }),
+        ))?;
+        Ok(())
+    }
+
+    fn send_did_close(
+        &self,
+        workspace_root: &str,
+        path: &str,
+        record: &mut LanguageServerRecord,
+    ) -> Result<(), String> {
+        let Some(transport) = record.transport.as_mut() else {
+            return Ok(());
+        };
+        transport.send(notification_payload(
+            "textDocument/didClose",
+            serde_json::json!({
+                "textDocument": {
+                    "uri": as_file_uri(workspace_root, path),
+                },
+            }),
+        ))?;
+        Ok(())
+    }
+
+    fn replay_open_documents(
+        &self,
+        workspace_root: &str,
+        record: &mut LanguageServerRecord,
+    ) -> Result<(), String> {
+        let open_documents = record
+            .open_contents
+            .iter()
+            .map(|(path, content)| {
+                (
+                    path.clone(),
+                    content.clone(),
+                    *record.open_versions.get(path).unwrap_or(&1),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        for (path, content, version) in open_documents {
+            self.send_did_open(workspace_root, &path, &content, version, record)?;
+        }
+        Ok(())
+    }
+
+    fn request(
+        &self,
+        workspace_root: &str,
+        path: &str,
+        method: &str,
+        params: Value,
+        record: &mut LanguageServerRecord,
+    ) -> Result<LspResultWithDiagnostics, String> {
+        let mut diagnostics = Vec::new();
+        diagnostics.extend(self.drain_publish_diagnostics(workspace_root, record));
+
+        let id = Self::next_request_id(record);
+        let response = {
+            let transport = record
+                .transport
+                .as_mut()
+                .ok_or_else(|| "language server transport not running".to_string())?;
+            transport.request(
+                request_payload(method, id, params),
+                Duration::from_millis(DEFAULT_LSP_REQUEST_TIMEOUT_MS),
+            )?
+        };
+
+        diagnostics.extend(self.drain_publish_diagnostics(workspace_root, record));
+        let response =
+            extract_lsp_result(response).map_err(|error| format!("{error} for {path}"))?;
+        Ok((response, diagnostics))
+    }
+
+    pub fn hover(
+        &self,
+        workspace_id: &str,
+        workspace_root: &str,
+        path: &str,
+        line: u32,
+        character: u32,
+    ) -> Result<Value, String> {
+        self.with_opened_server_record(workspace_id, workspace_root, path, |record, _profile| {
+            let (response, diagnostics) = self.request(
+                workspace_root,
+                path,
+                "textDocument/hover",
+                serde_json::json!({
+                    "textDocument": {
+                        "uri": as_file_uri(workspace_root, path)
+                    },
+                    "position": as_path_or_object_position(line, character),
+                }),
+                record,
+            )?;
+            Ok((response, diagnostics))
+        })
+    }
+
+    pub fn definition(
+        &self,
+        workspace_id: &str,
+        workspace_root: &str,
+        path: &str,
+        line: u32,
+        character: u32,
+    ) -> Result<Vec<Value>, String> {
+        self.with_opened_server_record(workspace_id, workspace_root, path, |record, _profile| {
+            let (response, diagnostics) = self.request(
+                workspace_root,
+                path,
+                "textDocument/definition",
+                serde_json::json!({
+                    "textDocument": {
+                        "uri": as_file_uri(workspace_root, path)
+                    },
+                    "position": as_path_or_object_position(line, character),
+                }),
+                record,
+            )?;
+            Ok((as_result_array(response), diagnostics))
+        })
+    }
+
+    pub fn references(
+        &self,
+        workspace_id: &str,
+        workspace_root: &str,
+        path: &str,
+        line: u32,
+        character: u32,
+    ) -> Result<Vec<Value>, String> {
+        self.with_opened_server_record(workspace_id, workspace_root, path, |record, _profile| {
+            let (response, diagnostics) = self.request(
+                workspace_root,
+                path,
+                "textDocument/references",
+                serde_json::json!({
+                    "textDocument": {
+                        "uri": as_file_uri(workspace_root, path)
+                    },
+                    "position": as_path_or_object_position(line, character),
+                    "context": {
+                        "includeDeclaration": true,
+                    },
+                }),
+                record,
+            )?;
+            Ok((as_result_array(response), diagnostics))
+        })
+    }
+
+    pub fn completion(
+        &self,
+        workspace_id: &str,
+        workspace_root: &str,
+        path: &str,
+        line: u32,
+        character: u32,
+    ) -> Result<Value, String> {
+        self.with_opened_server_record(workspace_id, workspace_root, path, |record, _profile| {
+            let (response, diagnostics) = self.request(
+                workspace_root,
+                path,
+                "textDocument/completion",
+                serde_json::json!({
+                    "textDocument": {
+                        "uri": as_file_uri(workspace_root, path)
+                    },
+                    "position": as_path_or_object_position(line, character),
+                }),
+                record,
+            )?;
+            Ok((response, diagnostics))
+        })
+    }
+
+    pub fn code_actions(
+        &self,
+        workspace_id: &str,
+        workspace_root: &str,
+        path: &str,
+        line: u32,
+        character: u32,
+    ) -> Result<Vec<Value>, String> {
+        self.with_opened_server_record(workspace_id, workspace_root, path, |record, _profile| {
+            let (response, diagnostics) = self.request(
+                workspace_root,
+                path,
+                "textDocument/codeAction",
+                serde_json::json!({
+                    "textDocument": {
+                        "uri": as_file_uri(workspace_root, path)
+                    },
+                    "range": {
+                        "start": as_path_or_object_position(line, character),
+                        "end": as_path_or_object_position(line, character),
+                    },
+                    "context": {
+                        "diagnostics": [],
+                    },
+                }),
+                record,
+            )?;
+            Ok((as_result_array(response), diagnostics))
+        })
+    }
+
+    pub fn rename(
+        &self,
+        workspace_id: &str,
+        workspace_root: &str,
+        path: &str,
+        line: u32,
+        character: u32,
+        new_name: &str,
+    ) -> Result<Value, String> {
+        self.with_opened_server_record(workspace_id, workspace_root, path, |record, _profile| {
+            let (response, diagnostics) = self.request(
+                workspace_root,
+                path,
+                "textDocument/rename",
+                serde_json::json!({
+                    "textDocument": {
+                        "uri": as_file_uri(workspace_root, path)
+                    },
+                    "position": as_path_or_object_position(line, character),
+                    "newName": new_name,
+                }),
+                record,
+            )?;
+            Ok((response, diagnostics))
+        })
+    }
+
+    pub fn symbols(&self, workspace_id: &str, workspace_root: &str) -> Result<Vec<Value>, String> {
+        let mut state = self.state.lock().map_err(|err| err.to_string())?;
+
+        let mut symbols = Vec::new();
+        let keys: Vec<LanguageServerKey> = state
+            .servers
+            .iter()
+            .filter(|(key, record)| {
+                key.workspace_id == workspace_id
+                    && key.workspace_root == workspace_root
+                    && (record.state == ServerState::Running
+                        || (!record.open_documents.is_empty()
+                            && record.state != ServerState::MissingCommand))
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+
+        for key in keys {
+            let Some(profile) = state.test_profiles.get(&key.language).cloned() else {
+                continue;
+            };
+            let server_profile = server_profile(key.language);
+            let Some(record) = state.servers.get_mut(&key) else {
+                continue;
+            };
+
+            let (transport_ready, _) =
+                self.ensure_transport(workspace_root, &server_profile, profile.available, record);
+            if !transport_ready {
+                continue;
+            }
+
+            let (response, diagnostics) = {
+                self.request(
+                    workspace_root,
+                    "",
+                    "workspace/symbol",
+                    serde_json::json!({
+                        "query": "",
+                    }),
+                    record,
+                )?
+            };
+
+            for (relative_path, items) in diagnostics {
+                state.diagnostics.insert(
+                    (
+                        key.workspace_id.to_string(),
+                        key.workspace_root.to_string(),
+                        relative_path,
+                    ),
+                    items,
+                );
+            }
+
+            symbols.extend(as_result_array(response));
+        }
+
+        Ok(symbols)
+    }
+
+    fn with_opened_server_record<T>(
+        &self,
+        workspace_id: &str,
+        workspace_root: &str,
+        path: &str,
+        callback: impl FnOnce(
+            &mut LanguageServerRecord,
+            &LanguageServerProfile,
+        ) -> Result<(T, Vec<(String, Vec<LspDiagnostic>)>), String>,
+    ) -> Result<T, String> {
+        let language = detect_language(path).ok_or_else(|| "unsupported file type".to_string())?;
+        let mut state = self.state.lock().map_err(|err| err.to_string())?;
+        let profile = state
+            .test_profiles
+            .get(&language)
+            .cloned()
+            .unwrap_or(TestServerProfile {
+                language,
+                available: false,
+            });
+
+        let server_profile = server_profile(language);
+        let key = LanguageServerKey {
+            workspace_id: workspace_id.to_string(),
+            workspace_root: workspace_root.to_string(),
+            language,
+        };
+        let record = state.servers.get_mut(&key).ok_or_else(|| {
+            format!("language server not found for {workspace_id} at {workspace_root}")
+        })?;
+
+        let (transport_ready, _) =
+            self.ensure_transport(workspace_root, &server_profile, profile.available, record);
+        if !transport_ready {
+            return Err(format!(
+                "language server {} not running",
+                record.display_name
+            ));
+        }
+
+        let (response, diagnostics) = callback(record, &server_profile)?;
+        for (relative_path, entries) in diagnostics {
+            state.diagnostics.insert(
+                (
+                    workspace_id.to_string(),
+                    workspace_root.to_string(),
+                    relative_path,
+                ),
+                entries,
+            );
+        }
+
+        Ok(response)
     }
 
     pub fn open_document(
@@ -294,13 +1504,13 @@ impl LanguageServerManager {
         workspace_id: String,
         workspace_root: String,
         path: String,
-        _content: String,
+        content: String,
     ) -> Result<LanguageServerStatus, String> {
         self.open_document_at(
             workspace_id,
             workspace_root,
             path,
-            _content,
+            content,
             current_unix_millis(),
         )
     }
@@ -310,7 +1520,7 @@ impl LanguageServerManager {
         workspace_id: String,
         workspace_root: String,
         path: String,
-        _content: String,
+        content: String,
         now: u64,
     ) -> Result<LanguageServerStatus, String> {
         let Some(language) = detect_language(&path) else {
@@ -343,29 +1553,97 @@ impl LanguageServerManager {
             language,
         };
 
-        let entry = state.servers.entry(key.clone()).or_insert_with(|| {
-            let mut record = LanguageServerRecord::from_profile(&server_profile, profile.available);
-            if !profile.available {
-                record.last_error = Some("command not available".to_string());
-            }
-            record
-        });
-
-        if profile.available {
-            entry.state = ServerState::Running;
-            entry.last_error = None;
-            if let Some(pid) = entry.pid {
-                if let Some(memory_bytes) = sample_memory_bytes(pid) {
-                    entry.memory_bytes = Some(memory_bytes);
+        let mut diagnostics = Vec::new();
+        let mut logs = Vec::new();
+        {
+            let entry = state.servers.entry(key.clone()).or_insert_with(|| {
+                let mut record =
+                    LanguageServerRecord::from_profile(&server_profile, profile.available);
+                if !profile.available {
+                    record.last_error = Some("command not available".to_string());
                 }
-            }
-        } else {
-            entry.state = ServerState::MissingCommand;
-            entry.last_error = Some("command not available".to_string());
-        }
-        entry.open_documents.insert(path);
-        entry.last_used_at = now;
+                record
+            });
+            let was_open = entry.open_documents.contains(&path);
+            let previous_content = entry.open_contents.get(&path).cloned();
+            let was_running_initialized = entry.state == ServerState::Running && entry.initialized;
+            let version = if previous_content.as_deref() == Some(content.as_str()) {
+                *entry.open_versions.get(&path).unwrap_or(&1)
+            } else {
+                entry
+                    .open_versions
+                    .get(&path)
+                    .copied()
+                    .unwrap_or(0)
+                    .saturating_add(1)
+            };
+            entry.open_documents.insert(path.clone());
+            entry.open_contents.insert(path.clone(), content.clone());
+            entry.open_versions.insert(path.clone(), version);
+            entry.last_used_at = now;
 
+            let (transport_ready, transport_recovered) =
+                self.ensure_transport(&workspace_root, &server_profile, profile.available, entry);
+            if transport_ready {
+                let notification_result = if !was_running_initialized || transport_recovered {
+                    Ok(())
+                } else if was_open {
+                    if previous_content.as_deref() == Some(content.as_str()) {
+                        Ok(())
+                    } else {
+                        self.send_did_change(&workspace_root, &path, &content, version, entry)
+                    }
+                } else {
+                    self.send_did_open(&workspace_root, &path, &content, version, entry)
+                };
+
+                if let Err(error) = notification_result {
+                    entry.state = ServerState::Error;
+                    entry.last_error = Some(error);
+                    Self::stop_transport(entry);
+                }
+            } else if let Some(last_error) = entry.last_error.clone() {
+                if is_missing_command_error(&last_error) {
+                    entry.state = ServerState::MissingCommand;
+                } else {
+                    entry.state = ServerState::Error;
+                }
+            } else {
+                entry.state = ServerState::Error;
+                entry.last_error = Some("language server not running".to_string());
+            }
+
+            if let Some(log_line) = Self::refresh_transport_state(entry) {
+                logs.push(log_line);
+            }
+            diagnostics.extend(self.drain_publish_diagnostics(&workspace_root, entry));
+        }
+
+        for log_line in logs {
+            append_workspace_log(
+                state
+                    .logs
+                    .entry((workspace_id.clone(), workspace_root.clone()))
+                    .or_default(),
+                log_line,
+            );
+        }
+
+        for (relative_path, values) in diagnostics {
+            state.diagnostics.insert(
+                (
+                    workspace_id.to_string(),
+                    workspace_root.to_string(),
+                    relative_path,
+                ),
+                values,
+            );
+        }
+
+        let entry = state
+            .servers
+            .get(&key)
+            .ok_or_else(|| "language server record vanished".to_string())?;
         Ok(entry.status(&key.workspace_id, &key.workspace_root, key.language))
     }
 
@@ -391,45 +1669,58 @@ impl LanguageServerManager {
                 language,
                 available: false,
             });
-        let entry = state.servers.get_mut(&key).ok_or_else(|| {
-            format!("language server not found for {workspace_id} at {workspace_root}")
-        })?;
-        let (status, log_line) = {
-            let display_name = entry.display_name.clone();
-            if let Some(pid) = entry.pid {
-                if let Some(memory_bytes) = sample_memory_bytes(pid) {
-                    entry.memory_bytes = Some(memory_bytes);
-                }
-            }
+        let profile_available = profile.available;
+        let server_profile = server_profile(language);
 
-            if profile.available {
-                entry.state = ServerState::Running;
-                entry.last_error = None;
-                (
-                    entry.status(&key.workspace_id, &key.workspace_root, key.language),
-                    format!("restarted {}", display_name),
-                )
+        let log_line = {
+            let entry = state.servers.entry(key.clone()).or_insert_with(|| {
+                let mut record =
+                    LanguageServerRecord::from_profile(&server_profile, profile_available);
+                if !profile_available {
+                    record.last_error = Some("command not available".to_string());
+                }
+                record
+            });
+
+            Self::stop_transport(entry);
+
+            let log_line = if profile_available {
+                match self.start_transport(workspace_root, &server_profile, entry) {
+                    Ok(()) => match self.replay_open_documents(workspace_root, entry) {
+                        Ok(()) => {
+                            entry.last_error = None;
+                            format!("restarted {}", entry.display_name)
+                        }
+                        Err(error) => {
+                            entry.state = ServerState::Error;
+                            entry.last_error = Some(error);
+                            Self::stop_transport(entry);
+                            format!("failed to restart {}", entry.display_name)
+                        }
+                    },
+                    Err(error) => {
+                        entry.state = ServerState::Error;
+                        entry.last_error = Some(error);
+                        format!("failed to restart {}", entry.display_name)
+                    }
+                }
             } else {
                 entry.state = ServerState::MissingCommand;
                 entry.last_error = Some("command not available".to_string());
-                (
-                    entry.status(&key.workspace_id, &key.workspace_root, key.language),
-                    format!("failed to restart {}", display_name),
-                )
-            }
+                format!("failed to restart {}", entry.display_name)
+            };
+
+            entry.last_used_at = current_unix_millis();
+            log_line
         };
 
-        entry.last_used_at = current_unix_millis();
+        Self::append_workspace_log(&mut state, &key.workspace_id, &key.workspace_root, log_line);
 
-        append_workspace_log(
-            state
-                .logs
-                .entry((workspace_id.to_string(), workspace_root.to_string()))
-                .or_default(),
-            log_line,
-        );
-
-        Ok(status)
+        let entry = state
+            .servers
+            .get(&key)
+            .ok_or_else(|| "language server record vanished".to_string())?;
+        Ok(entry.status(&key.workspace_id, &key.workspace_root, key.language))
     }
 
     pub fn server_logs(&self, workspace_id: &str, workspace_root: &str) -> Vec<String> {
@@ -484,54 +1775,103 @@ impl LanguageServerManager {
             workspace_root: workspace_root.clone(),
             language,
         };
-        if let Some(entry) = state.servers.get_mut(&key) {
-            entry.open_documents.remove(&path);
-            if entry.state == ServerState::Running && entry.open_documents.is_empty() {
-                entry.state = ServerState::Stopped;
-                entry.pid = None;
-                entry.memory_bytes = None;
+        let status = if let Some(entry) = state.servers.get_mut(&key) {
+            let was_open = entry.open_documents.remove(&path);
+            entry.open_contents.remove(&path);
+            entry.open_versions.remove(&path);
+
+            if was_open && entry.state == ServerState::Running {
+                if let Err(error) = self.send_did_close(&workspace_root, &path, entry) {
+                    entry.last_error = Some(error);
+                }
             }
+
+            if entry.open_documents.is_empty() && entry.state == ServerState::Running {
+                Self::stop_transport(entry);
+                entry.state = ServerState::Stopped;
+            }
+
             entry.last_used_at = current_unix_millis();
-            return Ok(entry.status(&key.workspace_id, &key.workspace_root, key.language));
-        }
+            entry.status(&key.workspace_id, &key.workspace_root, key.language)
+        } else {
+            let profile =
+                state
+                    .test_profiles
+                    .get(&language)
+                    .cloned()
+                    .unwrap_or(TestServerProfile {
+                        language,
+                        available: false,
+                    });
 
-        let profile = state
-            .test_profiles
-            .get(&language)
-            .cloned()
-            .unwrap_or(TestServerProfile {
+            LanguageServerStatus {
+                workspace_id,
+                workspace_root,
                 language,
-                available: false,
-            });
+                display_name: server_profile(language).display_name,
+                state: if profile.available {
+                    ServerState::Stopped
+                } else {
+                    ServerState::MissingCommand
+                },
+                pid: None,
+                memory_bytes: None,
+                open_documents: 0,
+                last_error: None,
+            }
+        };
 
-        Ok(LanguageServerStatus {
-            workspace_id,
-            workspace_root,
-            language,
-            display_name: server_profile(language).display_name,
-            state: if profile.available {
-                ServerState::Stopped
-            } else {
-                ServerState::MissingCommand
-            },
-            pid: None,
-            memory_bytes: None,
-            open_documents: 0,
-            last_error: None,
-        })
+        Ok(status)
     }
 
     pub fn statuses(&self) -> Vec<LanguageServerStatus> {
-        let Ok(state) = self.state.lock() else {
+        let Ok(mut state) = self.state.lock() else {
             return Vec::new();
         };
-        let mut statuses = state
-            .servers
-            .iter()
-            .map(|(key, record)| {
-                record.status(&key.workspace_id, &key.workspace_root, key.language)
-            })
-            .collect::<Vec<_>>();
+        let keys: Vec<LanguageServerKey> = state.servers.keys().cloned().collect();
+        let mut statuses = Vec::with_capacity(keys.len());
+        let mut logs = Vec::new();
+        let mut diagnostic_updates = Vec::new();
+
+        for key in keys {
+            if let Some(record) = state.servers.get_mut(&key) {
+                if let Some(log_line) = Self::refresh_transport_state(record) {
+                    logs.push((
+                        key.workspace_id.clone(),
+                        key.workspace_root.clone(),
+                        log_line,
+                    ));
+                }
+                for (path, diagnostics) in
+                    self.drain_publish_diagnostics(&key.workspace_root, record)
+                {
+                    diagnostic_updates.push((
+                        key.workspace_id.clone(),
+                        key.workspace_root.clone(),
+                        path,
+                        diagnostics,
+                    ));
+                }
+                statuses.push(record.status(&key.workspace_id, &key.workspace_root, key.language));
+            }
+        }
+
+        for (workspace_id, workspace_root, path, diagnostics) in diagnostic_updates {
+            state
+                .diagnostics
+                .insert((workspace_id, workspace_root, path), diagnostics);
+        }
+
+        for (workspace_id, workspace_root, line) in logs {
+            append_workspace_log(
+                state
+                    .logs
+                    .entry((workspace_id, workspace_root))
+                    .or_default(),
+                line,
+            );
+        }
+
         statuses.sort_by(|left, right| {
             left.workspace_id
                 .cmp(&right.workspace_id)
@@ -561,16 +1901,11 @@ impl LanguageServerManager {
         path: &str,
     ) -> Option<LanguageServerStatus> {
         let language = detect_language(path)?;
-        let state = self.state.lock().ok()?;
-        let key = LanguageServerKey {
-            workspace_id: workspace_id.to_string(),
-            workspace_root: workspace_root.to_string(),
-            language,
-        };
-        state
-            .servers
-            .get(&key)
-            .map(|entry| entry.status(&key.workspace_id, &key.workspace_root, key.language))
+        self.statuses().into_iter().find(|status| {
+            status.workspace_id == workspace_id
+                && status.workspace_root == workspace_root
+                && status.language == language
+        })
     }
 
     pub fn store_diagnostics(
@@ -592,6 +1927,36 @@ impl LanguageServerManager {
         }
     }
 
+    fn drain_workspace_diagnostics(
+        &self,
+        state: &mut LanguageServerManagerState,
+        workspace_id: &str,
+        workspace_root: &str,
+    ) {
+        let keys = state
+            .servers
+            .keys()
+            .filter(|key| key.workspace_id == workspace_id && key.workspace_root == workspace_root)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut diagnostic_updates = Vec::new();
+
+        for key in keys {
+            if let Some(record) = state.servers.get_mut(&key) {
+                for (path, diagnostics) in self.drain_publish_diagnostics(workspace_root, record) {
+                    diagnostic_updates.push((path, diagnostics));
+                }
+            }
+        }
+
+        for (path, diagnostics) in diagnostic_updates {
+            state.diagnostics.insert(
+                (workspace_id.to_string(), workspace_root.to_string(), path),
+                diagnostics,
+            );
+        }
+    }
+
     pub fn document_diagnostics(
         &self,
         workspace_id: &str,
@@ -601,6 +1966,8 @@ impl LanguageServerManager {
         let Ok(state) = self.state.lock() else {
             return Vec::new();
         };
+        let mut state = state;
+        self.drain_workspace_diagnostics(&mut state, workspace_id, workspace_root);
         state
             .diagnostics
             .get(&(
@@ -620,6 +1987,8 @@ impl LanguageServerManager {
         let Ok(state) = self.state.lock() else {
             return Vec::new();
         };
+        let mut state = state;
+        self.drain_workspace_diagnostics(&mut state, workspace_id, workspace_root);
         let mut diagnostics = Vec::new();
         for ((candidate_workspace_id, candidate_workspace_root, _path), diagnostic) in
             &state.diagnostics
@@ -636,14 +2005,42 @@ impl LanguageServerManager {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
-        for record in state.servers.values_mut() {
+        let mut keys: Vec<LanguageServerKey> = state.servers.keys().cloned().collect();
+        keys.retain(|key| {
+            state.servers.get(key).is_some_and(|record| {
+                record.state == ServerState::Running
+                    && now_ms.saturating_sub(record.last_used_at) > idle_timeout_ms
+            })
+        });
+
+        let mut logs = Vec::new();
+
+        for key in keys {
+            let Some(record) = state.servers.get_mut(&key) else {
+                continue;
+            };
+
             if record.state == ServerState::Running
                 && now_ms.saturating_sub(record.last_used_at) > idle_timeout_ms
             {
+                logs.push((
+                    key.workspace_id.clone(),
+                    key.workspace_root.clone(),
+                    format!("{} idle timeout", record.display_name),
+                ));
+                Self::stop_transport(record);
                 record.state = ServerState::Stopped;
-                record.pid = None;
-                record.memory_bytes = None;
             }
+        }
+
+        for (workspace_id, workspace_root, line) in logs {
+            append_workspace_log(
+                state
+                    .logs
+                    .entry((workspace_id, workspace_root))
+                    .or_default(),
+                line,
+            );
         }
     }
 }
@@ -691,6 +2088,95 @@ impl LspState {
     ) -> Result<LanguageServerStatus, String> {
         let manager = self.manager.lock().map_err(|err| err.to_string())?;
         manager.close_document(workspace_id, workspace_root, path)
+    }
+
+    pub fn hover(
+        &self,
+        workspace_id: String,
+        workspace_root: String,
+        path: String,
+        line: u32,
+        character: u32,
+    ) -> Result<serde_json::Value, String> {
+        let manager = self.manager.lock().map_err(|err| err.to_string())?;
+        manager.hover(&workspace_id, &workspace_root, &path, line, character)
+    }
+
+    pub fn definition(
+        &self,
+        workspace_id: String,
+        workspace_root: String,
+        path: String,
+        line: u32,
+        character: u32,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let manager = self.manager.lock().map_err(|err| err.to_string())?;
+        manager.definition(&workspace_id, &workspace_root, &path, line, character)
+    }
+
+    pub fn references(
+        &self,
+        workspace_id: String,
+        workspace_root: String,
+        path: String,
+        line: u32,
+        character: u32,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let manager = self.manager.lock().map_err(|err| err.to_string())?;
+        manager.references(&workspace_id, &workspace_root, &path, line, character)
+    }
+
+    pub fn completion(
+        &self,
+        workspace_id: String,
+        workspace_root: String,
+        path: String,
+        line: u32,
+        character: u32,
+    ) -> Result<serde_json::Value, String> {
+        let manager = self.manager.lock().map_err(|err| err.to_string())?;
+        manager.completion(&workspace_id, &workspace_root, &path, line, character)
+    }
+
+    pub fn code_actions(
+        &self,
+        workspace_id: String,
+        workspace_root: String,
+        path: String,
+        line: u32,
+        character: u32,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let manager = self.manager.lock().map_err(|err| err.to_string())?;
+        manager.code_actions(&workspace_id, &workspace_root, &path, line, character)
+    }
+
+    pub fn symbols(
+        &self,
+        workspace_id: String,
+        workspace_root: String,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let manager = self.manager.lock().map_err(|err| err.to_string())?;
+        manager.symbols(&workspace_id, &workspace_root)
+    }
+
+    pub fn rename(
+        &self,
+        workspace_id: String,
+        workspace_root: String,
+        path: String,
+        line: u32,
+        character: u32,
+        new_name: String,
+    ) -> Result<serde_json::Value, String> {
+        let manager = self.manager.lock().map_err(|err| err.to_string())?;
+        manager.rename(
+            &workspace_id,
+            &workspace_root,
+            &path,
+            line,
+            character,
+            &new_name,
+        )
     }
 
     pub fn restart_server(
@@ -1148,5 +2634,1046 @@ mod tests {
         assert_eq!(status[0].state, ServerState::Stopped);
         assert_eq!(status[0].pid, None);
         assert_eq!(status[0].memory_bytes, None);
+    }
+
+    #[derive(Clone, Default)]
+    struct TransportFixtureState {
+        sent: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+        responses: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<serde_json::Value>>>,
+        events: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<serde_json::Value>>>,
+        stopped: std::sync::Arc<std::sync::Mutex<bool>>,
+        send_calls: std::sync::Arc<std::sync::Mutex<usize>>,
+        send_fail_at: std::sync::Arc<std::sync::Mutex<Option<usize>>>,
+    }
+
+    struct TestTransport {
+        state: TransportFixtureState,
+    }
+
+    impl TestTransport {
+        fn new(state: TransportFixtureState) -> Self {
+            *state.stopped.lock().expect("stopped lock") = false;
+            Self { state }
+        }
+
+        fn push_response(&self, response: serde_json::Value) {
+            self.state
+                .responses
+                .lock()
+                .expect("responses lock")
+                .push_back(response);
+        }
+
+        fn push_event(&self, event: serde_json::Value) {
+            self.state
+                .events
+                .lock()
+                .expect("events lock")
+                .push_back(event);
+        }
+
+        fn fail_send_on_call(&self, call: usize) {
+            *self.state.send_fail_at.lock().expect("send fail lock") = Some(call);
+        }
+
+        fn sent_messages(&self) -> Vec<serde_json::Value> {
+            self.state.sent.lock().expect("sent lock").clone()
+        }
+    }
+
+    impl LspTransport for TestTransport {
+        fn pid(&self) -> Option<u32> {
+            Some(42_424)
+        }
+
+        fn is_running(&mut self) -> bool {
+            !*self.state.stopped.lock().expect("running lock")
+        }
+
+        fn send(&mut self, value: serde_json::Value) -> Result<(), String> {
+            if *self.state.stopped.lock().expect("stopped lock") {
+                return Err("transport stopped".to_string());
+            }
+            let mut send_calls = self.state.send_calls.lock().expect("send calls lock");
+            *send_calls += 1;
+            let should_fail_on_call = *self.state.send_fail_at.lock().expect("send fail lock");
+            if Some(*send_calls) == should_fail_on_call {
+                return Err("simulated transport send failure".to_string());
+            }
+            self.state.sent.lock().expect("sent lock").push(value);
+            Ok(())
+        }
+
+        fn request(
+            &mut self,
+            value: serde_json::Value,
+            _timeout: std::time::Duration,
+        ) -> Result<serde_json::Value, String> {
+            if *self.state.stopped.lock().expect("stopped lock") {
+                return Err("transport stopped".to_string());
+            }
+            self.state
+                .sent
+                .lock()
+                .expect("sent lock")
+                .push(value.clone());
+            if let Some(response) = self
+                .state
+                .responses
+                .lock()
+                .expect("responses lock")
+                .pop_front()
+            {
+                return Ok(response);
+            }
+
+            let id = value
+                .get("id")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            Ok(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": serde_json::json!({}),
+            }))
+        }
+
+        fn poll_events(&mut self) -> Vec<serde_json::Value> {
+            self.state
+                .events
+                .lock()
+                .expect("events lock")
+                .drain(..)
+                .collect()
+        }
+
+        fn stop(&mut self) {
+            *self.state.stopped.lock().expect("stopped lock") = true;
+        }
+    }
+
+    #[test]
+    fn opening_supported_document_sends_initialize_and_did_open() {
+        let capture = TransportFixtureState::default();
+        let transport = TestTransport::new(capture.clone());
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": serde_json::json!({}),
+        }));
+
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::Rust)],
+            move |_profile| Ok(Box::new(TestTransport::new(capture.clone()))),
+        );
+
+        let status = manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}".to_string(),
+            )
+            .expect("open document");
+
+        assert_eq!(status.state, ServerState::Running);
+
+        let messages = transport.sent_messages();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(
+            messages[0].get("method").and_then(|value| value.as_str()),
+            Some("initialize")
+        );
+        assert_eq!(
+            messages[1].get("method").and_then(|value| value.as_str()),
+            Some("initialized")
+        );
+        assert_eq!(
+            messages[2].get("method").and_then(|value| value.as_str()),
+            Some("textDocument/didOpen")
+        );
+    }
+
+    #[test]
+    fn opening_typescript_document_uses_typescript_language_id() {
+        let capture = TransportFixtureState::default();
+        let transport = TestTransport::new(capture.clone());
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": serde_json::json!({}),
+        }));
+
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::TypeScript)],
+            move |_profile| Ok(Box::new(TestTransport::new(capture.clone()))),
+        );
+
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/app.ts".to_string(),
+                "export const answer = 42;".to_string(),
+            )
+            .expect("open document");
+
+        let messages = transport.sent_messages();
+        let did_open = messages
+            .iter()
+            .find(|message| {
+                message.get("method").and_then(|value| value.as_str())
+                    == Some("textDocument/didOpen")
+            })
+            .expect("didOpen message");
+
+        assert_eq!(
+            did_open
+                .pointer("/params/textDocument/languageId")
+                .and_then(|value| value.as_str()),
+            Some("typescript")
+        );
+    }
+
+    #[test]
+    fn duplicate_open_sends_did_change_instead_of_second_did_open() {
+        let capture = TransportFixtureState::default();
+        let transport = TestTransport::new(capture.clone());
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": serde_json::json!({}),
+        }));
+
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::Rust)],
+            move |_profile| Ok(Box::new(TestTransport::new(capture.clone()))),
+        );
+
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}\n".to_string(),
+            )
+            .expect("open first version");
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() { println!(\"hi\"); }\n".to_string(),
+            )
+            .expect("open second version");
+
+        let methods = transport
+            .sent_messages()
+            .into_iter()
+            .filter_map(|message| {
+                message
+                    .get("method")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            methods
+                .iter()
+                .filter(|method| method.as_str() == "textDocument/didOpen")
+                .count(),
+            1
+        );
+        assert_eq!(
+            methods
+                .iter()
+                .filter(|method| method.as_str() == "textDocument/didChange")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn closing_one_of_two_open_documents_sends_did_close_without_stopping_server() {
+        let capture = TransportFixtureState::default();
+        let transport = TestTransport::new(capture.clone());
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": serde_json::json!({}),
+        }));
+
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::Rust)],
+            move |_profile| Ok(Box::new(TestTransport::new(capture.clone()))),
+        );
+
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}\n".to_string(),
+            )
+            .expect("open main");
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/lib.rs".to_string(),
+                "pub fn lib() {}\n".to_string(),
+            )
+            .expect("open lib");
+
+        let status = manager
+            .close_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+            )
+            .expect("close main");
+
+        assert_eq!(status.state, ServerState::Running);
+        assert_eq!(status.open_documents, 1);
+        assert!(transport.sent_messages().iter().any(|message| {
+            message.get("method").and_then(serde_json::Value::as_str)
+                == Some("textDocument/didClose")
+                && message
+                    .pointer("/params/textDocument/uri")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("file:///workspace/src/main.rs")
+        }));
+    }
+
+    #[test]
+    fn restart_replays_tracked_open_documents() {
+        let capture = TransportFixtureState::default();
+        let transport = TestTransport::new(capture.clone());
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": serde_json::json!({}),
+        }));
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": serde_json::json!({}),
+        }));
+
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::Rust)],
+            move |_profile| Ok(Box::new(TestTransport::new(capture.clone()))),
+        );
+
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}\n".to_string(),
+            )
+            .expect("open");
+        manager
+            .restart_server("workspace", "/workspace", LanguageId::Rust)
+            .expect("restart");
+
+        assert_eq!(
+            transport
+                .sent_messages()
+                .iter()
+                .filter(|message| {
+                    message.get("method").and_then(serde_json::Value::as_str)
+                        == Some("textDocument/didOpen")
+                })
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn opening_documents_consumes_publish_diagnostics_events() {
+        let capture = TransportFixtureState::default();
+        let transport = TestTransport::new(capture.clone());
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": serde_json::json!({}),
+        }));
+
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::Rust)],
+            move |_profile| Ok(Box::new(TestTransport::new(capture.clone()))),
+        );
+        transport.push_event(serde_json::json!({
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+                "uri": "file:///workspace/src/main.rs",
+                "diagnostics": [{
+                    "range": {
+                        "start": { "line": 1, "character": 0 },
+                        "end": { "line": 1, "character": 4 },
+                    },
+                    "severity": 1,
+                    "message": "unexpected token",
+                    "source": "test",
+                }],
+            },
+        }));
+
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}".to_string(),
+            )
+            .expect("open");
+
+        let diagnostics = manager.document_diagnostics("workspace", "/workspace", "src/main.rs");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].message, "unexpected token");
+        assert_eq!(diagnostics[0].path, "src/main.rs");
+    }
+
+    #[test]
+    fn workspace_diagnostics_drain_events_that_arrive_after_open() {
+        let capture = TransportFixtureState::default();
+        let transport = TestTransport::new(capture.clone());
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": serde_json::json!({}),
+        }));
+
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::Rust)],
+            move |_profile| Ok(Box::new(TestTransport::new(capture.clone()))),
+        );
+
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}".to_string(),
+            )
+            .expect("open");
+        transport.push_event(serde_json::json!({
+            "method": "textDocument/publishDiagnostics",
+            "params": {
+                "uri": "file:///workspace/src/main.rs",
+                "diagnostics": [{
+                    "range": {
+                        "start": { "line": 2, "character": 0 },
+                        "end": { "line": 2, "character": 4 },
+                    },
+                    "severity": 2,
+                    "message": "late diagnostic",
+                    "source": "test",
+                }],
+            },
+        }));
+
+        let diagnostics = manager.workspace_diagnostics("workspace", "/workspace");
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].message, "late diagnostic");
+    }
+
+    #[test]
+    fn missing_command_reports_missing_state_without_starting_servers() {
+        let capture = TransportFixtureState::default();
+        let _unused_transport = TestTransport::new(capture);
+
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::Rust)],
+            |_profile| Err("command not found".to_string()),
+        );
+
+        let status = manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}".to_string(),
+            )
+            .expect("open document");
+
+        assert_eq!(status.state, ServerState::MissingCommand);
+        assert_eq!(status.last_error, Some("command not found".to_string()),);
+    }
+
+    #[test]
+    fn provider_requests_return_raw_lsp_results() {
+        let capture = TransportFixtureState::default();
+        let transport = TestTransport::new(capture.clone());
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": serde_json::json!({}),
+        }));
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": serde_json::json!({
+                "contents": "hover payload",
+            }),
+        }));
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "result": serde_json::json!([{
+                "uri": "file:///workspace/src/main.rs",
+            }]),
+        }));
+
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::Rust)],
+            move |_profile| Ok(Box::new(TestTransport::new(capture.clone()))),
+        );
+
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}".to_string(),
+            )
+            .expect("open");
+
+        let hover = manager
+            .hover("workspace", "/workspace", "src/main.rs", 0, 5)
+            .expect("hover");
+        let definition = manager
+            .definition("workspace", "/workspace", "src/main.rs", 0, 5)
+            .expect("definition");
+
+        assert_eq!(hover, serde_json::json!({ "contents": "hover payload" }));
+        assert_eq!(
+            definition,
+            vec![serde_json::json!({
+                "uri": "file:///workspace/src/main.rs",
+            })],
+        );
+    }
+
+    #[test]
+    fn completion_preserves_completion_list_shape() {
+        let capture = TransportFixtureState::default();
+        let transport = TestTransport::new(capture.clone());
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": serde_json::json!({}),
+        }));
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {
+                "isIncomplete": true,
+                "items": [{
+                    "label": "main",
+                    "kind": 3,
+                    "insertText": "main()",
+                }],
+            },
+        }));
+
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::Rust)],
+            move |_profile| Ok(Box::new(TestTransport::new(capture.clone()))),
+        );
+
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}".to_string(),
+            )
+            .expect("open");
+
+        let completion = manager
+            .completion("workspace", "/workspace", "src/main.rs", 0, 5)
+            .expect("completion");
+
+        assert_eq!(
+            completion
+                .pointer("/items/0/label")
+                .and_then(serde_json::Value::as_str),
+            Some("main")
+        );
+        assert_eq!(
+            completion
+                .get("isIncomplete")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn symbols_request_uses_lsp_workspace_symbol_method() {
+        let capture = TransportFixtureState::default();
+        let transport = TestTransport::new(capture.clone());
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": serde_json::json!({}),
+        }));
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": [],
+        }));
+
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::Rust)],
+            move |_profile| Ok(Box::new(TestTransport::new(capture.clone()))),
+        );
+
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}".to_string(),
+            )
+            .expect("open");
+        manager.symbols("workspace", "/workspace").expect("symbols");
+
+        assert!(transport.sent_messages().iter().any(|message| {
+            message.get("method").and_then(serde_json::Value::as_str) == Some("workspace/symbol")
+        }));
+    }
+
+    #[test]
+    fn symbols_request_recovers_stopped_server_with_open_documents() {
+        let capture = TransportFixtureState::default();
+        let transport = TestTransport::new(capture.clone());
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": serde_json::json!({}),
+        }));
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": serde_json::json!({}),
+        }));
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "result": [],
+        }));
+
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::Rust)],
+            move |_profile| Ok(Box::new(TestTransport::new(capture.clone()))),
+        );
+
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}".to_string(),
+            )
+            .expect("open document");
+
+        {
+            let mut state = manager.state.lock().expect("state lock");
+            let key = LanguageServerKey {
+                workspace_id: "workspace".to_string(),
+                workspace_root: "/workspace".to_string(),
+                language: LanguageId::Rust,
+            };
+            let record = state.servers.get_mut(&key).expect("record");
+            record.state = ServerState::Stopped;
+            record.transport = None;
+            record.initialized = false;
+        }
+
+        let symbols = manager.symbols("workspace", "/workspace").expect("symbols");
+
+        assert!(transport.sent_messages().iter().any(|message| {
+            message.get("method").and_then(serde_json::Value::as_str) == Some("workspace/symbol")
+        }));
+        assert!(symbols.is_empty());
+    }
+
+    #[test]
+    fn restart_recovery_of_stopped_server_does_not_duplicate_did_open_for_new_document() {
+        let capture = TransportFixtureState::default();
+        let transport = TestTransport::new(capture.clone());
+        let closure_capture = capture.clone();
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": serde_json::json!({}),
+        }));
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": serde_json::json!({}),
+        }));
+
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::Rust)],
+            move |_profile| Ok(Box::new(TestTransport::new(closure_capture.clone()))),
+        );
+
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}".to_string(),
+            )
+            .expect("open first document");
+
+        {
+            let mut state = manager.state.lock().expect("state lock");
+            let key = LanguageServerKey {
+                workspace_id: "workspace".to_string(),
+                workspace_root: "/workspace".to_string(),
+                language: LanguageId::Rust,
+            };
+            let record = state.servers.get_mut(&key).expect("record");
+            record.state = ServerState::Running;
+            record.initialized = true;
+            let dead_transport = TestTransport::new(capture.clone());
+            *dead_transport
+                .state
+                .stopped
+                .lock()
+                .expect("dead transport stopped lock") = true;
+            record.transport = Some(Box::new(dead_transport));
+        }
+
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/lib.rs".to_string(),
+                "fn lib() {}".to_string(),
+            )
+            .expect("open second document");
+
+        let lib_open_count = transport
+            .sent_messages()
+            .iter()
+            .filter(|message| {
+                message.get("method").and_then(serde_json::Value::as_str)
+                    == Some("textDocument/didOpen")
+                    && message
+                        .pointer("/params/textDocument/uri")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("file:///workspace/src/lib.rs")
+            })
+            .count();
+        assert_eq!(lib_open_count, 1);
+    }
+
+    #[test]
+    fn restart_server_failure_from_did_open_marks_server_error() {
+        let capture = TransportFixtureState::default();
+        let transport = TestTransport::new(capture.clone());
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": serde_json::json!({}),
+        }));
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": serde_json::json!({}),
+        }));
+
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::Rust)],
+            move |_profile| Ok(Box::new(TestTransport::new(capture.clone()))),
+        );
+
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}".to_string(),
+            )
+            .expect("open");
+
+        transport.fail_send_on_call(4);
+
+        let restarted = manager
+            .restart_server("workspace", "/workspace", LanguageId::Rust)
+            .expect("restart");
+
+        assert_eq!(restarted.state, ServerState::Error);
+        assert_eq!(
+            restarted.last_error,
+            Some("simulated transport send failure".to_string())
+        );
+        assert!(manager
+            .server_logs("workspace", "/workspace")
+            .iter()
+            .any(|line| line.contains("failed to restart")));
+    }
+
+    #[test]
+    fn file_uri_helpers_encode_spaces_and_reject_prefix_sibling_roots() {
+        assert_eq!(
+            as_file_uri("/workspace root", "src/main file.rs"),
+            "file:///workspace%20root/src/main%20file.rs"
+        );
+        assert_eq!(
+            relative_path_from_uri(
+                "/workspace root",
+                "file:///workspace%20root/src/main%20file.rs",
+            ),
+            Some("src/main file.rs".to_string())
+        );
+        assert_eq!(
+            relative_path_from_uri("/workspace", "file:///workspace-other/src/main.rs"),
+            None
+        );
+    }
+
+    #[test]
+    fn server_requests_with_colliding_ids_are_not_treated_as_responses() {
+        assert!(!is_lsp_response_for(
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "workspace/configuration",
+                "params": {},
+            }),
+            2,
+        ));
+        assert!(is_lsp_response_for(
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {},
+            }),
+            2,
+        ));
+    }
+
+    #[test]
+    fn workspace_configuration_requests_receive_matching_response_items() {
+        let response = server_request_response(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 99,
+            "method": "workspace/configuration",
+            "params": {
+                "items": [{}, {}, {}]
+            },
+        }))
+        .expect("response");
+
+        assert_eq!(response.get("id"), Some(&serde_json::json!(99)));
+        assert_eq!(
+            response
+                .get("result")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn server_request_responses_preserve_string_json_rpc_ids() {
+        let response = server_request_response(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "cfg-1",
+            "method": "workspace/configuration",
+            "params": {
+                "items": [{}]
+            },
+        }))
+        .expect("response");
+
+        assert_eq!(response.get("id"), Some(&serde_json::json!("cfg-1")));
+        assert_eq!(
+            response
+                .get("result")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn server_requests_with_json_rpc_id_are_answered_when_waiting_for_response() {
+        let workspace = tempfile::tempdir().expect("temp workspace");
+        let script_path = workspace.path().join("mock_stdio_server.py");
+        let log_path = workspace.path().join("request-log.json");
+
+        let script = r#"
+import json
+import select
+import sys
+
+
+def write_message(message):
+    body = json.dumps(message, separators=(",", ":")).encode("utf-8")
+    sys.stdout.buffer.write(f"Content-Length: {len(body)}\r\n\r\n".encode("ascii"))
+    sys.stdout.buffer.write(body)
+    sys.stdout.buffer.flush()
+
+
+def read_frame(timeout_seconds):
+    readers, _, _ = select.select([sys.stdin.buffer], [], [], timeout_seconds)
+    if not readers:
+        return None
+
+    header = bytearray()
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        if line in (b"\r\n", b"\n"):
+            break
+        header.extend(line)
+
+    content_length = None
+    for line in header.splitlines():
+        if line.startswith(b"Content-Length:"):
+            content_length = int(line.split(b":", 1)[1].strip())
+            break
+
+    if content_length is None:
+        return None
+
+    body = sys.stdin.buffer.read(content_length)
+    return json.loads(body)
+
+
+write_message({
+    "jsonrpc": "2.0",
+    "id": 99,
+    "method": "workspace/configuration",
+    "params": {"items": [{} , {}]},
+})
+
+initialize = read_frame(1.0)
+configuration_response = read_frame(1.5)
+
+with open("__LOG_PATH__", "w", encoding="utf-8") as logfile:
+    logfile.write(json.dumps(configuration_response))
+
+write_message({
+    "jsonrpc": "2.0",
+    "id": (initialize.get("id") if isinstance(initialize, dict) else 1),
+    "result": {},
+})
+"#;
+        let script = script.replace("__LOG_PATH__", &log_path.to_string_lossy());
+        std::fs::write(&script_path, script).expect("write script");
+
+        let profile = LanguageServerProfile {
+            language: LanguageId::Rust,
+            display_name: "mock-lsp".to_string(),
+            command: "python3".to_string(),
+            args: vec![script_path.to_string_lossy().to_string()],
+        };
+        let mut transport = StdioTransport::new(&profile).expect("create transport");
+
+        let response = transport
+            .request(
+                request_payload("initialize", 1, serde_json::json!({})),
+                std::time::Duration::from_millis(2500),
+            )
+            .expect("request");
+        assert_eq!(
+            response
+                .get("result")
+                .and_then(serde_json::Value::as_object),
+            Some(&serde_json::Map::new())
+        );
+
+        let log = std::fs::read_to_string(log_path).expect("read log");
+        let response: serde_json::Value =
+            serde_json::from_str(&log).unwrap_or(serde_json::json!(null));
+        assert_eq!(response.get("id"), Some(&serde_json::json!(99)));
+        assert!(response.get("result").is_some());
+    }
+
+    #[test]
+    #[ignore = "requires rust-analyzer, typescript-language-server, and pylsp on PATH"]
+    fn real_language_servers_open_baseline_documents() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let workspace_root = workspace
+            .path()
+            .to_str()
+            .expect("workspace path")
+            .to_string();
+        std::fs::create_dir_all(workspace.path().join("src")).expect("src dir");
+        std::fs::write(
+            workspace.path().join("Cargo.toml"),
+            "[package]\nname = \"lsp_smoke\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .expect("cargo manifest");
+        std::fs::write(workspace.path().join("src/main.rs"), "fn main() {}\n").expect("rust file");
+        std::fs::write(workspace.path().join("package.json"), "{}\n").expect("package manifest");
+        std::fs::write(
+            workspace.path().join("src/app.ts"),
+            "export const answer: number = 42;\n",
+        )
+        .expect("typescript file");
+        std::fs::write(
+            workspace.path().join("src/app.js"),
+            "export const answer = 42;\n",
+        )
+        .expect("javascript file");
+        std::fs::write(workspace.path().join("app.py"), "answer = 42\n").expect("python file");
+
+        let manager = LanguageServerManager::new();
+        let documents = [
+            ("src/main.rs", "fn main() {}\n", LanguageId::Rust),
+            (
+                "src/app.ts",
+                "export const answer: number = 42;\n",
+                LanguageId::TypeScript,
+            ),
+            (
+                "src/app.js",
+                "export const answer = 42;\n",
+                LanguageId::JavaScript,
+            ),
+            ("app.py", "answer = 42\n", LanguageId::Python),
+        ];
+        for (path, content, language) in documents {
+            let status = manager
+                .open_document(
+                    "workspace".to_string(),
+                    workspace_root.clone(),
+                    path.to_string(),
+                    content.to_string(),
+                )
+                .unwrap_or_else(|error| panic!("{language:?} open failed: {error}"));
+
+            assert_eq!(status.language, language);
+            assert_eq!(
+                status.state,
+                ServerState::Running,
+                "{language:?} should run, last_error: {:?}",
+                status.last_error
+            );
+            assert!(status.pid.is_some(), "{language:?} should expose a pid");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        for (path, _, _) in documents {
+            let status = manager
+                .close_document(
+                    "workspace".to_string(),
+                    workspace_root.clone(),
+                    path.to_string(),
+                )
+                .unwrap_or_else(|error| panic!("{path} close failed: {error}"));
+            assert_eq!(status.state, ServerState::Stopped);
+        }
     }
 }
