@@ -355,8 +355,9 @@ impl DatabaseProfileStore {
             DatabaseKind::SQLite => {
                 let sqlite_path = input
                     .sqlite_path
-                    .map(PathBuf::from)
                     .ok_or_else(|| "sqlite path is required".to_string())?;
+                validate_not_raw_dsn("sqlite_path", &sqlite_path)?;
+                let sqlite_path = PathBuf::from(sqlite_path);
                 DatabaseConnectionSource::SQLite { path: sqlite_path }
             }
             DatabaseKind::PostgreSQL | DatabaseKind::MsSql => {
@@ -369,6 +370,12 @@ impl DatabaseProfileStore {
                 let database = input
                     .database
                     .ok_or_else(|| "database name is required".to_string())?;
+                let username = input.username;
+                if let Some(ref username) = username {
+                    validate_not_raw_dsn("username", username)?;
+                }
+                validate_not_raw_dsn("host", &host)?;
+                validate_not_raw_dsn("database", &database)?;
 
                 let secret_id = if let Some(password) = input.password.as_deref() {
                     let secret_id = previous
@@ -387,7 +394,7 @@ impl DatabaseProfileStore {
                     host,
                     port,
                     database,
-                    username: input.username,
+                    username,
                     secret_id,
                 }
             }
@@ -496,6 +503,29 @@ impl DatabaseProfileStore {
 
         result
     }
+}
+
+fn validate_not_raw_dsn(field: &str, value: &str) -> Result<(), String> {
+    if has_raw_dsn_prefix(value) {
+        return Err(format!("raw database DSNs are not accepted in {field}"));
+    }
+    Ok(())
+}
+
+fn has_raw_dsn_prefix(value: &str) -> bool {
+    const RAW_DSN_PREFIXES: [&str; 6] = [
+        "postgres://",
+        "postgresql://",
+        "mssql://",
+        "sqlserver://",
+        "sqlite://",
+        "file:",
+    ];
+
+    let lowered = value.to_lowercase();
+    RAW_DSN_PREFIXES
+        .iter()
+        .any(|prefix| lowered.starts_with(prefix))
 }
 
 #[cfg(test)]
@@ -1145,6 +1175,93 @@ mod tests {
         store.delete_profile("profile-1", &secrets).expect("delete");
 
         assert!(secrets.get_secret(&secret_id).is_err());
+    }
+
+    #[test]
+    fn profile_store_rejects_sqlite_dsn_paths_before_persisting() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = DatabaseProfileStore::new(temp.path().join("database-profiles.json"));
+        let secrets = InMemoryDatabaseSecretStore::default();
+        let result = store.save_profile(
+            DatabaseProfileInput {
+                id: None,
+                workspace_root: "/workspace".to_string(),
+                name: "legacy".to_string(),
+                kind: DatabaseKind::SQLite,
+                sqlite_path: Some("sqlite:///tmp/app.db".to_string()),
+                host: None,
+                port: None,
+                database: None,
+                username: None,
+                password: None,
+                read_only: false,
+                production: false,
+            },
+            &secrets,
+            || Ok(10),
+            || "sqlite-profile".to_string(),
+        );
+
+        let err = result.expect_err("sqlite dsn path should be rejected");
+        assert!(err.contains("raw database DSNs are not accepted"));
+
+        let profile_file = temp.path().join("database-profiles.json");
+        if profile_file.exists() {
+            let contents = std::fs::read_to_string(&profile_file).expect("database profile json");
+            assert!(!contents.contains("sqlite://"));
+            assert!(!contents.contains("app.db"));
+        }
+
+        let values = secrets.values.lock().expect("secret store lock");
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn profile_store_rejects_tcp_dsn_hosts_before_persisting() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = DatabaseProfileStore::new(temp.path().join("database-profiles.json"));
+        let secrets = InMemoryDatabaseSecretStore::default();
+        let inputs = [
+            (
+                DatabaseKind::PostgreSQL,
+                "postgres://user:pw@db/app".to_string(),
+            ),
+            (DatabaseKind::MsSql, "mssql://user:pw@db/app".to_string()),
+        ];
+
+        for (index, (kind, host)) in inputs.iter().enumerate() {
+            let result = store.save_profile(
+                DatabaseProfileInput {
+                    id: Some(format!("profile-{index}")),
+                    workspace_root: "/workspace".to_string(),
+                    name: "legacy".to_string(),
+                    kind: kind.clone(),
+                    sqlite_path: None,
+                    host: Some(host.clone()),
+                    port: Some(5432),
+                    database: Some("app".to_string()),
+                    username: Some("user".to_string()),
+                    password: Some("pw".to_string()),
+                    read_only: false,
+                    production: false,
+                },
+                &secrets,
+                || Ok(10),
+                || "tcp-profile".to_string(),
+            );
+            let err = result.expect_err("tcp dsn host should be rejected");
+            assert!(err.contains("raw database DSNs are not accepted"));
+        }
+
+        let profile_file = temp.path().join("database-profiles.json");
+        if profile_file.exists() {
+            let contents = std::fs::read_to_string(&profile_file).expect("database profile json");
+            assert!(!contents.contains("postgres://"));
+            assert!(!contents.contains("mssql://"));
+            assert!(!contents.contains("user:pw"));
+        }
+        let values = secrets.values.lock().expect("secret store lock");
+        assert!(values.is_empty());
     }
 
     #[test]
