@@ -7,6 +7,10 @@ use std::{
 pub const MAX_DOC_BYTES: u64 = 512 * 1024;
 pub const MAX_DOC_SEARCH_RESULTS: usize = 100;
 
+const MAX_INDEXED_DOCS: usize = 1_000;
+const MAX_SCANNED_ENTRIES: usize = 5_000;
+const MAX_DOC_SEARCH_BYTES: u64 = 4 * 1024 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DocIndexEntry {
     pub path: String,
@@ -49,11 +53,19 @@ pub struct DocSearchMatch {
 }
 
 pub fn index_docs(workspace_root: &Path) -> Result<Vec<DocIndexEntry>, String> {
+    index_docs_with_budget(workspace_root, DocsBudget::default())
+}
+
+fn collect_doc_entries(workspace_root: &Path, budget: DocsBudget) -> Result<DocEntryScan, String> {
+    let canonical_root = canonical_workspace_root(workspace_root)?;
     let mut paths = Vec::new();
+    let mut scanned_entries = 0;
+    let mut truncation_reason = None;
 
     for file_name in ["README.md", "AGENTS.md", "roadmap.md"] {
         let path = workspace_root.join(file_name);
-        if is_readable_doc(&path)? {
+        scanned_entries += 1;
+        if safe_doc_metadata(&canonical_root, &path)?.is_some() {
             paths.push(PathBuf::from(file_name));
         }
     }
@@ -62,26 +74,45 @@ pub fn index_docs(workspace_root: &Path) -> Result<Vec<DocIndexEntry>, String> {
     if docs_root.is_dir() {
         let walker = ignore::WalkBuilder::new(&docs_root)
             .hidden(true)
+            .sort_by_file_path(|left, right| left.cmp(right))
             .filter_entry(|entry| !is_skipped_entry(entry.path()))
             .build();
 
         for entry in walker {
             let entry = entry.map_err(|err| err.to_string())?;
+            scanned_entries += 1;
+            if scanned_entries > budget.max_scanned_entries {
+                truncation_reason = Some("docs scan limit exceeded".to_string());
+                break;
+            }
+
             let path = entry.path();
-            if path.is_file() && is_readable_doc(path)? {
+            if path.is_file() && safe_doc_metadata(&canonical_root, path)?.is_some() {
                 paths.push(relative_path(workspace_root, path)?);
             }
         }
     }
 
     paths.sort();
+    if paths.len() > budget.max_indexed_docs {
+        paths.truncate(budget.max_indexed_docs);
+        truncation_reason.get_or_insert_with(|| "docs index limit exceeded".to_string());
+    }
+
     let mut entries = Vec::with_capacity(paths.len());
     for relative in paths {
         let path = workspace_root.join(&relative);
         let content = fs::read_to_string(&path).map_err(|err| err.to_string())?;
-        let metadata = fs::metadata(&path).map_err(|err| err.to_string())?;
+        let metadata = safe_doc_metadata(&canonical_root, &path)?
+            .ok_or_else(|| format!("document not found: {}", path_to_slash(&relative)))?;
         let modified_ms = modified_ms(&metadata)?;
-        let references = reference_hints(workspace_root, &relative, modified_ms, &content)?;
+        let references = reference_hints(
+            &canonical_root,
+            workspace_root,
+            &relative,
+            modified_ms,
+            &content,
+        )?;
 
         entries.push(DocIndexEntry {
             path: path_to_slash(&relative),
@@ -93,20 +124,75 @@ pub fn index_docs(workspace_root: &Path) -> Result<Vec<DocIndexEntry>, String> {
         });
     }
 
-    Ok(entries)
+    Ok(DocEntryScan {
+        entries,
+        truncation_reason,
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DocsBudget {
+    max_indexed_docs: usize,
+    max_scanned_entries: usize,
+    max_search_bytes: u64,
+}
+
+impl DocsBudget {
+    const fn default() -> Self {
+        Self {
+            max_indexed_docs: MAX_INDEXED_DOCS,
+            max_scanned_entries: MAX_SCANNED_ENTRIES,
+            max_search_bytes: MAX_DOC_SEARCH_BYTES,
+        }
+    }
+
+    #[cfg(test)]
+    fn for_tests(
+        max_indexed_docs: usize,
+        max_scanned_entries: usize,
+        max_search_bytes: u64,
+    ) -> Self {
+        Self {
+            max_indexed_docs,
+            max_scanned_entries,
+            max_search_bytes,
+        }
+    }
+}
+
+struct DocEntryScan {
+    entries: Vec<DocIndexEntry>,
+    truncation_reason: Option<String>,
+}
+
+fn index_docs_with_budget(
+    workspace_root: &Path,
+    budget: DocsBudget,
+) -> Result<Vec<DocIndexEntry>, String> {
+    let scan = collect_doc_entries(workspace_root, budget)?;
+    if let Some(reason) = scan.truncation_reason {
+        return Err(reason);
+    }
+    Ok(scan.entries)
 }
 
 pub fn preview_doc(workspace_root: &Path, path: &str) -> Result<DocPreview, String> {
+    let canonical_root = canonical_workspace_root(workspace_root)?;
     let relative = normalize_relative_path(Path::new(path))?;
     let full_path = workspace_root.join(&relative);
-    if !is_readable_doc(&full_path)? {
+    let Some(metadata) = safe_doc_metadata(&canonical_root, &full_path)? else {
         return Err(format!("document not found: {path}"));
-    }
+    };
 
     let content = fs::read_to_string(&full_path).map_err(|err| err.to_string())?;
-    let metadata = fs::metadata(&full_path).map_err(|err| err.to_string())?;
     let modified_ms = modified_ms(&metadata)?;
-    let references = reference_hints(workspace_root, &relative, modified_ms, &content)?;
+    let references = reference_hints(
+        &canonical_root,
+        workspace_root,
+        &relative,
+        modified_ms,
+        &content,
+    )?;
 
     Ok(DocPreview {
         path: path_to_slash(&relative),
@@ -122,6 +208,15 @@ pub fn search_docs(
     query: &str,
     limit: usize,
 ) -> Result<DocSearchResult, String> {
+    search_docs_with_budget(workspace_root, query, limit, DocsBudget::default())
+}
+
+fn search_docs_with_budget(
+    workspace_root: &Path,
+    query: &str,
+    limit: usize,
+    budget: DocsBudget,
+) -> Result<DocSearchResult, String> {
     let query = query.trim();
     if query.is_empty() {
         return Ok(DocSearchResult {
@@ -131,11 +226,17 @@ pub fn search_docs(
     }
 
     let limit = limit.min(MAX_DOC_SEARCH_RESULTS);
-    let docs = index_docs(workspace_root)?;
+    let scan = collect_doc_entries(workspace_root, budget)?;
     let mut matches = Vec::new();
-    let mut truncated = false;
+    let mut truncated = scan.truncation_reason.is_some();
+    let mut searched_bytes = 0;
 
-    for doc in docs {
+    for doc in scan.entries {
+        if searched_bytes + doc.size_bytes > budget.max_search_bytes {
+            truncated = true;
+            break;
+        }
+        searched_bytes += doc.size_bytes;
         let content =
             fs::read_to_string(workspace_root.join(&doc.path)).map_err(|err| err.to_string())?;
         for (line_index, line) in content.lines().enumerate() {
@@ -165,14 +266,32 @@ fn is_skipped_entry(path: &Path) -> bool {
         })
 }
 
-fn is_readable_doc(path: &Path) -> Result<bool, String> {
+fn canonical_workspace_root(workspace_root: &Path) -> Result<PathBuf, String> {
+    workspace_root
+        .canonicalize()
+        .map_err(|err| format!("workspace root unavailable: {err}"))
+}
+
+fn safe_doc_metadata(canonical_root: &Path, path: &Path) -> Result<Option<fs::Metadata>, String> {
     if !is_markdown_doc(path) {
-        return Ok(false);
+        return Ok(None);
     }
-    let Ok(metadata) = fs::metadata(path) else {
-        return Ok(false);
+
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return Ok(None);
     };
-    Ok(metadata.is_file() && metadata.len() <= MAX_DOC_BYTES)
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > MAX_DOC_BYTES {
+        return Ok(None);
+    }
+
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|err| format!("document path unavailable: {err}"))?;
+    if !canonical_path.starts_with(canonical_root) {
+        return Ok(None);
+    }
+
+    Ok(Some(metadata))
 }
 
 fn is_markdown_doc(path: &Path) -> bool {
@@ -261,6 +380,7 @@ fn section_for(path: &Path) -> String {
 }
 
 fn reference_hints(
+    canonical_root: &Path,
     workspace_root: &Path,
     doc_path: &Path,
     doc_modified_ms: u64,
@@ -281,8 +401,8 @@ fn reference_hints(
             continue;
         };
         let full_target = workspace_root.join(&target_path);
-        let metadata = fs::metadata(&full_target).ok();
-        let exists = metadata.as_ref().is_some_and(|metadata| metadata.is_file());
+        let metadata = workspace_file_metadata(canonical_root, &full_target)?;
+        let exists = metadata.is_some();
         let stale = if exists {
             metadata
                 .as_ref()
@@ -308,6 +428,27 @@ fn reference_hints(
     }
 
     Ok(references)
+}
+
+fn workspace_file_metadata(
+    canonical_root: &Path,
+    path: &Path,
+) -> Result<Option<fs::Metadata>, String> {
+    let Ok(metadata) = fs::metadata(path) else {
+        return Ok(None);
+    };
+    if !metadata.is_file() {
+        return Ok(None);
+    }
+
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|err| format!("referenced path unavailable: {err}"))?;
+    if !canonical_path.starts_with(canonical_root) {
+        return Ok(None);
+    }
+
+    Ok(Some(metadata))
 }
 
 fn markdown_link_targets(content: &str) -> Vec<String> {
@@ -448,5 +589,110 @@ mod tests {
         assert!(
             result.matches[0].path.ends_with(".md") || result.matches[0].path.ends_with(".mdx")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preview_rejects_symlink_escape_docs() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let outside = tempfile::tempdir().expect("outside dir");
+        write_file(outside.path().join("leak.md"), "# Leak\nsecret\n");
+        std::fs::create_dir_all(temp.path().join("docs")).expect("create docs");
+        std::os::unix::fs::symlink(
+            outside.path().join("leak.md"),
+            temp.path().join("docs/leak.md"),
+        )
+        .expect("symlink");
+
+        let result = preview_doc(temp.path(), "docs/leak.md");
+
+        assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preview_rejects_parent_directory_symlink_escape_docs() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let outside = tempfile::tempdir().expect("outside dir");
+        write_file(outside.path().join("leak.md"), "# Leak\nsecret\n");
+        std::fs::create_dir_all(temp.path().join("docs")).expect("create docs");
+        std::os::unix::fs::symlink(outside.path(), temp.path().join("docs/outside"))
+            .expect("symlink dir");
+
+        let result = preview_doc(temp.path(), "docs/outside/leak.md");
+
+        assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn index_and_search_skip_symlink_escape_docs() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let outside = tempfile::tempdir().expect("outside dir");
+        write_file(temp.path().join("docs/real.md"), "# Real\nsafe context\n");
+        write_file(outside.path().join("leak.md"), "# Leak\nsecret context\n");
+        std::os::unix::fs::symlink(outside.path(), temp.path().join("docs/outside"))
+            .expect("symlink dir");
+        std::fs::create_dir_all(temp.path().join("docs/links")).expect("create links");
+        std::os::unix::fs::symlink(
+            outside.path().join("leak.md"),
+            temp.path().join("docs/links/leak.md"),
+        )
+        .expect("symlink file");
+
+        let entries = index_docs(temp.path()).expect("index docs");
+        let result = search_docs(temp.path(), "secret", 10).expect("search");
+
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["docs/real.md"],
+        );
+        assert!(result.matches.is_empty());
+        assert!(!result.truncated);
+    }
+
+    #[test]
+    fn index_docs_returns_error_when_doc_budget_is_exceeded() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        write_file(temp.path().join("docs/a.md"), "# A\n");
+        write_file(temp.path().join("docs/b.md"), "# B\n");
+
+        let result = index_docs_with_budget(temp.path(), DocsBudget::for_tests(1, 10, 1024));
+
+        assert!(result.is_err());
+        assert!(result
+            .expect_err("budget error")
+            .contains("docs index limit exceeded"));
+    }
+
+    #[test]
+    fn search_docs_marks_truncated_when_index_budget_stops_scan() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        write_file(temp.path().join("docs/a.md"), "# A\nagent context\n");
+        write_file(temp.path().join("docs/b.md"), "# B\nagent context\n");
+
+        let result =
+            search_docs_with_budget(temp.path(), "agent", 10, DocsBudget::for_tests(1, 10, 1024))
+                .expect("search");
+
+        assert_eq!(result.matches.len(), 1);
+        assert!(result.truncated);
+    }
+
+    #[test]
+    fn search_docs_marks_truncated_when_read_budget_is_exceeded() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        write_file(temp.path().join("docs/a.md"), "# A\nagent context\n");
+        write_file(temp.path().join("docs/b.md"), "# B\nagent context\n");
+
+        let result =
+            search_docs_with_budget(temp.path(), "agent", 10, DocsBudget::for_tests(10, 10, 20))
+                .expect("search");
+
+        assert_eq!(result.matches.len(), 1);
+        assert!(result.truncated);
     }
 }
