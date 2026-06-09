@@ -3000,7 +3000,7 @@ button {
     display: none;
   }
 
-  .agent-session-toolbar .badge2 {
+  .agent-panel .agent-session-toolbar .badge2 {
     display: inline-flex;
   }
 

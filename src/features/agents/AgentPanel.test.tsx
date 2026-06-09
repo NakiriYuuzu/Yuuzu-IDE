@@ -454,28 +454,7 @@ describe("AgentPanel session validation", () => {
 });
 
 describe("AgentPanel css contract", () => {
-  test("defines compact-safe agent mode buttons and keeps badges visible on mobile", () => {
-    const cssPath = resolve(
-      process.cwd(),
-      "src/index.css",
-    );
-    const source = readFileSync(cssPath, "utf8");
-
-    expect(source.includes(".btn.sm")).toBe(true);
-    expect(source.includes(".btn.ghost")).toBe(true);
-    expect(source.includes(".agent-session-toolbar .badge2")).toBe(true);
-    expect(source.includes(".agent-panel .agent-status")).toBe(true);
-    expect(source.includes(".agent-panel .agent-transcript-head .badge2")).toBe(true);
-    expect(source.includes(".agent-modes .btn.sm")).toBe(true);
-  });
-
-  test("keeps badge hide override scoped correctly in compact media query", () => {
-    const cssPath = resolve(
-      process.cwd(),
-      "src/index.css",
-    );
-    const source = readFileSync(cssPath, "utf8");
-
+  function extractMediaBlock(source: string): string {
     const mediaQueryStart = source.indexOf("@media (max-width: 760px)");
     expect(mediaQueryStart).toBeGreaterThan(-1);
 
@@ -495,12 +474,99 @@ describe("AgentPanel css contract", () => {
     }
 
     expect(blockEnd).toBeGreaterThan(-1);
-    const mediaBlock = source.slice(blockStart, blockEnd + 1);
+    return source.slice(blockStart + 1, blockEnd);
+  }
 
-    expect(/\.badge2\s*\{[\s\S]*?display\s*:\s*none/.test(mediaBlock)).toBe(true);
-    expect(/\.agent-session-toolbar\s+\.[^{}\n]*badge2[\s\S]*?display\s*:\s*inline-flex/.test(mediaBlock)).toBe(true);
-    expect(/\.agent-panel\s+\.agent-status[\s\S]*?display\s*:\s*inline-flex/.test(mediaBlock)).toBe(true);
-    expect(/\.agent-panel\s+\.agent-transcript-head\s+\.[^{}\n]*badge2[\s\S]*?display\s*:\s*inline-flex/.test(mediaBlock)).toBe(true);
+  function extractRuleBody(mediaBlock: string, selector: string): string | null {
+    let offset = 0;
+    const trimmedSelector = selector.trim();
+
+    while (offset < mediaBlock.length) {
+      const open = mediaBlock.indexOf("{", offset);
+      if (open === -1) {
+        break;
+      }
+
+      const selectorText = mediaBlock.slice(offset, open).trim();
+      const selectors = selectorText
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean);
+      if (selectors.includes(trimmedSelector)) {
+        let depth = 1;
+        let close = open;
+        for (let i = open + 1; i < mediaBlock.length; i++) {
+          if (mediaBlock[i] === "{") {
+            depth += 1;
+          }
+          if (mediaBlock[i] === "}") {
+            depth -= 1;
+            if (depth === 0) {
+              close = i;
+              break;
+            }
+          }
+        }
+        return mediaBlock.slice(open + 1, close).trim();
+      }
+
+      let depth = 1;
+      for (let i = open + 1; i < mediaBlock.length; i++) {
+        if (mediaBlock[i] === "{") {
+          depth += 1;
+        }
+        if (mediaBlock[i] === "}") {
+          depth -= 1;
+          if (depth === 0) {
+            offset = i + 1;
+            break;
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  test("defines compact-safe agent mode buttons and keeps badges visible on mobile", () => {
+    const cssPath = resolve(
+      process.cwd(),
+      "src/index.css",
+    );
+    const source = readFileSync(cssPath, "utf8");
+
+    expect(source.includes(".btn.sm")).toBe(true);
+    expect(source.includes(".btn.ghost")).toBe(true);
+    expect(source.includes(".agent-panel .agent-session-toolbar .badge2")).toBe(true);
+    expect(source.includes(".agent-panel .agent-status")).toBe(true);
+    expect(source.includes(".agent-panel .agent-transcript-head .badge2")).toBe(true);
+    expect(source.includes(".agent-modes .btn.sm")).toBe(true);
+  });
+
+  test("keeps badge hide override scoped correctly in compact media query", () => {
+    const cssPath = resolve(
+      process.cwd(),
+      "src/index.css",
+    );
+    const source = readFileSync(cssPath, "utf8");
+
+    const mediaBlock = extractMediaBlock(source);
+
+    const globalBadgeRule = extractRuleBody(mediaBlock, ".badge2");
+    const toolbarBadgeRule = extractRuleBody(
+      mediaBlock,
+      ".agent-panel .agent-session-toolbar .badge2",
+    );
+    const statusRule = extractRuleBody(mediaBlock, ".agent-panel .agent-status");
+    const transcriptBadgeRule = extractRuleBody(
+      mediaBlock,
+      ".agent-panel .agent-transcript-head .badge2",
+    );
+
+    expect(globalBadgeRule).toContain("display: none");
+    expect(toolbarBadgeRule).toContain("display: inline-flex");
+    expect(statusRule).toContain("display: inline-flex");
+    expect(transcriptBadgeRule).toContain("display: inline-flex");
   });
 
   test("uses runtime-defined tokens for passed status", () => {
