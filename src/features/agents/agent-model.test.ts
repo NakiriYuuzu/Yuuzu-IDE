@@ -359,6 +359,30 @@ describe("agent model", () => {
     });
   });
 
+  test("summarizes screenshot context items", () => {
+    const summary = agentContextSummary({
+      id: "agent-1",
+      workspace_root: "/repo",
+      mode: "verify",
+      prompt: "Check preview",
+      context_items: [
+        {
+          id: "screenshot:shot-1",
+          kind: "screenshot",
+          label: "Browser screenshot: localhost:5173",
+          path: null,
+          content: "data:image/png;base64,iVBORw0KGgo=",
+          truncated: false,
+        },
+      ],
+      transcript: [],
+      created_ms: 1,
+      updated_ms: 2,
+    });
+
+    expect(summary).toBe("1 screenshot");
+  });
+
   test("ignores missing selected sessions", () => {
     const state = replaceAgentSessions(createAgentState(), [session("one")]);
 

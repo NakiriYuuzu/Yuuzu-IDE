@@ -1,5 +1,11 @@
 export type AgentMode = "plan" | "edit" | "verify" | "review" | "report";
-export type AgentContextKind = "file" | "doc" | "diff" | "diagnostic" | "terminal";
+export type AgentContextKind =
+  | "file"
+  | "doc"
+  | "diff"
+  | "diagnostic"
+  | "terminal"
+  | "screenshot";
 export type AgentTranscriptKind =
   | "user_prompt"
   | "assistant_message"
