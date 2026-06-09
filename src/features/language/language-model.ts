@@ -89,6 +89,36 @@ export function storeServerLogs(
   return { ...state, serverLogs: serverLogs.slice(-80) };
 }
 
+export function normalizeLanguageHover(value: unknown): LanguageHover | null {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    !("path" in value) ||
+    !("line" in value) ||
+    !("character" in value) ||
+    !("contents" in value)
+  ) {
+    return null;
+  }
+
+  const hover = value as Record<string, unknown>;
+  if (
+    typeof hover.path !== "string" ||
+    typeof hover.line !== "number" ||
+    typeof hover.character !== "number" ||
+    typeof hover.contents !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    path: hover.path,
+    line: hover.line,
+    character: hover.character,
+    contents: hover.contents,
+  };
+}
+
 export function selectDiagnosticBadge(state: LanguageViewState): string | null {
   const count = Object.values(state.diagnosticsByPath).reduce(
     (sum, diagnostics) => sum + diagnostics.length,

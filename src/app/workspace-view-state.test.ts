@@ -6,6 +6,7 @@ import { replaceDocsIndex } from "../features/docs/docs-model";
 import {
   createLanguageState,
   replaceDiagnostics,
+  replaceServerStatuses,
 } from "../features/language/language-model";
 import { upsertTaskRun } from "../features/tasks/task-model";
 import { upsertTerminal } from "../features/terminal/terminal-model";
@@ -420,5 +421,45 @@ describe("createWorkspaceViewStore", () => {
     expect(
       store.getState().viewFor("workspace-b").language.diagnosticsByPath,
     ).toEqual({});
+  });
+
+  test("language functional updates compose without dropping prior state", () => {
+    const store = createWorkspaceViewStore();
+
+    store.getState().updateLanguage("workspace-a", (language) =>
+      replaceDiagnostics(language, [
+        {
+          path: "src/main.rs",
+          range: {
+            start_line: 1,
+            start_character: 0,
+            end_line: 1,
+            end_character: 4,
+          },
+          severity: "error",
+          message: "expected item",
+          source: "rust-analyzer",
+        },
+      ]),
+    );
+    store.getState().updateLanguage("workspace-a", (language) =>
+      replaceServerStatuses(language, [
+        {
+          workspace_id: "workspace-a",
+          workspace_root: "/workspace-a",
+          language: "Rust",
+          display_name: "Rust Analyzer",
+          state: "Running",
+          pid: 10,
+          memory_bytes: 1024,
+          open_documents: 1,
+          last_error: null,
+        },
+      ]),
+    );
+
+    const language = store.getState().viewFor("workspace-a").language;
+    expect(language.diagnosticsByPath["src/main.rs"]).toHaveLength(1);
+    expect(language.serverStatuses).toHaveLength(1);
   });
 });

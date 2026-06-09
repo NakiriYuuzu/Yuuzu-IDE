@@ -70,6 +70,10 @@ type WorkspaceViewStore = {
     workspaceId: string | null,
     update: (docs: DocsViewState) => DocsViewState,
   ) => void;
+  updateLanguage: (
+    workspaceId: string | null,
+    update: (language: LanguageViewState) => LanguageViewState,
+  ) => void;
 };
 
 function defaultWorkspaceView(): WorkspaceViewState {
@@ -228,6 +232,18 @@ export function createWorkspaceViewStore() {
           views: {
             ...state.views,
             [key]: { ...current, docs: update(current.docs) },
+          },
+        };
+      }),
+    updateLanguage: (workspaceId, update) =>
+      set((state) => {
+        const key = workspaceId ?? shellKey;
+        const current = state.views[key] ?? defaultView;
+
+        return {
+          views: {
+            ...state.views,
+            [key]: { ...current, language: update(current.language) },
           },
         };
       }),

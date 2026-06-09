@@ -7,6 +7,7 @@ import {
   selectDiagnosticBadge,
   storeHover,
   storeServerLogs,
+  normalizeLanguageHover,
 } from "./language-model";
 
 describe("language model", () => {
@@ -73,5 +74,22 @@ describe("language model", () => {
     expect(state.serverStatuses[0].display_name).toBe("Rust Analyzer");
     expect(state.activeHover?.contents).toBe("fn main");
     expect(state.serverLogs).toEqual(["initialized", "diagnostics updated"]);
+  });
+
+  test("normalizes empty backend hover payloads to null", () => {
+    expect(normalizeLanguageHover({})).toBeNull();
+    expect(
+      normalizeLanguageHover({
+        path: "src/main.rs",
+        line: 1,
+        character: 1,
+        contents: "fn main",
+      }),
+    ).toEqual({
+      path: "src/main.rs",
+      line: 1,
+      character: 1,
+      contents: "fn main",
+    });
   });
 });

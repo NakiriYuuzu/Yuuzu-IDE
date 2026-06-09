@@ -4,6 +4,7 @@ import type {
   LanguageServerStatus,
   LspDiagnostic,
 } from "./language-model";
+import { normalizeLanguageHover } from "./language-model";
 
 export function getLanguageServerStatus(
   workspaceRoot: string,
@@ -42,5 +43,5 @@ export function requestLanguageHover(args: {
   line: number;
   character: number;
 }): Promise<LanguageHover | null> {
-  return call("lsp_hover", args);
+  return call<unknown>("lsp_hover", args).then(normalizeLanguageHover);
 }
