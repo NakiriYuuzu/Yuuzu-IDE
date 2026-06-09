@@ -232,12 +232,14 @@ function workspaceRelativePath(workspaceRoot: string, path: string): string {
 }
 
 function shortHash(value: string): string {
-  let hash = 2166136261;
-  for (let i = 0; i < value.length; i += 1) {
-    hash ^= value.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
+  const bytes = new TextEncoder().encode(value);
+  let hash = 1469598103934665603n;
+  for (const byte of bytes) {
+    hash ^= BigInt(byte);
+    hash *= 1099511628211n;
+    hash &= 0xffff_ffff_ffff_ffffn;
   }
-  return (hash >>> 0).toString(16).padStart(8, "0").slice(0, 10);
+  return hash.toString(16).padStart(16, "0");
 }
 
 export function agentContextFromFile(args: {

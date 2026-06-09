@@ -207,6 +207,39 @@ describe("agent model", () => {
     expect(first.label).toBe("error: src/app.ts:42");
   });
 
+  test("uses wider deterministic diagnostic id and avoids collisions", () => {
+    const messageA = "diag-1ajz-5q2yv3";
+    const messageB = "diag-2rsa-rsfrbe";
+
+    const itemA1 = agentContextFromDiagnostic({
+      path: "src/app.ts",
+      message: messageA,
+      severity: "error",
+      line: 42,
+    });
+    const itemA2 = agentContextFromDiagnostic({
+      path: "src/app.ts",
+      message: messageA,
+      severity: "error",
+      line: 42,
+    });
+    const itemB = agentContextFromDiagnostic({
+      path: "src/app.ts",
+      message: messageB,
+      severity: "error",
+      line: 42,
+    });
+
+    expect(itemA1.id).toMatch(/^diagnostic:src\/app\.ts:42:error:[0-9a-f]{16}$/);
+    expect(itemA1.id).not.toContain(messageA);
+    expect(itemB.id).not.toContain(messageB);
+    expect(itemA1.id).toHaveLength(16 + "diagnostic:src/app.ts:42:error:".length);
+    expect(itemA1.id.length).toBeLessThan(300);
+    expect(itemB.id.length).toBeLessThan(300);
+    expect(itemA1.id).toBe(itemA2.id);
+    expect(itemA1.id).not.toBe(itemB.id);
+  });
+
   test("normalizes file context paths across fallback and windows forms", () => {
     expect(
       agentContextFromFile({
