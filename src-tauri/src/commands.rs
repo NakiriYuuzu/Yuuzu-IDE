@@ -541,6 +541,32 @@ impl AppState {
             .delete_profile(profile_id, &self.database_secrets)
     }
 
+    pub fn save_database_profile(
+        &self,
+        input: crate::database::DatabaseProfileInput,
+    ) -> Result<crate::database::DatabaseProfile, String> {
+        let workspace_root = self.trusted_workspace_root(&input.workspace_root)?;
+        if let Some(profile_id) = input.id.as_deref() {
+            if let Ok(profile) = self.database_profiles.get_profile(profile_id) {
+                if profile.workspace_root != workspace_root.to_string_lossy() {
+                    return Err("database profile does not belong to workspace".to_string());
+                }
+            }
+        }
+
+        let input = crate::database::DatabaseProfileInput {
+            workspace_root: workspace_root.to_string_lossy().to_string(),
+            ..input
+        };
+
+        self.database_profiles.save_profile(
+            input,
+            &self.database_secrets,
+            || Ok(crate::database::database_now_ms()),
+            || uuid::Uuid::new_v4().to_string(),
+        )
+    }
+
     pub fn start_agent_session(
         &self,
         workspace_root: &str,
@@ -799,18 +825,7 @@ pub fn save_database_profile(
     state: State<'_, AppState>,
     input: crate::database::DatabaseProfileInput,
 ) -> Result<crate::database::DatabaseProfile, String> {
-    let workspace_root = state.trusted_workspace_root(&input.workspace_root)?;
-    let input = crate::database::DatabaseProfileInput {
-        workspace_root: workspace_root.to_string_lossy().to_string(),
-        ..input
-    };
-
-    state.database_profiles.save_profile(
-        input,
-        &state.database_secrets,
-        || Ok(crate::database::database_now_ms()),
-        || uuid::Uuid::new_v4().to_string(),
-    )
+    state.save_database_profile(input)
 }
 
 #[tauri::command]
@@ -1850,6 +1865,77 @@ mod tests {
             .expect_err("workspace mismatch should be rejected")
             .contains("does not belong to workspace"));
         assert!(state.database_profiles.get_profile(&profile.id).is_ok());
+    }
+
+    #[test]
+    fn save_database_profile_rejects_profile_outside_workspace_root() {
+        let config = tempdir().expect("config dir");
+        let workspace_a = config.path().join("workspace-a");
+        let workspace_b = config.path().join("workspace-b");
+        std::fs::create_dir_all(&workspace_a).expect("workspace a");
+        std::fs::create_dir_all(&workspace_b).expect("workspace b");
+
+        let state = AppState::new(config.path()).expect("state");
+        state
+            .open_workspace_path(workspace_a.clone())
+            .expect("open workspace a");
+        state
+            .open_workspace_path(workspace_b.clone())
+            .expect("open workspace b");
+
+        let workspace_a_root = workspace_a
+            .canonicalize()
+            .expect("canonical workspace a")
+            .to_string_lossy()
+            .to_string();
+        let workspace_b_root = workspace_b
+            .canonicalize()
+            .expect("canonical workspace b")
+            .to_string_lossy()
+            .to_string();
+
+        let profile = state
+            .save_database_profile(crate::database::DatabaseProfileInput {
+                id: Some("profile-1".to_string()),
+                workspace_root: workspace_a_root.clone(),
+                name: "legacy".to_string(),
+                kind: crate::database::DatabaseKind::PostgreSQL,
+                sqlite_path: None,
+                host: Some("localhost".to_string()),
+                port: Some(5432),
+                database: Some("app".to_string()),
+                username: Some("user".to_string()),
+                password: None,
+                read_only: false,
+                production: false,
+            })
+            .expect("save profile");
+
+        let result = state.save_database_profile(crate::database::DatabaseProfileInput {
+            id: Some(profile.id.clone()),
+            workspace_root: workspace_b_root,
+            name: "moved".to_string(),
+            kind: crate::database::DatabaseKind::PostgreSQL,
+            sqlite_path: None,
+            host: Some("localhost".to_string()),
+            port: Some(5432),
+            database: Some("app".to_string()),
+            username: Some("user".to_string()),
+            password: None,
+            read_only: false,
+            production: false,
+        });
+
+        assert!(result.is_err());
+        assert!(result
+            .expect_err("workspace mismatch should be rejected")
+            .contains("does not belong to workspace"));
+        let current = state
+            .database_profiles
+            .get_profile(&profile.id)
+            .expect("profile still exists");
+        assert_eq!(current.name, "legacy");
+        assert_eq!(current.workspace_root, workspace_a_root);
     }
 
     #[test]

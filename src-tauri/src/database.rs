@@ -14,6 +14,8 @@ use keyring_core::{get_default_store, Entry};
 use keyring::use_native_store;
 #[cfg(test)]
 use std::collections::HashMap;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(not(test))]
 fn ensure_keyring_default_store() -> Result<(), String> {
@@ -389,9 +391,8 @@ impl DatabaseProfileStore {
                         .unwrap_or_else(|| format!("database-profile:{profile_id}"));
 
                     if let Some(previous_secret_id) = previous_secret_id.as_deref() {
-                        if let Ok(password) = secrets.get_secret(previous_secret_id) {
-                            old_secret = Some(password);
-                        }
+                        let previous_secret = secrets.get_secret(previous_secret_id)?;
+                        old_secret = Some(previous_secret);
                     }
 
                     secrets.set_secret(&secret_id, password)?;
@@ -552,7 +553,7 @@ fn has_raw_dsn_prefix(value: &str) -> bool {
     const RAW_DSN_PREFIXES: [&str; 7] = [
         "postgres://",
         "postgresql://",
-        "jdbc:postgresql://",
+        "jdbc:",
         "mssql://",
         "sqlserver://",
         "sqlite://",
@@ -620,6 +621,62 @@ impl DatabaseSecretStore for InMemoryDatabaseSecretStore {
     }
 
     fn delete_secret(&self, secret_id: &str) -> Result<(), String> {
+        let mut values = self.values.lock().map_err(|err| err.to_string())?;
+        values
+            .remove(secret_id)
+            .map(|_| ())
+            .ok_or_else(|| format!("secret not found: {secret_id}"))
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, Default)]
+struct FailingReadDatabaseSecretStore {
+    values: Arc<Mutex<HashMap<String, String>>>,
+    get_calls: Arc<AtomicUsize>,
+    set_calls: Arc<AtomicUsize>,
+    delete_calls: Arc<AtomicUsize>,
+}
+
+#[cfg(test)]
+impl FailingReadDatabaseSecretStore {
+    fn with_secret(secret_id: &str, secret: &str) -> Self {
+        let store = Self::default();
+        let mut values = store.values.lock().expect("secret store lock");
+        values.insert(secret_id.to_string(), secret.to_string());
+        drop(values);
+        store
+    }
+
+    fn get_call_count(&self) -> usize {
+        self.get_calls.load(Ordering::SeqCst)
+    }
+
+    fn set_call_count(&self) -> usize {
+        self.set_calls.load(Ordering::SeqCst)
+    }
+
+    fn delete_call_count(&self) -> usize {
+        self.delete_calls.load(Ordering::SeqCst)
+    }
+}
+
+#[cfg(test)]
+impl DatabaseSecretStore for FailingReadDatabaseSecretStore {
+    fn set_secret(&self, secret_id: &str, secret: &str) -> Result<(), String> {
+        self.set_calls.fetch_add(1, Ordering::SeqCst);
+        let mut values = self.values.lock().map_err(|err| err.to_string())?;
+        values.insert(secret_id.to_string(), secret.to_string());
+        Ok(())
+    }
+
+    fn get_secret(&self, secret_id: &str) -> Result<String, String> {
+        self.get_calls.fetch_add(1, Ordering::SeqCst);
+        Err(format!("failed to read secret: {secret_id}"))
+    }
+
+    fn delete_secret(&self, secret_id: &str) -> Result<(), String> {
+        self.delete_calls.fetch_add(1, Ordering::SeqCst);
         let mut values = self.values.lock().map_err(|err| err.to_string())?;
         values
             .remove(secret_id)
@@ -1217,6 +1274,8 @@ mod tests {
     #[test]
     fn has_raw_dsn_prefix_rejects_key_value_and_jdbc_forms() {
         assert!(has_raw_dsn_prefix("jdbc:postgresql://localhost/db"));
+        assert!(has_raw_dsn_prefix("jdbc:sqlite:/tmp/app.db"));
+        assert!(has_raw_dsn_prefix("jdbc:sqlserver://db:1433;password=pw"));
         assert!(has_raw_dsn_prefix("host=db;password=secret"));
         assert!(has_raw_dsn_prefix(
             "Server=localhost; Password=pw;Database=app"
@@ -1361,6 +1420,14 @@ mod tests {
                 DatabaseKind::PostgreSQL,
                 "host=localhost dbname=app user=yuuzu".to_string(),
             ),
+            (
+                DatabaseKind::PostgreSQL,
+                "jdbc:sqlite:/tmp/app.db".to_string(),
+            ),
+            (
+                DatabaseKind::PostgreSQL,
+                "jdbc:sqlserver://db:1433;password=pw".to_string(),
+            ),
         ];
 
         for (index, (kind, host)) in inputs.iter().enumerate() {
@@ -1431,6 +1498,75 @@ mod tests {
         assert!(!temp.path().join("database-profiles.json").exists());
         let values = secrets.values.lock().expect("secret store lock");
         assert!(values.is_empty());
+    }
+
+    #[test]
+    fn save_profile_rejects_update_if_existing_secret_is_unreadable() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("database-profiles.json");
+        let store = DatabaseProfileStore::new(path.clone());
+        let secrets = InMemoryDatabaseSecretStore::default();
+
+        let saved = store
+            .save_profile(
+                DatabaseProfileInput {
+                    id: Some("profile-1".to_string()),
+                    workspace_root: "/workspace".to_string(),
+                    name: "legacy".to_string(),
+                    kind: DatabaseKind::PostgreSQL,
+                    sqlite_path: None,
+                    host: Some("localhost".to_string()),
+                    port: Some(5432),
+                    database: Some("app".to_string()),
+                    username: Some("user".to_string()),
+                    password: Some("old".to_string()),
+                    read_only: false,
+                    production: false,
+                },
+                &secrets,
+                || Ok(10),
+                || "profile-1".to_string(),
+            )
+            .expect("seed profile");
+
+        let failing_secrets = FailingReadDatabaseSecretStore::with_secret(
+            saved.source.secret_id().expect("secret id"),
+            "old",
+        );
+        let before = std::fs::read_to_string(&path).expect("profile json");
+
+        let result = store.save_profile(
+            DatabaseProfileInput {
+                id: Some("profile-1".to_string()),
+                workspace_root: "/workspace".to_string(),
+                name: "legacy-updated".to_string(),
+                kind: DatabaseKind::PostgreSQL,
+                sqlite_path: None,
+                host: Some("localhost".to_string()),
+                port: Some(5432),
+                database: Some("app".to_string()),
+                username: Some("user".to_string()),
+                password: Some("new".to_string()),
+                read_only: false,
+                production: false,
+            },
+            &failing_secrets,
+            || Ok(10),
+            || "profile-1".to_string(),
+        );
+
+        assert!(result.is_err());
+        let err = result.expect_err("unreadable previous secret should block update");
+        assert!(err.contains("failed to read"));
+        assert!(err.contains("database-profile:profile-1"));
+        assert_eq!(failing_secrets.get_call_count(), 1);
+        assert_eq!(failing_secrets.set_call_count(), 0);
+        assert_eq!(failing_secrets.delete_call_count(), 0);
+
+        let after = std::fs::read_to_string(&path).expect("profile json");
+        assert_eq!(after, before);
+        assert!(after.contains("legacy"));
+        assert!(!after.contains("legacy-updated"));
     }
 
     #[cfg(unix)]
