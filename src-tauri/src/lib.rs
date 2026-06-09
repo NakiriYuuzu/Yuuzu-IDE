@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod browser_preview;
 mod commands;
+pub mod database;
 pub mod docs;
 mod file_system;
 mod file_watcher;
