@@ -413,3 +413,131 @@ Residual risks:
 - Task problem matching reparses bounded output on append. The code-quality
   reviewer accepted this as non-blocking because task output is capped at
   120,000 characters and problem results are capped at 100.
+
+### Node 4: Git Workflows
+
+Status: completed and passed.
+
+Node 4 finished Tasks 1-7 and records the final Git workflow evidence in
+`docs/architecture/node-4-git-results.md`. The node adds Rust-owned Git CLI
+commands, frontend Source Control state, diff and graph workbench surfaces,
+Git decorations, destructive-operation confirmations, and watcher/task refresh
+safeguards for the daily edit-test-commit-push loop.
+
+Completed progress:
+
+- Task 1 added Rust Git status and diff domain code, command wrappers, literal
+  pathspec handling, deterministic rename parsing, path containment, and diff
+  payload caps.
+- Task 2 added stage, unstage, discard, commit, amend, stash, branch,
+  fetch-pull-push, graph, reset hard, and rebase commands with exact typed
+  confirmations for destructive actions.
+- Task 3 added typed frontend Git APIs and pure Git view state for grouping,
+  branch labels, diff cache, branch controls, graph bounds, refresh decisions,
+  and decoration maps.
+- Task 4 added the Source Control panel, action-state gating, commit message
+  controls, branch and remote actions, staged and unstaged lists, conflict
+  gating, and sidebar scrolling.
+- Task 5 added Git diff and commit graph surfaces, bounded workbench containers,
+  graph loading, and repository-action gating.
+- Task 6 added explorer and tab Git decorations, confirmation dialog wiring,
+  file watcher refresh suppression for `.git` internals, and task-finished Git
+  refresh.
+- Task 7 verified the full node, ran browser smoke with Tauri IPC mocks, fixed
+  the narrow-screen Git surface overflow found during smoke, and recorded the
+  results.
+
+Important files and commit milestones:
+
+- `src-tauri/src/git.rs`, `src-tauri/src/commands.rs`, and
+  `src-tauri/src/lib.rs` own the Rust Git CLI domain and Tauri command surface.
+- `src/features/git/git-api.ts`, `src/features/git/git-model.ts`,
+  `src/features/git/GitPanel.tsx`, `src/features/git/GitDiffView.tsx`,
+  `src/features/git/GitGraphView.tsx`,
+  `src/features/git/git-model.test.ts`, and
+  `src/features/git/git-responsive-css.test.ts` own frontend Git APIs, pure
+  state, UI panels, surfaces, and responsive CSS contracts.
+- `src/app/AppShell.tsx`, `src/app/activity-rail.tsx`,
+  `src/app/workspace-view-state.ts`, `src/features/workspace/FileTreePanel.tsx`,
+  `src/features/workspace/file-tree-model.ts`, and `src/index.css` own
+  workbench wiring, badges, decorations, confirmations, layout, and refresh
+  hooks.
+- `b349eb7` and `4310a43` added and hardened Git status and diff core.
+- `33ebf11` added Git workflow commands.
+- `8efbd9f` and `0e103cc` added and aligned frontend Git state.
+- `7067fd6` and `785c5c4` added and hardened the Source Control panel.
+- `c91f272` and `a66353d` added and bounded Git diff and graph surfaces.
+- `bedb1c9` and `328a0c1` added Git decorations and refresh safeguards.
+- `a6ae8c2` fixed narrow-screen Git surface bounds found during final smoke.
+
+Verification evidence:
+
+- `bun test`: passed with 97 tests, 0 failed, and 183 expect calls across
+  19 files.
+- `bun run build`: passed; Vite emitted a chunk-size warning only.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml`:
+  passed with 97 Rust lib tests plus 0 main/doc tests.
+- `. "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check`:
+  passed.
+- `. "$HOME/.cargo/env" && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings`:
+  passed.
+- `. "$HOME/.cargo/env" && bun run tauri build --debug`: passed and built the
+  debug app plus macOS debug app/dmg bundles under
+  `src-tauri/target/debug/bundle`.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml git::tests -- --nocapture`:
+  passed with 9 focused Git tests.
+- `bun test src/features/git/git-responsive-css.test.ts`: passed with 1
+  focused responsive CSS contract test.
+- Playwright CLI browser smoke against `http://127.0.0.1:1420/` covered the
+  no-repository Source Control state, mocked repository status, diff surface,
+  commit graph surface, desktop layout sanity, and 390 by 844 mobile graph
+  layout sanity.
+
+TDD red/green/refactor evidence summary:
+
+- Rust Git status and diff behavior was introduced under focused
+  `cargo test --manifest-path src-tauri/Cargo.toml git::tests` coverage, then
+  hardened for literal wildcard pathspec handling and deterministic
+  rename/copy parsing.
+- Rust Git mutation behavior was introduced under focused Git tests for stage,
+  unstage, discard, commit, amend, stash, branch, fetch, pull, push, graph,
+  reset hard, rebase, blank input guards, literal pathspecs, and exact
+  confirmations.
+- Frontend Git model behavior was introduced under Bun Git model tests for
+  grouping, badge counts, branch labels, confirmation strings, diff cache,
+  branch ordering, bounded graph rows, refresh decisions, and decorations.
+- Source Control, diff, graph, decoration, and confirmation UI behavior was
+  introduced and hardened under Bun tests plus browser smoke with Tauri IPC
+  mocks.
+- Final responsive behavior was introduced under
+  `bun test src/features/git/git-responsive-css.test.ts`; the refined RED failed
+  until the mobile toolbar rule explicitly overrode the base fixed flex basis,
+  then GREEN passed after the CSS fix.
+
+Final measurement evidence:
+
+- Debug app path:
+  `src-tauri/target/debug/bundle/macos/Yuuzu-IDE.app`.
+- Debug DMG path:
+  `src-tauri/target/debug/bundle/dmg/Yuuzu-IDE_0.1.0_aarch64.dmg`.
+- Browser smoke target: `http://127.0.0.1:1420/`.
+- Focused Rust Git tests hot shell time: 0.75 s.
+- Focused Rust Git test binary runtime: 0.35 s.
+- Diff payload cap: 240 KiB plus truncation marker.
+- Commit graph cap: 120 commits.
+- Mobile graph toolbar overflow: 0 offscreen toolbar controls after fix.
+- Mobile graph table wrapper: 120 px visible width with 439 px internal scroll
+  width.
+
+Residual risks:
+
+- Normal browser preview cannot exercise real Tauri Git IPC. Runtime confidence
+  comes from Rust Git command tests, Tauri debug build, frontend state tests,
+  and mocked browser UI smoke.
+- Desktop WebView automation for real Git UI interaction remains unavailable in
+  this environment, so the full edit-test-commit-push cycle is covered by
+  command-level tests and mocked UI state rather than an end-to-end desktop
+  click path.
+- Vite chunk-size warning remains during `bun run build`; it is accepted for
+  Node 4 because the build exits successfully and Monaco/xterm remain
+  lazy-loaded.

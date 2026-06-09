@@ -691,9 +691,10 @@ stable.
 
 ## Current Priority
 
-Node 0, Node 1, Node 2, and Node 3 are complete. The next active priority is
-Node 4: cover the daily source-control loop inside the app while preserving the
-single-WebView, Rust-owned workspace core proven in the first four nodes.
+Node 0, Node 1, Node 2, Node 3, and Node 4 are complete. The next active
+priority is Node 5: make project docs visible, searchable, and reusable as
+development context while preserving the single-WebView, Rust-owned workspace
+core proven in the first five nodes.
 
 - Node 0 measurements keep Tauri 2 as the main route; Rust-native fallback
   research remains deferred.
@@ -708,3 +709,7 @@ single-WebView, Rust-owned workspace core proven in the first four nodes.
   tests, frontend task/terminal state covered by Bun tests, xterm lazy-loaded
   until a session exists, and process cleanup measured without orphan task
   processes.
+- Node 4 verification keeps the daily source-control loop covered by Rust Git
+  command tests, frontend Git state tests, mocked browser UI smoke, destructive
+  confirmation guardrails, bounded diff and graph payloads, and responsive Git
+  surfaces.
