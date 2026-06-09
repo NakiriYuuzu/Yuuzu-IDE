@@ -104,6 +104,19 @@ impl AppState {
         ))
     }
 
+    fn ensure_workspace_id_matches_root_path(
+        &self,
+        workspace_id: &str,
+        workspace_root: &Path,
+    ) -> Result<String, String> {
+        let (resolved_workspace_id, _) = self.workspace_identity(workspace_root)?;
+        if resolved_workspace_id == workspace_id {
+            Ok(resolved_workspace_id)
+        } else {
+            Err("workspace id does not match workspace root".to_string())
+        }
+    }
+
     pub fn lsp_server_status(
         &self,
         lsp_state: &crate::lsp::LspState,
@@ -1033,6 +1046,8 @@ pub fn run_workspace_task(
     cwd: String,
 ) -> Result<TaskRun, String> {
     let workspace_root = app_state.trusted_workspace_root(&workspace_root)?;
+    let workspace_id =
+        app_state.ensure_workspace_id_matches_root_path(&workspace_id, &workspace_root)?;
     let cwd = file_system::workspace_child_for_existing_dir(&workspace_root, Path::new(&cwd))?;
     task_state.run_task(app, workspace_id, label, command, cwd)
 }
@@ -1561,6 +1576,49 @@ mod tests {
         fn assert_flat_signature(_command: FlatRunWorkspaceTaskCommand) {}
 
         assert_flat_signature(super::run_workspace_task);
+    }
+
+    #[test]
+    fn run_workspace_task_rejects_mismatched_workspace_identity() {
+        let config = tempfile::tempdir().expect("config dir");
+        let workspace_a = config.path().join("workspace-a");
+        let workspace_b = config.path().join("workspace-b");
+        std::fs::create_dir_all(&workspace_a).expect("workspace a");
+        std::fs::create_dir_all(&workspace_b).expect("workspace b");
+
+        let state = AppState::new(config.path()).expect("state");
+        state
+            .open_workspace_path(workspace_a.clone())
+            .expect("open workspace a");
+        state
+            .open_workspace_path(workspace_b.clone())
+            .expect("open workspace b");
+
+        let task_state = TaskState::new();
+        let registry = state.registry_snapshot().expect("registry");
+        let _workspace_a_id = registry
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.path == workspace_a)
+            .map(|workspace| workspace.id.clone())
+            .expect("workspace a id");
+        let workspace_b_id = registry
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.path == workspace_b)
+            .map(|workspace| workspace.id.clone())
+            .expect("workspace b id");
+        let workspace_a_root = workspace_a.canonicalize().expect("canonical workspace a");
+
+        let forged_result = state
+            .ensure_workspace_id_matches_root_path(&workspace_b_id, &workspace_a_root)
+            .expect_err("mismatch should be rejected");
+        assert!(forged_result.contains("workspace id does not match workspace root"));
+
+        assert!(task_state
+            .list_runs(&workspace_b_id)
+            .expect("list runs")
+            .is_empty());
     }
 
     #[test]
