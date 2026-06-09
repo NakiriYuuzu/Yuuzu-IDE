@@ -1,22 +1,11 @@
 /// <reference types="bun-types" />
 
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { Window as HappyWindow } from "happy-dom";
 
 import { ActivityRail } from "./activity-rail";
+import { ensureTestDom } from "./test-dom";
 
-const testWindow = new HappyWindow({ url: "http://localhost/" });
-globalThis.window = testWindow as unknown as Window & typeof globalThis;
-globalThis.document = testWindow.document as unknown as Document;
-globalThis.HTMLElement = testWindow.HTMLElement as unknown as typeof HTMLElement;
-globalThis.HTMLInputElement =
-  testWindow.HTMLInputElement as unknown as typeof HTMLInputElement;
-globalThis.Event = testWindow.Event as unknown as typeof Event;
-globalThis.MouseEvent = testWindow.MouseEvent as unknown as typeof MouseEvent;
-Object.defineProperty(globalThis, "navigator", {
-  value: testWindow.navigator,
-  configurable: true,
-});
+ensureTestDom();
 
 const { cleanup, fireEvent, render } = await import("@testing-library/react");
 

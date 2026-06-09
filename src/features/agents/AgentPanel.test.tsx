@@ -1,21 +1,14 @@
 /// <reference types="bun-types" />
 
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { Window as HappyWindow } from "happy-dom";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { AgentPanel } from "./AgentPanel";
 import { createAgentState, type AgentMode, type AgentSession, type AgentViewState } from "./agent-model";
+import { ensureTestDom } from "../../app/test-dom";
 
-const testWindow = new HappyWindow({ url: "http://localhost/" });
-globalThis.window = testWindow as unknown as Window & typeof globalThis;
-globalThis.document = testWindow.document as unknown as Document;
-globalThis.HTMLElement = testWindow.HTMLElement as unknown as typeof HTMLElement;
-globalThis.HTMLInputElement =
-  testWindow.HTMLInputElement as unknown as typeof HTMLInputElement;
-globalThis.Event = testWindow.Event as unknown as typeof Event;
-globalThis.MouseEvent = testWindow.MouseEvent as unknown as typeof MouseEvent;
+ensureTestDom();
 
 const { cleanup, fireEvent, render, screen } = await import(
   "@testing-library/react"
