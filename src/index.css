@@ -1539,6 +1539,221 @@ button {
   padding: 0;
 }
 
+.database-panel {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.database-row-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.database-row-meta {
+  margin-top: 1px;
+  color: var(--txt-faint);
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.database-status-dot {
+  width: 9px;
+  height: 9px;
+  margin-left: auto;
+  border-radius: 50%;
+  flex: 0 0 9px;
+}
+
+.database-row-action {
+  width: 24px;
+  height: 24px;
+}
+
+.database-tables {
+  border-left: 1px solid var(--line);
+  margin-left: 26px;
+}
+
+.database-tables-label {
+  height: 24px;
+  border-top: 1px solid var(--line);
+}
+
+.database-table-row .database-table-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.database-query-editor {
+  margin-top: 6px;
+  min-height: 100px;
+}
+
+.database-query-actions {
+  margin-top: 8px;
+}
+
+.database-query-row-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.database-query-row-actions .btn {
+  height: 28px;
+}
+
+.database-confirmation {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  background: var(--chrome);
+}
+
+.database-confirmation-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+  color: var(--destructive);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.database-confirmation small {
+  color: var(--txt-faint);
+  font-size: 11px;
+}
+
+.database-confirmation-input {
+  min-height: 30px;
+  font-family: var(--font-mono);
+}
+
+.database-history {
+  max-height: 220px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+}
+
+.database-history .row {
+  border-top: 1px solid transparent;
+}
+
+.database-result {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.database-result-toolbar {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--chrome);
+}
+
+.database-kind-tag {
+  height: 21px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.database-kind-tag svg {
+  width: 12px;
+  height: 12px;
+}
+
+.database-kind-read {
+  color: var(--yuzu);
+  background: var(--yuzu-wash);
+  border-color: var(--yuzu-edge);
+}
+
+.database-kind-mutation {
+  color: #febc2e;
+  background: color-mix(in srgb, #febc2e 12%, var(--editor));
+  border-color: #8a6a17;
+}
+
+.database-kind-destructive {
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 12%, var(--editor));
+  border-color: color-mix(in srgb, var(--destructive) 55%, var(--line));
+}
+
+.database-result-meta-value {
+  color: var(--txt-faint);
+  font-family: var(--font-mono);
+  font-size: 10.8px;
+}
+
+.database-result-warning {
+  color: var(--destructive);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+}
+
+.database-result-warning svg {
+  width: 12px;
+  height: 12px;
+}
+
+.database-result-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.database-result-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  position: relative;
+}
+
+.database-result-wrap .dbgrid {
+  table-layout: fixed;
+}
+
+.database-result-row td {
+  height: 28px;
+  padding: 4px 12px;
+  overflow: hidden;
+  vertical-align: top;
+}
+
+.database-cell {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .git-graph-lane {
   display: block;
 }
