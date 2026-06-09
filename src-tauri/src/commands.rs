@@ -1,5 +1,5 @@
 use std::{
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::Mutex,
 };
 
@@ -105,10 +105,267 @@ impl AppState {
         lsp_state: &crate::lsp::LspState,
         workspace_root: &str,
     ) -> Result<Vec<crate::lsp::LanguageServerStatus>, String> {
-        let workspace_root = self.trusted_workspace_root(workspace_root)?;
-        let (workspace_id, _workspace_root) = self.workspace_identity(&workspace_root)?;
+        let (workspace_id, _workspace_root) = self.lsp_workspace_identity(workspace_root)?;
 
         Ok(lsp_state.statuses(workspace_id))
+    }
+
+    fn lsp_workspace_identity(&self, workspace_root: &str) -> Result<(String, String), String> {
+        let workspace_root = self.trusted_workspace_root(workspace_root)?;
+        self.workspace_identity(&workspace_root)
+    }
+
+    pub fn lsp_open_document(
+        &self,
+        lsp_state: &crate::lsp::LspState,
+        workspace_root: &str,
+        workspace_id: &str,
+        path: String,
+        content: String,
+    ) -> Result<crate::lsp::LanguageServerStatus, String> {
+        let (resolved_workspace_id, resolved_workspace_root) =
+            self.lsp_workspace_identity(workspace_root)?;
+        let path = normalize_lsp_document_path(&path)?;
+        let _ = workspace_id;
+        lsp_state.open_document(
+            resolved_workspace_id,
+            resolved_workspace_root,
+            path,
+            content,
+        )
+    }
+
+    pub fn lsp_close_document(
+        &self,
+        lsp_state: &crate::lsp::LspState,
+        workspace_root: &str,
+        workspace_id: &str,
+        path: String,
+    ) -> Result<crate::lsp::LanguageServerStatus, String> {
+        let (resolved_workspace_id, resolved_workspace_root) =
+            self.lsp_workspace_identity(workspace_root)?;
+        let path = normalize_lsp_document_path(&path)?;
+        let _ = workspace_id;
+        lsp_state.close_document(resolved_workspace_id, resolved_workspace_root, path)
+    }
+
+    pub fn lsp_document_diagnostics(
+        &self,
+        lsp_state: &crate::lsp::LspState,
+        workspace_root: &str,
+        workspace_id: &str,
+        path: String,
+    ) -> Result<Vec<crate::lsp::LspDiagnostic>, String> {
+        let (resolved_workspace_id, _) = self.lsp_workspace_identity(workspace_root)?;
+        let path = normalize_lsp_document_path(&path)?;
+        let _ = workspace_id;
+        Ok(lsp_state.document_diagnostics(&resolved_workspace_id, &path))
+    }
+
+    pub fn lsp_workspace_diagnostics(
+        &self,
+        lsp_state: &crate::lsp::LspState,
+        workspace_root: &str,
+        workspace_id: &str,
+    ) -> Result<Vec<crate::lsp::LspDiagnostic>, String> {
+        let (resolved_workspace_id, _) = self.lsp_workspace_identity(workspace_root)?;
+        let _ = workspace_id;
+        Ok(lsp_state.workspace_diagnostics(&resolved_workspace_id))
+    }
+
+    pub fn lsp_hover(
+        &self,
+        lsp_state: &crate::lsp::LspState,
+        workspace_root: &str,
+        workspace_id: &str,
+        path: String,
+        _line: u32,
+        _character: u32,
+    ) -> Result<serde_json::Value, String> {
+        let status = self.lsp_document_status(lsp_state, workspace_root, workspace_id, path)?;
+        if !matches!(
+            status,
+            Some(crate::lsp::LanguageServerStatus {
+                state: crate::lsp::ServerState::Running,
+                ..
+            })
+        ) {
+            return Ok(serde_json::Value::Object(Default::default()));
+        }
+        Ok(serde_json::Value::Object(Default::default()))
+    }
+
+    pub fn lsp_definition(
+        &self,
+        lsp_state: &crate::lsp::LspState,
+        workspace_root: &str,
+        workspace_id: &str,
+        path: String,
+        _line: u32,
+        _character: u32,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let status = self.lsp_document_status(lsp_state, workspace_root, workspace_id, path)?;
+        if !matches!(
+            status,
+            Some(crate::lsp::LanguageServerStatus {
+                state: crate::lsp::ServerState::Running,
+                ..
+            })
+        ) {
+            return Ok(Vec::new());
+        }
+        Ok(Vec::new())
+    }
+
+    pub fn lsp_references(
+        &self,
+        lsp_state: &crate::lsp::LspState,
+        workspace_root: &str,
+        workspace_id: &str,
+        path: String,
+        _line: u32,
+        _character: u32,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let status = self.lsp_document_status(lsp_state, workspace_root, workspace_id, path)?;
+        if !matches!(
+            status,
+            Some(crate::lsp::LanguageServerStatus {
+                state: crate::lsp::ServerState::Running,
+                ..
+            })
+        ) {
+            return Ok(Vec::new());
+        }
+        Ok(Vec::new())
+    }
+
+    pub fn lsp_completion(
+        &self,
+        lsp_state: &crate::lsp::LspState,
+        workspace_root: &str,
+        workspace_id: &str,
+        path: String,
+        _line: u32,
+        _character: u32,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let status = self.lsp_document_status(lsp_state, workspace_root, workspace_id, path)?;
+        if !matches!(
+            status,
+            Some(crate::lsp::LanguageServerStatus {
+                state: crate::lsp::ServerState::Running,
+                ..
+            })
+        ) {
+            return Ok(Vec::new());
+        }
+        Ok(Vec::new())
+    }
+
+    pub fn lsp_code_actions(
+        &self,
+        lsp_state: &crate::lsp::LspState,
+        workspace_root: &str,
+        workspace_id: &str,
+        path: String,
+        _line: u32,
+        _character: u32,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let status = self.lsp_document_status(lsp_state, workspace_root, workspace_id, path)?;
+        if !matches!(
+            status,
+            Some(crate::lsp::LanguageServerStatus {
+                state: crate::lsp::ServerState::Running,
+                ..
+            })
+        ) {
+            return Ok(Vec::new());
+        }
+        Ok(Vec::new())
+    }
+
+    pub fn lsp_symbols(
+        &self,
+        _lsp_state: &crate::lsp::LspState,
+        workspace_root: &str,
+        workspace_id: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let _ = self.lsp_workspace_identity(workspace_root)?;
+        let _ = workspace_id;
+        Ok(Vec::new())
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Tauri command exposes the planned flat frontend API contract"
+    )]
+    pub fn lsp_rename(
+        &self,
+        lsp_state: &crate::lsp::LspState,
+        workspace_root: &str,
+        workspace_id: &str,
+        path: String,
+        line: u32,
+        character: u32,
+        new_name: String,
+    ) -> Result<serde_json::Value, String> {
+        let _ = (line, character, new_name);
+        let status = self.lsp_document_status(lsp_state, workspace_root, workspace_id, path)?;
+        if !matches!(
+            status,
+            Some(crate::lsp::LanguageServerStatus {
+                state: crate::lsp::ServerState::Running,
+                ..
+            })
+        ) {
+            return Ok(serde_json::Value::Object(Default::default()));
+        }
+        Ok(serde_json::Value::Object(Default::default()))
+    }
+
+    pub fn lsp_restart_server(
+        &self,
+        lsp_state: &crate::lsp::LspState,
+        workspace_root: &str,
+        workspace_id: &str,
+        path: String,
+    ) -> Result<crate::lsp::LanguageServerStatus, String> {
+        let (resolved_workspace_id, resolved_workspace_root) =
+            self.lsp_workspace_identity(workspace_root)?;
+        let path = normalize_lsp_document_path(&path)?;
+        let _ = workspace_id;
+        let _ =
+            lsp_state.document_status(&resolved_workspace_id, &resolved_workspace_root, &path)?;
+        lsp_state.open_document(
+            resolved_workspace_id,
+            resolved_workspace_root,
+            path,
+            String::new(),
+        )
+    }
+
+    pub fn lsp_server_logs(
+        &self,
+        _lsp_state: &crate::lsp::LspState,
+        workspace_root: &str,
+        workspace_id: &str,
+    ) -> Result<Vec<String>, String> {
+        let _ = self.lsp_workspace_identity(workspace_root)?;
+        let _ = workspace_id;
+        Ok(Vec::new())
+    }
+
+    fn lsp_document_status(
+        &self,
+        lsp_state: &crate::lsp::LspState,
+        workspace_root: &str,
+        workspace_id: &str,
+        path: String,
+    ) -> Result<Option<crate::lsp::LanguageServerStatus>, String> {
+        let (resolved_workspace_id, resolved_workspace_root) =
+            self.lsp_workspace_identity(workspace_root)?;
+        let path = normalize_lsp_document_path(&path)?;
+        let _ = workspace_id;
+        lsp_state.document_status(&resolved_workspace_id, &resolved_workspace_root, &path)
     }
 
     fn active_workspace_root(&self) -> Result<PathBuf, String> {
@@ -728,13 +985,33 @@ pub fn delete_path(
     file_system::delete_path(&workspace_root, Path::new(&path))
 }
 
-fn workspace_root_and_id(
-    state: &AppState,
-    workspace_root: String,
-) -> Result<(String, String), String> {
-    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    let (workspace_id, workspace_root) = state.workspace_identity(&workspace_root)?;
-    Ok((workspace_id, workspace_root))
+fn normalize_lsp_document_path(path: &str) -> Result<String, String> {
+    let mut parts = Vec::new();
+    for component in Path::new(path).components() {
+        match component {
+            Component::Normal(part) => {
+                let part = part
+                    .to_str()
+                    .ok_or_else(|| "document path is not valid UTF-8".to_string())?;
+                parts.push(part.to_string());
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if parts.pop().is_none() {
+                    return Err("document path escapes workspace".to_string());
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err("document path escapes workspace".to_string());
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        return Err("document path is empty".to_string());
+    }
+
+    Ok(parts.join("/"))
 }
 
 #[tauri::command]
@@ -755,15 +1032,7 @@ pub fn lsp_open_document(
     path: String,
     content: String,
 ) -> Result<crate::lsp::LanguageServerStatus, String> {
-    let (resolved_workspace_id, resolved_workspace_root) =
-        workspace_root_and_id(&state, workspace_root)?;
-    let _ = workspace_id;
-    lsp_state.open_document(
-        resolved_workspace_id,
-        resolved_workspace_root,
-        path,
-        content,
-    )
+    state.lsp_open_document(&lsp_state, &workspace_root, &workspace_id, path, content)
 }
 
 #[tauri::command]
@@ -774,10 +1043,7 @@ pub fn lsp_close_document(
     workspace_id: String,
     path: String,
 ) -> Result<crate::lsp::LanguageServerStatus, String> {
-    let (resolved_workspace_id, resolved_workspace_root) =
-        workspace_root_and_id(&state, workspace_root)?;
-    let _ = workspace_id;
-    lsp_state.close_document(resolved_workspace_id, resolved_workspace_root, path)
+    state.lsp_close_document(&lsp_state, &workspace_root, &workspace_id, path)
 }
 
 #[tauri::command]
@@ -788,9 +1054,7 @@ pub fn lsp_document_diagnostics(
     workspace_id: String,
     path: String,
 ) -> Result<Vec<crate::lsp::LspDiagnostic>, String> {
-    let (resolved_workspace_id, _) = workspace_root_and_id(&state, workspace_root)?;
-    let _ = workspace_id;
-    Ok(lsp_state.document_diagnostics(&resolved_workspace_id, &path))
+    state.lsp_document_diagnostics(&lsp_state, &workspace_root, &workspace_id, path)
 }
 
 #[tauri::command]
@@ -800,9 +1064,7 @@ pub fn lsp_workspace_diagnostics(
     workspace_root: String,
     workspace_id: String,
 ) -> Result<Vec<crate::lsp::LspDiagnostic>, String> {
-    let (resolved_workspace_id, _) = workspace_root_and_id(&state, workspace_root)?;
-    let _ = workspace_id;
-    Ok(lsp_state.workspace_diagnostics(&resolved_workspace_id))
+    state.lsp_workspace_diagnostics(&lsp_state, &workspace_root, &workspace_id)
 }
 
 #[tauri::command]
@@ -815,22 +1077,14 @@ pub fn lsp_hover(
     _line: u32,
     _character: u32,
 ) -> Result<serde_json::Value, String> {
-    let _ = workspace_root;
-    let _ = workspace_id;
-    let (resolved_workspace_id, resolved_workspace_root) =
-        workspace_root_and_id(&state, workspace_root)?;
-    let status =
-        lsp_state.document_status(&resolved_workspace_id, &resolved_workspace_root, &path)?;
-    if !matches!(
-        status,
-        Some(crate::lsp::LanguageServerStatus {
-            state: crate::lsp::ServerState::Running,
-            ..
-        })
-    ) {
-        return Ok(serde_json::Value::Object(Default::default()));
-    }
-    Ok(serde_json::Value::Object(Default::default()))
+    state.lsp_hover(
+        &lsp_state,
+        &workspace_root,
+        &workspace_id,
+        path,
+        _line,
+        _character,
+    )
 }
 
 #[tauri::command]
@@ -843,21 +1097,14 @@ pub fn lsp_definition(
     _line: u32,
     _character: u32,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let _ = workspace_id;
-    let (resolved_workspace_id, resolved_workspace_root) =
-        workspace_root_and_id(&state, workspace_root)?;
-    let status =
-        lsp_state.document_status(&resolved_workspace_id, &resolved_workspace_root, &path)?;
-    if !matches!(
-        status,
-        Some(crate::lsp::LanguageServerStatus {
-            state: crate::lsp::ServerState::Running,
-            ..
-        })
-    ) {
-        return Ok(Vec::new());
-    }
-    Ok(Vec::new())
+    state.lsp_definition(
+        &lsp_state,
+        &workspace_root,
+        &workspace_id,
+        path,
+        _line,
+        _character,
+    )
 }
 
 #[tauri::command]
@@ -870,21 +1117,14 @@ pub fn lsp_references(
     _line: u32,
     _character: u32,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let _ = workspace_id;
-    let (resolved_workspace_id, resolved_workspace_root) =
-        workspace_root_and_id(&state, workspace_root)?;
-    let status =
-        lsp_state.document_status(&resolved_workspace_id, &resolved_workspace_root, &path)?;
-    if !matches!(
-        status,
-        Some(crate::lsp::LanguageServerStatus {
-            state: crate::lsp::ServerState::Running,
-            ..
-        })
-    ) {
-        return Ok(Vec::new());
-    }
-    Ok(Vec::new())
+    state.lsp_references(
+        &lsp_state,
+        &workspace_root,
+        &workspace_id,
+        path,
+        _line,
+        _character,
+    )
 }
 
 #[tauri::command]
@@ -897,21 +1137,14 @@ pub fn lsp_completion(
     _line: u32,
     _character: u32,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let _ = workspace_id;
-    let (resolved_workspace_id, resolved_workspace_root) =
-        workspace_root_and_id(&state, workspace_root)?;
-    let status =
-        lsp_state.document_status(&resolved_workspace_id, &resolved_workspace_root, &path)?;
-    if !matches!(
-        status,
-        Some(crate::lsp::LanguageServerStatus {
-            state: crate::lsp::ServerState::Running,
-            ..
-        })
-    ) {
-        return Ok(Vec::new());
-    }
-    Ok(Vec::new())
+    state.lsp_completion(
+        &lsp_state,
+        &workspace_root,
+        &workspace_id,
+        path,
+        _line,
+        _character,
+    )
 }
 
 #[tauri::command]
@@ -924,33 +1157,24 @@ pub fn lsp_code_actions(
     _line: u32,
     _character: u32,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let _ = workspace_id;
-    let (resolved_workspace_id, resolved_workspace_root) =
-        workspace_root_and_id(&state, workspace_root)?;
-    let status =
-        lsp_state.document_status(&resolved_workspace_id, &resolved_workspace_root, &path)?;
-    if !matches!(
-        status,
-        Some(crate::lsp::LanguageServerStatus {
-            state: crate::lsp::ServerState::Running,
-            ..
-        })
-    ) {
-        return Ok(Vec::new());
-    }
-    Ok(Vec::new())
+    state.lsp_code_actions(
+        &lsp_state,
+        &workspace_root,
+        &workspace_id,
+        path,
+        _line,
+        _character,
+    )
 }
 
 #[tauri::command]
 pub fn lsp_symbols(
     state: State<'_, AppState>,
-    _lsp_state: State<'_, crate::lsp::LspState>,
+    lsp_state: State<'_, crate::lsp::LspState>,
     workspace_root: String,
     workspace_id: String,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let _ = (workspace_root, workspace_id);
-    let _ = state;
-    Ok(Vec::new())
+    state.lsp_symbols(&lsp_state, &workspace_root, &workspace_id)
 }
 
 #[tauri::command]
@@ -968,22 +1192,15 @@ pub fn lsp_rename(
     _character: u32,
     new_name: String,
 ) -> Result<serde_json::Value, String> {
-    let _ = workspace_id;
-    let _ = new_name;
-    let (resolved_workspace_id, resolved_workspace_root) =
-        workspace_root_and_id(&state, workspace_root)?;
-    let status =
-        lsp_state.document_status(&resolved_workspace_id, &resolved_workspace_root, &path)?;
-    if !matches!(
-        status,
-        Some(crate::lsp::LanguageServerStatus {
-            state: crate::lsp::ServerState::Running,
-            ..
-        })
-    ) {
-        return Ok(serde_json::Value::Object(Default::default()));
-    }
-    Ok(serde_json::Value::Object(Default::default()))
+    state.lsp_rename(
+        &lsp_state,
+        &workspace_root,
+        &workspace_id,
+        path,
+        _line,
+        _character,
+        new_name,
+    )
 }
 
 #[tauri::command]
@@ -994,27 +1211,17 @@ pub fn lsp_restart_server(
     workspace_id: String,
     path: String,
 ) -> Result<crate::lsp::LanguageServerStatus, String> {
-    let (resolved_workspace_id, resolved_workspace_root) =
-        workspace_root_and_id(&state, workspace_root)?;
-    let _ = workspace_id;
-    let _ = lsp_state.document_status(&resolved_workspace_id, &resolved_workspace_root, &path)?;
-    lsp_state.open_document(
-        resolved_workspace_id,
-        resolved_workspace_root,
-        path,
-        String::new(),
-    )
+    state.lsp_restart_server(&lsp_state, &workspace_root, &workspace_id, path)
 }
 
 #[tauri::command]
 pub fn lsp_server_logs(
     state: State<'_, AppState>,
-    _lsp_state: State<'_, crate::lsp::LspState>,
+    lsp_state: State<'_, crate::lsp::LspState>,
     workspace_root: String,
     workspace_id: String,
 ) -> Result<Vec<String>, String> {
-    let _ = (state, workspace_root, workspace_id);
-    Ok(Vec::new())
+    state.lsp_server_logs(&lsp_state, &workspace_root, &workspace_id)
 }
 
 #[cfg(test)]
@@ -1274,6 +1481,211 @@ mod tests {
         );
 
         assert!(result.unwrap_err().contains("workspace not registered"));
+    }
+
+    #[test]
+    fn all_lsp_commands_reject_unregistered_workspaces() {
+        let config = tempfile::tempdir().expect("config dir");
+        let state = AppState::new(config.path()).expect("state");
+        let lsp_state = crate::lsp::LspState::new_for_tests();
+        let unregistered_workspace = tempfile::tempdir().expect("unregistered workspace");
+        let workspace_root = unregistered_workspace.path().to_str().expect("path");
+        let workspace_id = "workspace";
+
+        let results = [
+            (
+                "status",
+                state
+                    .lsp_server_status(&lsp_state, workspace_root)
+                    .map(|_| ()),
+            ),
+            (
+                "open",
+                state
+                    .lsp_open_document(
+                        &lsp_state,
+                        workspace_root,
+                        workspace_id,
+                        "src/main.rs".to_string(),
+                        "fn main() {}".to_string(),
+                    )
+                    .map(|_| ()),
+            ),
+            (
+                "close",
+                state
+                    .lsp_close_document(
+                        &lsp_state,
+                        workspace_root,
+                        workspace_id,
+                        "src/main.rs".to_string(),
+                    )
+                    .map(|_| ()),
+            ),
+            (
+                "document diagnostics",
+                state
+                    .lsp_document_diagnostics(
+                        &lsp_state,
+                        workspace_root,
+                        workspace_id,
+                        "src/main.rs".to_string(),
+                    )
+                    .map(|_| ()),
+            ),
+            (
+                "workspace diagnostics",
+                state
+                    .lsp_workspace_diagnostics(&lsp_state, workspace_root, workspace_id)
+                    .map(|_| ()),
+            ),
+            (
+                "hover",
+                state
+                    .lsp_hover(
+                        &lsp_state,
+                        workspace_root,
+                        workspace_id,
+                        "src/main.rs".to_string(),
+                        1,
+                        1,
+                    )
+                    .map(|_| ()),
+            ),
+            (
+                "definition",
+                state
+                    .lsp_definition(
+                        &lsp_state,
+                        workspace_root,
+                        workspace_id,
+                        "src/main.rs".to_string(),
+                        1,
+                        1,
+                    )
+                    .map(|_| ()),
+            ),
+            (
+                "references",
+                state
+                    .lsp_references(
+                        &lsp_state,
+                        workspace_root,
+                        workspace_id,
+                        "src/main.rs".to_string(),
+                        1,
+                        1,
+                    )
+                    .map(|_| ()),
+            ),
+            (
+                "completion",
+                state
+                    .lsp_completion(
+                        &lsp_state,
+                        workspace_root,
+                        workspace_id,
+                        "src/main.rs".to_string(),
+                        1,
+                        1,
+                    )
+                    .map(|_| ()),
+            ),
+            (
+                "code actions",
+                state
+                    .lsp_code_actions(
+                        &lsp_state,
+                        workspace_root,
+                        workspace_id,
+                        "src/main.rs".to_string(),
+                        1,
+                        1,
+                    )
+                    .map(|_| ()),
+            ),
+            (
+                "symbols",
+                state
+                    .lsp_symbols(&lsp_state, workspace_root, workspace_id)
+                    .map(|_| ()),
+            ),
+            (
+                "rename",
+                state
+                    .lsp_rename(
+                        &lsp_state,
+                        workspace_root,
+                        workspace_id,
+                        "src/main.rs".to_string(),
+                        1,
+                        1,
+                        "renamed".to_string(),
+                    )
+                    .map(|_| ()),
+            ),
+            (
+                "restart",
+                state
+                    .lsp_restart_server(
+                        &lsp_state,
+                        workspace_root,
+                        workspace_id,
+                        "src/main.rs".to_string(),
+                    )
+                    .map(|_| ()),
+            ),
+            (
+                "logs",
+                state
+                    .lsp_server_logs(&lsp_state, workspace_root, workspace_id)
+                    .map(|_| ()),
+            ),
+        ];
+
+        for (name, result) in results {
+            assert!(
+                result
+                    .expect_err("command should reject unregistered workspace")
+                    .contains("workspace not registered"),
+                "{name} did not reject unregistered workspace"
+            );
+        }
+    }
+
+    #[test]
+    fn lsp_open_document_rejects_paths_that_escape_workspace() {
+        let config = tempfile::tempdir().expect("config dir");
+        let state = AppState::new(config.path()).expect("state");
+        let lsp_state = crate::lsp::LspState::new_for_tests();
+        let workspace = config.path().join("project-a");
+        std::fs::create_dir_all(workspace.join("src")).expect("workspace");
+        state
+            .open_workspace_path(workspace.clone())
+            .expect("open workspace");
+        let workspace_root = workspace
+            .canonicalize()
+            .expect("canonical")
+            .to_string_lossy()
+            .to_string();
+
+        for path in ["../outside.rs", "/tmp/outside.rs"] {
+            let result = state.lsp_open_document(
+                &lsp_state,
+                &workspace_root,
+                "project-a",
+                path.to_string(),
+                "fn main() {}".to_string(),
+            );
+
+            assert!(result
+                .expect_err("path should be rejected")
+                .contains("document path escapes workspace"));
+        }
+        assert!(state
+            .lsp_server_status(&lsp_state, &workspace_root)
+            .expect("status")
+            .is_empty());
     }
 
     #[test]
