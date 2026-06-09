@@ -4,11 +4,13 @@ import { describe, expect, test } from "bun:test";
 
 import {
   addBrowserConsoleError,
+  setBrowserError,
   browserScreenshotToContext,
   createBrowserState,
   detectDevServerTargets,
   MAX_CONSOLE_ERRORS,
   MAX_SCREENSHOTS,
+  updateBrowserBounds,
   openBrowserUrl,
   reloadBrowser,
   hardReloadBrowser,
@@ -40,7 +42,19 @@ describe("browser model", () => {
 
     expect(state.urlInput).toBe("http://localhost:5173/app");
     expect(state.activeUrl).toBe("http://localhost:5173/app");
-    expect(state.status).toBe("loading");
+    expect(state.status).toBe("ready");
+    expect(state.activeTitle).toBe("localhost:5173/app");
+    expect(state.error).toBeNull();
+  });
+
+  test("openBrowserUrl strips protocol for title and preserves path", () => {
+    const state = openBrowserUrl(createBrowserState(), {
+      url: "http://localhost:5173/app?tab=preview#top",
+      host: "localhost",
+      port: 5173,
+    });
+
+    expect(state.activeTitle).toBe("localhost:5173/app?tab=preview#top");
   });
 
   test("updates URL input independently from active URL", () => {
@@ -65,6 +79,27 @@ describe("browser model", () => {
     const hardReloaded = hardReloadBrowser(reloaded);
     expect(hardReloaded.reloadVersion).toBe(1);
     expect(hardReloaded.hardReloadVersion).toBe(1);
+  });
+
+  test("does not increment reload counters while idle", () => {
+    const idle = createBrowserState();
+    expect(reloadBrowser(idle)).toEqual(idle);
+    expect(hardReloadBrowser(idle)).toEqual(idle);
+  });
+
+  test("setBrowserError accepts null to clear the current error", () => {
+    const opened = openBrowserUrl(createBrowserState(), {
+      url: "http://localhost:5173",
+      host: "localhost",
+      port: 5173,
+    });
+    const withError = setBrowserError(opened, "network issue");
+
+    expect(withError.error).toBe("network issue");
+
+    const cleared = setBrowserError(withError, null);
+    expect(cleared.error).toBeNull();
+    expect(cleared.status).toBe(withError.status);
   });
 
   test("detects dev server targets from running output first then command fallbacks", () => {
@@ -141,9 +176,36 @@ describe("browser model", () => {
       kind: "screenshot",
       label: "Browser screenshot: localhost:5173",
       path: null,
-      content: "data:image/png;base64,iVBORw0KGgo=",
+      content:
+        "URL: http://localhost:5173\n" +
+        "Size: 1920x1080\n" +
+        "Captured: 3\n" +
+        "Data URL: data:image/png;base64,iVBORw0KGgo=",
       truncated: false,
     });
+  });
+
+  test("adds screenshot metadata to agent context content", () => {
+    const context = browserScreenshotToContext({
+      ...withScreenshot(11, 1234),
+      width: 123,
+      height: 77,
+    });
+
+    expect(context.content).toContain("URL: http://localhost:5173");
+    expect(context.content).toContain("Size: 123x77");
+    expect(context.content).toContain("Captured: 1234");
+    expect(context.content).toContain("Data URL: data:image/png;base64,iVBORw0KGgo=");
+  });
+
+  test("falls back screenshot label title from URL when screenshot title is empty", () => {
+    const context = browserScreenshotToContext({
+      ...withScreenshot(22, 5678),
+      title: "",
+      url: "http://localhost:5173/path?x=1",
+    });
+
+    expect(context.label).toBe("Browser screenshot: localhost:5173/path?x=1");
   });
 
   test("addBrowserConsoleError bounds console errors without clearing screenshots", () => {
@@ -160,5 +222,49 @@ describe("browser model", () => {
     expect(withErrors.consoleErrors).toHaveLength(MAX_CONSOLE_ERRORS);
     expect(withErrors.consoleErrors[0].message).toBe("Error 25");
     expect(withErrors.screenshots).toHaveLength(1);
+  });
+
+  test("updateBrowserBounds accepts null", () => {
+    const bounds = { x: 1, y: 2, width: 100, height: 200 };
+    const updated = updateBrowserBounds(createBrowserState(), bounds);
+    expect(updated.bounds).toEqual(bounds);
+
+    const cleared = updateBrowserBounds(updated, null);
+    expect(cleared.bounds).toBeNull();
+  });
+
+  test("infers localhost URL from generic command with explicit port", () => {
+    const targets = detectDevServerTargets({
+      detectedTasks: [
+        {
+          id: "serve",
+          label: "Serve",
+          command: "serve --port 4444",
+          cwd: "/repo",
+          source: "npm",
+        },
+      ],
+      runs: [],
+      outputByRunId: {},
+    } satisfies {
+      detectedTasks: Array<{
+        id: string;
+        label: string;
+        command: string;
+        cwd: string;
+        source: string;
+      }>;
+      runs: [];
+      outputByRunId: Record<string, string>;
+    });
+
+    expect(targets).toEqual([
+      {
+        id: "task-command:serve:0",
+        label: "Serve",
+        url: "http://localhost:4444",
+        source: "task-command",
+      },
+    ]);
   });
 });

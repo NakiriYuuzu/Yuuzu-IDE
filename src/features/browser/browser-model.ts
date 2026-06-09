@@ -90,13 +90,13 @@ export function openBrowserUrl(
   state: BrowserViewState,
   url: BrowserUrl,
 ): BrowserViewState {
-  const title = url.port === null ? url.host : `${url.host}:${url.port}`;
+  const title = stripProtocol(url.url);
   return {
     ...state,
     urlInput: url.url,
     activeUrl: url.url,
     activeTitle: title,
-    status: "loading",
+    status: "ready",
     error: null,
     reloadVersion: 0,
     hardReloadVersion: 0,
@@ -105,8 +105,12 @@ export function openBrowserUrl(
 
 export function setBrowserError(
   state: BrowserViewState,
-  error: string,
+  error: string | null,
 ): BrowserViewState {
+  if (error === null) {
+    return { ...state, error: null };
+  }
+
   return {
     ...state,
     status: "error",
@@ -115,10 +119,18 @@ export function setBrowserError(
 }
 
 export function reloadBrowser(state: BrowserViewState): BrowserViewState {
+  if (state.status === "idle") {
+    return state;
+  }
+
   return { ...state, status: "loading", error: null, reloadVersion: state.reloadVersion + 1 };
 }
 
 export function hardReloadBrowser(state: BrowserViewState): BrowserViewState {
+  if (state.status === "idle") {
+    return state;
+  }
+
   return {
     ...state,
     status: "loading",
@@ -129,7 +141,7 @@ export function hardReloadBrowser(state: BrowserViewState): BrowserViewState {
 
 export function updateBrowserBounds(
   state: BrowserViewState,
-  bounds: BrowserPreviewBounds,
+  bounds: BrowserPreviewBounds | null,
 ): BrowserViewState {
   return { ...state, bounds };
 }
@@ -157,12 +169,18 @@ export function addBrowserConsoleError(
 }
 
 export function browserScreenshotToContext(screenshot: BrowserScreenshot) {
+  const labelTitle = screenshot.title || stripProtocol(screenshot.url);
+
   return {
     id: `screenshot:${screenshot.id}`,
     kind: "screenshot" as const,
-    label: `Browser screenshot: ${screenshot.title}`,
+    label: `Browser screenshot: ${labelTitle}`,
     path: null,
-    content: screenshot.data_url,
+    content:
+      `URL: ${screenshot.url}\n` +
+      `Size: ${screenshot.width}x${screenshot.height}\n` +
+      `Captured: ${screenshot.captured_ms}\n` +
+      `Data URL: ${screenshot.data_url}`,
     truncated: false,
   };
 }
@@ -235,7 +253,15 @@ export function urlFromTaskCommand(command: string): string | null {
     return `http://localhost:${port}`;
   }
 
+  if (parsedPort) {
+    return `http://localhost:${parsedPort}`;
+  }
+
   return null;
+}
+
+function stripProtocol(url: string): string {
+  return url.replace(/^https?:\/\//u, "");
 }
 
 function parsePortFromCommand(command: string): number | null {
