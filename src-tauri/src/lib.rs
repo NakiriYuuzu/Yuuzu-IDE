@@ -3,6 +3,7 @@ pub mod docs;
 mod file_system;
 mod file_watcher;
 pub mod git;
+pub mod lsp;
 mod metrics;
 mod pty;
 mod search;
