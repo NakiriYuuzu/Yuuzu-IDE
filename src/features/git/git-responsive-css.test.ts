@@ -7,7 +7,7 @@ const css = readFileSync(new URL("../../index.css", import.meta.url), "utf8");
 describe("git responsive CSS", () => {
   test("keeps Git diff and graph surfaces bounded on narrow screens", () => {
     const mobileToolbarRule = css.match(
-      /\.git-diff-toolbar,\n  \.git-graph-toolbar \{(?<body>[\s\S]*?)\n  \}/,
+      /\.git-diff-toolbar,[^{]*\.git-graph-toolbar[^{]*\{(?<body>[\s\S]*?)\n  \}/,
     )?.groups?.body;
 
     expect(css).toContain("@media (max-width: 760px)");
