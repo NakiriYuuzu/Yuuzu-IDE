@@ -285,3 +285,131 @@ Residual risks:
   a settled desktop Tauri app footprint value.
 - Vite chunk-size warning remains during `bun run build`; it is accepted for
   Node 2 because the build exits successfully and Monaco remains lazy-loaded.
+
+### Node 3: Integrated Terminal And Task Runner
+
+Status: completed and passed.
+
+Node 3 finished Tasks 1-6 and records the final terminal/task measurements in
+`docs/architecture/node-3-terminal-results.md`. The node adds Rust-owned PTY and
+task process lifecycles, per-workspace frontend terminal/task state, live xterm
+rendering, task detection, task run/stop/rerun controls, and basic problem
+matching.
+
+Completed progress:
+
+- Task 1 added the Rust terminal session manager, PTY process tracking, session
+  metadata, command signatures, output/exit events, and cleanup tests.
+- Task 2 added typed terminal frontend APIs and per-workspace terminal state.
+- Task 3 added the live terminal UI, xterm lifecycle cleanup, terminal panel,
+  output/exit event handling, close/restart flows, and pending event handling.
+- Task 4 added Rust task detection, task run registry, process execution,
+  output/finished events, stop behavior, process group termination, and
+  lifecycle race hardening.
+- Task 5 added typed task frontend APIs, task state, problem matcher, task
+  activity rail/panel, command palette task commands, workspace-scoped task
+  errors, and restored-history ordering.
+- Task 6 verified the full node, recorded browser smoke, command-level runtime
+  measurements, and documentation updates.
+
+Important files and commit milestones:
+
+- `src-tauri/src/terminal.rs`, `src-tauri/src/tasks.rs`,
+  `src-tauri/src/commands.rs`, and `src-tauri/src/lib.rs` own terminal/task
+  Rust lifecycle and Tauri command/event surfaces.
+- `src/features/terminal/terminal-api.ts`,
+  `src/features/terminal/terminal-model.ts`,
+  `src/features/terminal/TerminalPanel.tsx`,
+  `src/features/terminal/TerminalTab.tsx`, and
+  `src/features/terminal/terminal-lifecycle.ts` own frontend terminal state,
+  panels, and xterm lifecycle.
+- `src/features/tasks/task-api.ts`, `src/features/tasks/task-model.ts`,
+  `src/features/tasks/problem-matcher.ts`, `src/features/tasks/TaskPanel.tsx`,
+  `src/app/AppShell.tsx`, `src/app/activity-rail.tsx`,
+  `src/app/command-palette-model.ts`, `src/app/workspace-view-state.ts`, and
+  `src/index.css` own frontend task state, task UI, command routing, and
+  workspace restoration.
+- `ddfeb0c`, `0a05f01`, and `0f7f168` added and hardened the terminal session
+  manager.
+- `5b1eba0` added terminal view state.
+- `84c0fa1`, `164ad7b`, `c2ae692`, and `68e6c6c` added and hardened live
+  terminal UI and event buffering.
+- `93113c7`, `f2d21e4`, `78c002c`, and `34f9819` added and hardened the task
+  runner process lifecycle.
+- `679cc90` and `28f51eb` added the frontend task panel and hardened restored
+  task history plus workspace-scoped task errors.
+
+Verification evidence:
+
+- `bun test`: passed with 71 tests, 0 failed, and 134 expect calls across
+  17 files.
+- `bun run build`: passed; Vite emitted a chunk-size warning only.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml`:
+  passed with 88 Rust lib tests plus 0 main/doc tests.
+- `. "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check`:
+  passed.
+- `. "$HOME/.cargo/env" && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings`:
+  passed.
+- `. "$HOME/.cargo/env" && bun run tauri build --debug`: passed and built the
+  debug app plus macOS debug app/dmg bundles under
+  `src-tauri/target/debug/bundle`.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml terminal`:
+  passed with 8 focused terminal tests.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml tasks`:
+  passed with 11 focused task tests.
+- `bun test src/features/terminal/terminal-model.test.ts src/features/terminal/terminal-lifecycle.test.ts src/features/tasks/problem-matcher.test.ts src/features/tasks/task-model.test.ts`:
+  passed with 23 focused frontend terminal/task tests.
+- Playwright CLI browser smoke against `http://127.0.0.1:1420/` rendered the
+  shell, Tasks panel, Terminal panel, and found no undersized visible controls
+  among 22 buttons, inputs, badges, and rows.
+
+TDD red/green/refactor evidence summary:
+
+- Terminal Rust behavior was introduced under focused
+  `cargo test --manifest-path src-tauri/Cargo.toml terminal` coverage, then
+  hardened for close/list semantics, PTY sizing, process cleanup, rollback, and
+  command signatures.
+- Terminal frontend behavior was introduced under Bun terminal model and
+  lifecycle tests, then hardened for pending output/exit buffering, close
+  behavior, input cleanup, and ignored events after local close.
+- Task Rust behavior was introduced under focused
+  `cargo test --manifest-path src-tauri/Cargo.toml tasks` coverage, then
+  hardened for process group termination, stopped-run event suppression,
+  fast-exit stop handling, stop/finish race handling, and failed-stop rollback.
+- Task frontend behavior was introduced under Bun problem matcher, task model,
+  workspace view, and command palette tests, then hardened for restored history
+  ordering, numeric task suffixes, running-first history restore, and
+  workspace-scoped task errors.
+- Task 6 itself is documentation and verification only, so it records the
+  behavior-task evidence rather than adding a new behavior RED/GREEN cycle.
+
+Final measurement evidence:
+
+- Debug app path:
+  `src-tauri/target/debug/bundle/macos/Yuuzu-IDE.app`.
+- Debug DMG path:
+  `src-tauri/target/debug/bundle/dmg/Yuuzu-IDE_0.1.0_aarch64.dmg`.
+- Browser smoke target: `http://127.0.0.1:1420/`.
+- Terminal spawn proxy via PTY command: 3 ms.
+- Terminal first output proxy via shell command: 7 ms.
+- Two terminal-like shell RSS proxy: 2.3 MB.
+- Task detection focused Rust test: 233 ms.
+- Short task run proxy, `printf task-ok`: 7 ms.
+- Task stop proxy, `sleep 30` process group: under 1 ms.
+- xterm lazy-loading evidence: browser resource eval loaded terminal
+  model/API/panel modules but no `TerminalTab`, `load-xterm`, or xterm runtime
+  before a real terminal session existed.
+- Terminal process cleanup: passed, with no orphan `sleep 30` process after the
+  stop proxy.
+
+Residual risks:
+
+- Normal browser preview cannot exercise real Tauri terminal/task IPC outside
+  the desktop WebView. Runtime confidence comes from Rust command tests,
+  frontend state tests, debug app build, and command-level process proxies.
+- Vite chunk-size warning remains during `bun run build`; it is accepted for
+  Node 3 because the build exits successfully and Monaco/xterm remain
+  lazy-loaded.
+- Task problem matching reparses bounded output on append. The code-quality
+  reviewer accepted this as non-blocking because task output is capped at
+  120,000 characters and problem results are capped at 100.
