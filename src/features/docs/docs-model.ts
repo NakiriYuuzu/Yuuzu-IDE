@@ -55,6 +55,7 @@ export type DocsRequestIdentity = {
 export type DocsViewState = {
   index: DocIndexEntry[];
   previewByPath: Record<string, DocPreview>;
+  activePreviewPath: string | null;
   searchQuery: string;
   searchResult: DocSearchResult | null;
   selectedDocPaths: Record<string, true>;
@@ -69,6 +70,7 @@ export function createDocsState(): DocsViewState {
   return {
     index: [],
     previewByPath: {},
+    activePreviewPath: null,
     searchQuery: "",
     searchResult: null,
     selectedDocPaths: {},
@@ -118,6 +120,60 @@ export function docsSearchSummary(result: DocSearchResult): string {
   const docLabel = docCount === 1 ? "doc" : "docs";
 
   return `${matchCount} ${matchLabel} in ${docCount} ${docLabel}`;
+}
+
+function countLabel(count: number, singular: string): string {
+  return `${count} ${singular}${count === 1 ? "" : "s"}`;
+}
+
+export function contextPackSummary(pack: ContextPack): string {
+  return [
+    countLabel(pack.doc_paths.length, "doc"),
+    countLabel(pack.linked_task_run_ids.length, "task link"),
+    countLabel(pack.linked_agent_session_ids.length, "agent link"),
+  ].join(" | ");
+}
+
+export function beginDocPreview(
+  state: DocsViewState,
+  path: string,
+): DocsViewState {
+  return { ...state, activePreviewPath: path, error: null };
+}
+
+export function shouldApplyDocPreview(
+  state: DocsViewState,
+  path: string,
+): boolean {
+  return state.activePreviewPath === path;
+}
+
+export function storeDocPreview(
+  state: DocsViewState,
+  preview: DocPreview,
+): DocsViewState {
+  return {
+    ...state,
+    activePreviewPath: preview.path,
+    previewByPath: {
+      ...state.previewByPath,
+      [preview.path]: preview,
+    },
+    error: null,
+  };
+}
+
+export function activeDocPreview(state: DocsViewState): DocPreview | null {
+  return state.activePreviewPath
+    ? (state.previewByPath[state.activePreviewPath] ?? null)
+    : null;
+}
+
+export function docsPreviewPathLabel(
+  state: DocsViewState,
+  fallback: string,
+): string {
+  return activeDocPreview(state)?.path ?? state.activePreviewPath ?? fallback;
 }
 
 export function replaceDocsIndex(

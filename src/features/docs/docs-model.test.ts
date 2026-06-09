@@ -1,14 +1,20 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  activeDocPreview,
+  beginDocPreview,
   type ContextPack,
+  contextPackSummary,
   createDocsState,
   docsBadgeCount,
+  docsPreviewPathLabel,
   docsSearchSummary,
   replaceDocsIndex,
   selectDocSource,
   selectedDocPaths,
   shouldApplyDocsResult,
+  shouldApplyDocPreview,
+  storeDocPreview,
   storeContextPack,
   updateContextPackDraftName,
 } from "./docs-model";
@@ -93,6 +99,53 @@ describe("docs model", () => {
       "pack-2",
     ]);
     expect(updated.contextPacks[0].name).toBe("First linked");
+  });
+
+  test("summarizes context pack docs, task links, and agent links", () => {
+    expect(
+      contextPackSummary({
+        ...pack("pack-1", "Linked"),
+        doc_paths: ["README.md", "docs/architecture.md"],
+        linked_task_run_ids: ["workspace:task-1"],
+        linked_agent_session_ids: ["agent-1", "agent-2"],
+      }),
+    ).toBe("2 docs | 1 task link | 2 agent links");
+  });
+
+  test("tracks active docs preview independently from cached preview order", () => {
+    const previewA = {
+      path: "docs/a.md",
+      title: "Doc A",
+      content: "# A",
+      modified_ms: 1,
+      references: [],
+    };
+    const previewB = {
+      path: "docs/b.md",
+      title: "Doc B",
+      content: "# B",
+      modified_ms: 2,
+      references: [],
+    };
+    const withA = storeDocPreview(
+      beginDocPreview(createDocsState(), previewA.path),
+      previewA,
+    );
+    const selectingB = beginDocPreview(withA, previewB.path);
+
+    expect(activeDocPreview(selectingB)).toBeNull();
+    expect(shouldApplyDocPreview(selectingB, previewA.path)).toBe(false);
+
+    const withB = storeDocPreview(selectingB, previewB);
+    const refocusedA = beginDocPreview(withB, previewA.path);
+
+    expect(activeDocPreview(refocusedA)?.path).toBe(previewA.path);
+  });
+
+  test("labels an uncached active docs preview by its selected path", () => {
+    const state = beginDocPreview(createDocsState(), "docs/queued.md");
+
+    expect(docsPreviewPathLabel(state, "Preview")).toBe("docs/queued.md");
   });
 
   test("rejects stale async docs results", () => {

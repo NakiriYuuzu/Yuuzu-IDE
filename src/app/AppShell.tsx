@@ -28,12 +28,17 @@ import {
 } from "../features/docs/docs-api";
 import { DocsPanel } from "../features/docs/DocsPanel";
 import {
+  activeDocPreview,
+  beginDocPreview,
   createDocsRequestIdentity,
   docsBadgeCount,
+  docsPreviewPathLabel,
   replaceDocsIndex,
   selectDocSource,
   selectedDocPaths,
+  shouldApplyDocPreview,
   shouldApplyDocsResult,
+  storeDocPreview,
   storeContextPack,
   updateContextPackDraftName,
   type DocsRequestIdentity,
@@ -645,8 +650,12 @@ export function AppShell() {
     : "";
   const gitConfirmationReady =
     gitConfirmation !== null && gitConfirmationInput === gitConfirmationText;
-  const docsPreviews = Object.values(view.docs.previewByPath);
-  const activeDocsPreview = docsPreviews[docsPreviews.length - 1] ?? null;
+  const activeDocsPreview = activeDocPreview(view.docs);
+  const activeDocsPreviewPath = view.docs.activePreviewPath;
+  const activeDocsPreviewPathLabel = docsPreviewPathLabel(
+    view.docs,
+    "Docs preview",
+  );
 
   useEffect(() => {
     setFindOpen(false);
@@ -2170,6 +2179,7 @@ export function AppShell() {
     const workspaceRoot = activeWorkspace.path;
     openDocsPanel();
     setSurface("docs-preview");
+    updateDocs(workspaceId, (docs) => beginDocPreview(docs, path));
 
     try {
       const preview = await getDocPreview(workspaceRoot, path);
@@ -2177,19 +2187,24 @@ export function AppShell() {
         return;
       }
 
-      updateDocs(workspaceId, (docs) => ({
-        ...docs,
-        previewByPath: {
-          ...docs.previewByPath,
-          [preview.path]: preview,
-        },
-        error: null,
-      }));
+      updateDocs(workspaceId, (docs) =>
+        shouldApplyDocPreview(docs, path) && preview.path === path
+          ? storeDocPreview(docs, preview)
+          : docs,
+      );
     } catch (error) {
-      updateDocs(workspaceId, (docs) => ({
-        ...docs,
-        error: `Preview failed: ${terminalErrorMessage(error)}`,
-      }));
+      if (workspaceStore.getState().registry.active_workspace_id !== workspaceId) {
+        return;
+      }
+
+      updateDocs(workspaceId, (docs) =>
+        shouldApplyDocPreview(docs, path)
+          ? {
+              ...docs,
+              error: `Preview failed: ${terminalErrorMessage(error)}`,
+            }
+          : docs,
+      );
     }
   }
 
@@ -2568,11 +2583,13 @@ export function AppShell() {
               {surface === "docs-preview" ? (
                 <div
                   className="tab active"
-                  title={activeDocsPreview?.path ?? "Docs preview"}
+                  title={activeDocsPreviewPathLabel}
                 >
                   <BookOpenText className="ftype" aria-hidden="true" />
                   <span className="tlabel mono">
-                    {activeDocsPreview?.title ?? "Docs Preview"}
+                    {activeDocsPreview?.title ??
+                      activeDocsPreviewPath ??
+                      "Docs Preview"}
                   </span>
                   <button
                     type="button"
@@ -2633,7 +2650,7 @@ export function AppShell() {
                   : surface === "terminal"
                     ? activeTerminalName
                     : surface === "docs-preview"
-                      ? (activeDocsPreview?.path ?? "Preview")
+                      ? docsPreviewPathLabel(view.docs, "Preview")
                     : surface === "editor"
                       ? "No file open"
                       : "Start"}
@@ -2807,7 +2824,7 @@ export function AppShell() {
                 <div className="docs-preview-placeholder">
                   <div className="editor-toolbar">
                     <span className="path-label mono">
-                      {activeDocsPreview?.path ?? "Docs preview"}
+                      {activeDocsPreviewPathLabel}
                     </span>
                   </div>
                   <div className="large-file-note">

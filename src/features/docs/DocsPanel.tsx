@@ -1,4 +1,5 @@
 import {
+  Eye,
   ExternalLink,
   FileText,
   Plus,
@@ -7,6 +8,7 @@ import {
 } from "lucide-react";
 
 import {
+  contextPackSummary,
   docsSearchSummary,
   selectedDocPaths,
   type ContextPack,
@@ -105,17 +107,22 @@ function ContextPackRow({
 }) {
   return (
     <div className={`docs-row row${active ? " sel" : ""}`}>
+      <div className="docs-row-main">
+        <span className="docs-row-title">{pack.name}</span>
+        <span className="docs-row-path mono">{contextPackSummary(pack)}</span>
+      </div>
       <button
         type="button"
-        className="docs-row-main docs-pack-select"
+        className="iconbtn docs-row-action docs-pack-action"
+        title={`Inspect ${pack.name}`}
+        aria-label={`Inspect ${pack.name}`}
         onClick={() => onSelectPack(pack.id)}
       >
-        <span className="docs-row-title">{pack.name}</span>
-        <span className="docs-row-path mono">{pack.doc_paths.length} docs</span>
+        <Eye aria-hidden="true" />
       </button>
       <button
         type="button"
-        className="iconbtn docs-row-action"
+        className="iconbtn docs-row-action docs-pack-action"
         title={`Delete ${pack.name}`}
         aria-label={`Delete ${pack.name}`}
         onClick={() => onDeletePack(pack.id)}

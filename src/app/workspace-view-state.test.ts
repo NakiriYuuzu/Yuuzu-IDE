@@ -276,6 +276,7 @@ describe("createWorkspaceViewStore", () => {
       docs: {
         index: [],
         previewByPath: {},
+        activePreviewPath: null,
         searchQuery: "",
         searchResult: null,
         selectedDocPaths: {},
@@ -315,6 +316,7 @@ describe("createWorkspaceViewStore", () => {
     expect(store.getState().viewFor("other-unknown").docs).toMatchObject({
       index: [],
       previewByPath: {},
+      activePreviewPath: null,
       searchQuery: "",
       searchResult: null,
       selectedDocPaths: {},

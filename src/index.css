@@ -2071,6 +2071,10 @@ button {
   height: 12px;
 }
 
+.docs-pack-action {
+  opacity: 1;
+}
+
 .docs-search-match {
   width: 100%;
   border: 0;
@@ -2093,14 +2097,6 @@ button {
 
 .docs-source-list {
   min-width: 0;
-}
-
-.docs-pack-select {
-  border: 0;
-  color: inherit;
-  background: transparent;
-  text-align: left;
-  font: inherit;
 }
 
 .docs-preview-placeholder {
