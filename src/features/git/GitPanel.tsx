@@ -10,7 +10,9 @@ import {
 } from "lucide-react";
 
 import {
+  canAmend,
   canCommit,
+  canStash,
   gitActionLabel,
   groupGitChanges,
   statusBranchLabel,
@@ -58,10 +60,8 @@ export function GitPanel({
     : { staged: [], unstaged: [], conflicts: [] };
   const branchLabel = statusBranchLabel(state.status) || "No repository";
   const commitEnabled = canCommit(state) && !state.loading;
-  const amendEnabled =
-    Boolean(state.status) && state.commitMessage.trim().length > 0 && !state.loading;
-  const stashEnabled =
-    Boolean(state.status && state.status.changes.length > 0) && !state.loading;
+  const amendEnabled = canAmend(state) && !state.loading;
+  const stashEnabled = canStash(state) && !state.loading;
 
   return (
     <div className="git-panel">

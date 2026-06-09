@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  canAmend,
   canCommit,
+  canStash,
   changeBadgeCount,
   confirmationTextForGitAction,
   createGitState,
@@ -55,6 +57,12 @@ const status: GitRepositoryStatus = {
       kind: "conflict",
     },
   ],
+};
+
+const statusWithoutConflicts: GitRepositoryStatus = {
+  ...status,
+  has_conflicts: false,
+  changes: status.changes.filter((change) => change.kind !== "conflict"),
 };
 
 describe("git-model", () => {
@@ -138,7 +146,7 @@ describe("git-model", () => {
   });
 
   test("commit is enabled only when staged changes and a message exist", () => {
-    const withStatus = replaceGitStatus(createGitState(), status);
+    const withStatus = replaceGitStatus(createGitState(), statusWithoutConflicts);
 
     expect(canCommit(withStatus)).toBe(false);
     expect(
@@ -152,6 +160,42 @@ describe("git-model", () => {
         ),
       ),
     ).toBe(false);
+  });
+
+  test("commit is disabled when status has unresolved conflicts", () => {
+    const withConflicts = updateGitCommitMessage(
+      replaceGitStatus(createGitState(), status),
+      "feat: conflict guard",
+    );
+
+    expect(canCommit(withConflicts)).toBe(false);
+  });
+
+  test("amend is unavailable when status has unresolved conflicts", () => {
+    const readyState = updateGitCommitMessage(
+      replaceGitStatus(createGitState(), statusWithoutConflicts),
+      "feat: amend",
+    );
+    const conflictState = updateGitCommitMessage(
+      replaceGitStatus(createGitState(), status),
+      "feat: amend",
+    );
+
+    expect(canAmend(readyState)).toBe(true);
+    expect(canAmend(conflictState)).toBe(false);
+  });
+
+  test("stash is unavailable when status has unresolved conflicts", () => {
+    const readyState = replaceGitStatus(createGitState(), statusWithoutConflicts);
+    const conflictState = replaceGitStatus(createGitState(), status);
+    const cleanState = replaceGitStatus(createGitState(), {
+      ...statusWithoutConflicts,
+      changes: [],
+    });
+
+    expect(canStash(readyState)).toBe(true);
+    expect(canStash(conflictState)).toBe(false);
+    expect(canStash(cleanState)).toBe(false);
   });
 
   test("git action labels match the Source Control panel commands", () => {

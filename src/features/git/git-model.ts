@@ -196,11 +196,31 @@ export function changeBadgeCount(
 }
 
 export function canCommit(state: GitViewState): boolean {
-  if (!state.status || state.commitMessage.trim().length === 0) {
+  if (
+    !state.status ||
+    state.status.has_conflicts ||
+    state.commitMessage.trim().length === 0
+  ) {
     return false;
   }
 
   return groupGitChanges(state.status.changes).staged.length > 0;
+}
+
+export function canAmend(state: GitViewState): boolean {
+  return Boolean(
+    state.status &&
+      !state.status.has_conflicts &&
+      state.commitMessage.trim().length > 0,
+  );
+}
+
+export function canStash(state: GitViewState): boolean {
+  return Boolean(
+    state.status &&
+      !state.status.has_conflicts &&
+      state.status.changes.length > 0,
+  );
 }
 
 export function gitActionLabel(action: GitAction): string {
