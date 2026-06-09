@@ -335,25 +335,22 @@ impl AppState {
             self.lsp_workspace_identity(workspace_root)?;
         let path = normalize_lsp_document_path(&path)?;
         let _ = workspace_id;
-        let _ =
-            lsp_state.document_status(&resolved_workspace_id, &resolved_workspace_root, &path)?;
-        lsp_state.open_document(
-            resolved_workspace_id,
-            resolved_workspace_root,
-            path,
-            String::new(),
-        )
+        let _ = resolved_workspace_root;
+        let language = crate::lsp::detect_language(&path)
+            .ok_or_else(|| "unsupported file type".to_string())?;
+        lsp_state.restart_server(resolved_workspace_id, language)
     }
 
     pub fn lsp_server_logs(
         &self,
-        _lsp_state: &crate::lsp::LspState,
+        lsp_state: &crate::lsp::LspState,
         workspace_root: &str,
         workspace_id: &str,
     ) -> Result<Vec<String>, String> {
-        let _ = self.lsp_workspace_identity(workspace_root)?;
+        let (resolved_workspace_id, _workspace_root) =
+            self.lsp_workspace_identity(workspace_root)?;
         let _ = workspace_id;
-        Ok(Vec::new())
+        Ok(lsp_state.server_logs(resolved_workspace_id))
     }
 
     fn lsp_document_status(

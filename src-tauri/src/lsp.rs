@@ -159,6 +159,7 @@ struct LanguageServerManagerState {
     test_profiles: HashMap<LanguageId, TestServerProfile>,
     servers: HashMap<LanguageServerKey, LanguageServerRecord>,
     diagnostics: HashMap<(String, String, String), Vec<LspDiagnostic>>,
+    logs: HashMap<String, Vec<String>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -216,6 +217,17 @@ impl LanguageServerRecord {
     }
 }
 
+fn append_workspace_log(logs: &mut Vec<String>, line: impl Into<String>) {
+    logs.push(line.into());
+    if logs.len() > 120 {
+        logs.drain(..logs.len() - 120);
+    }
+}
+
+fn sample_memory_bytes(pid: u32) -> Option<u64> {
+    crate::metrics::process_memory_bytes(pid)
+}
+
 pub struct LanguageServerManager {
     state: Mutex<LanguageServerManagerState>,
 }
@@ -266,6 +278,7 @@ impl LanguageServerManager {
                 test_profiles: available,
                 servers: HashMap::new(),
                 diagnostics: HashMap::new(),
+                logs: HashMap::new(),
             }),
         }
     }
@@ -335,6 +348,11 @@ impl LanguageServerManager {
         if profile.available {
             entry.state = ServerState::Running;
             entry.last_error = None;
+            if let Some(pid) = entry.pid {
+                if let Some(memory_bytes) = sample_memory_bytes(pid) {
+                    entry.memory_bytes = Some(memory_bytes);
+                }
+            }
         } else {
             entry.state = ServerState::MissingCommand;
             entry.last_error = Some("command not available".to_string());
@@ -343,6 +361,100 @@ impl LanguageServerManager {
         entry.last_used_at = now;
 
         Ok(entry.status(&key.workspace_id, &key.workspace_root, key.language))
+    }
+
+    pub fn restart_server(
+        &self,
+        workspace_id: &str,
+        language: LanguageId,
+    ) -> Result<LanguageServerStatus, String> {
+        let mut state = self.state.lock().map_err(|err| err.to_string())?;
+
+        let key = state
+            .servers
+            .iter()
+            .filter_map(|(key, record)| {
+                if key.workspace_id == workspace_id && key.language == language {
+                    Some((key.clone(), record.last_used_at))
+                } else {
+                    None
+                }
+            })
+            .max_by_key(|(_, last_used_at)| *last_used_at)
+            .map(|(key, _)| key);
+
+        let Some(key) = key else {
+            return Err(format!("language server not found for {workspace_id}"));
+        };
+
+        let profile = state
+            .test_profiles
+            .get(&language)
+            .cloned()
+            .unwrap_or(TestServerProfile {
+                language,
+                available: false,
+            });
+        let entry = state
+            .servers
+            .get_mut(&key)
+            .ok_or_else(|| format!("language server not found for {workspace_id}"))?;
+        let (status, log_line) = {
+            let display_name = entry.display_name.clone();
+            if let Some(pid) = entry.pid {
+                if let Some(memory_bytes) = sample_memory_bytes(pid) {
+                    entry.memory_bytes = Some(memory_bytes);
+                }
+            }
+
+            if profile.available {
+                entry.state = ServerState::Running;
+                entry.last_error = None;
+                (
+                    entry.status(&key.workspace_id, &key.workspace_root, key.language),
+                    format!("restarted {}", display_name),
+                )
+            } else {
+                entry.state = ServerState::MissingCommand;
+                entry.last_error = Some("command not available".to_string());
+                (
+                    entry.status(&key.workspace_id, &key.workspace_root, key.language),
+                    format!("failed to restart {}", display_name),
+                )
+            }
+        };
+
+        entry.last_used_at = current_unix_millis();
+
+        append_workspace_log(
+            state.logs.entry(workspace_id.to_string()).or_default(),
+            log_line,
+        );
+
+        Ok(status)
+    }
+
+    pub fn server_logs(&self, workspace_id: &str) -> Vec<String> {
+        let Ok(state) = self.state.lock() else {
+            return Vec::new();
+        };
+
+        state.logs.get(workspace_id).cloned().unwrap_or_default()
+    }
+
+    pub fn set_memory_for_tests(&self, workspace_id: &str, language: LanguageId, bytes: u64) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+
+        for (_key, entry) in state
+            .servers
+            .iter_mut()
+            .filter(|(key, _)| key.workspace_id == workspace_id && key.language == language)
+        {
+            entry.memory_bytes = Some(bytes);
+            entry.last_used_at = current_unix_millis();
+        }
     }
 
     pub fn close_document(
@@ -576,6 +688,29 @@ impl LspState {
         manager.close_document(workspace_id, workspace_root, path)
     }
 
+    pub fn restart_server(
+        &self,
+        workspace_id: String,
+        language: LanguageId,
+    ) -> Result<LanguageServerStatus, String> {
+        let manager = self.manager.lock().map_err(|err| err.to_string())?;
+        manager.restart_server(&workspace_id, language)
+    }
+
+    pub fn server_logs(&self, workspace_id: String) -> Vec<String> {
+        if let Ok(manager) = self.manager.lock() {
+            return manager.server_logs(&workspace_id);
+        }
+
+        Vec::new()
+    }
+
+    pub fn set_memory_for_tests(&self, workspace_id: String, language: LanguageId, bytes: u64) {
+        if let Ok(manager) = self.manager.lock() {
+            manager.set_memory_for_tests(&workspace_id, language, bytes);
+        }
+    }
+
     pub fn statuses(
         &self,
         workspace_id: String,
@@ -652,8 +787,14 @@ mod tests {
             detect_language("scripts/build.py"),
             Some(LanguageId::Python)
         );
-        assert_eq!(detect_language("scripts/build.pyw"), Some(LanguageId::Python));
-        assert_eq!(detect_language("typings/build.pyi"), Some(LanguageId::Python));
+        assert_eq!(
+            detect_language("scripts/build.pyw"),
+            Some(LanguageId::Python)
+        );
+        assert_eq!(
+            detect_language("typings/build.pyi"),
+            Some(LanguageId::Python)
+        );
         assert_eq!(detect_language("README.md"), None);
     }
 
@@ -875,5 +1016,48 @@ mod tests {
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].workspace_root, "/new-root");
         assert_eq!(statuses[0].language, LanguageId::TypeScript);
+    }
+
+    #[test]
+    fn restart_replaces_status_and_records_log_line() {
+        let manager = LanguageServerManager::default_for_tests();
+
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}".to_string(),
+            )
+            .expect("open");
+
+        let restarted = manager
+            .restart_server("workspace", LanguageId::Rust)
+            .expect("restart");
+
+        assert_eq!(restarted.state, ServerState::Running);
+        assert!(manager
+            .server_logs("workspace")
+            .iter()
+            .any(|line| line.contains("restarted Rust Analyzer")));
+    }
+
+    #[test]
+    fn status_exposes_memory_bytes_for_running_servers() {
+        let manager = LanguageServerManager::default_for_tests();
+
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}".to_string(),
+            )
+            .expect("open");
+        manager.set_memory_for_tests("workspace", LanguageId::Rust, 4096);
+
+        let status = manager.statuses();
+
+        assert_eq!(status[0].memory_bytes, Some(4096));
     }
 }

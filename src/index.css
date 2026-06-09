@@ -2162,7 +2162,16 @@ button {
 .language-panel {
   display: flex;
   min-width: 0;
+  width: 100%;
+  overflow: hidden;
+  min-width: 0;
   flex-direction: column;
+}
+
+.language-panel section {
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
 }
 
 .language-server-row,
@@ -2173,16 +2182,21 @@ button {
   padding-top: 4px;
   padding-bottom: 4px;
   white-space: normal;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
 }
 
 .language-server-row .language-row-main,
 .language-diagnostic-row .language-row-main {
   min-width: 0;
+  width: 0;
   flex: 1;
   display: flex;
   flex-direction: column;
   gap: 2px;
   line-height: 1.15;
+  overflow: hidden;
 }
 
 .language-server-row .language-row-title,
@@ -2201,11 +2215,17 @@ button {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
+  width: 100%;
 }
 
 .language-server-row .badge2 {
+  max-width: 84px;
   margin-left: auto;
   flex: 0 0 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .language-server-row .iconbtn {
@@ -2246,6 +2266,9 @@ button {
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  width: calc(100% - 16px);
+  box-sizing: border-box;
+  min-width: 0;
 }
 
 .language-memory {

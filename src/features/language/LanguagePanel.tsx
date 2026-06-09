@@ -9,6 +9,7 @@ import {
   type LanguageServerStatus,
   type LspDiagnostic,
   type LanguageViewState,
+  serverMemoryLabel,
 } from "./language-model";
 
 type LanguagePanelProps = {
@@ -17,22 +18,6 @@ type LanguagePanelProps = {
   onRefresh: () => void;
   onRestartServer: (server: LanguageServerStatus) => void;
 };
-
-function formatMemory(bytes: number | null): string {
-  if (bytes === null) {
-    return "n/a";
-  }
-
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 function severityBadgeClass(severity: string): string {
   if (severity === "error") {
@@ -97,7 +82,7 @@ export function LanguagePanel({
                     {server.state} • pid {server.pid ?? "n/a"}
                   </span>
                   <span className="language-row-sub mono">
-                    open {server.open_documents} • mem {formatMemory(server.memory_bytes)}
+                    open {server.open_documents} • mem {serverMemoryLabel(server)}
                   </span>
                 </div>
                 <span className="badge2">

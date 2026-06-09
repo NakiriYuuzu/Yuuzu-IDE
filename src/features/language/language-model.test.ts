@@ -4,6 +4,7 @@ import {
   createLanguageState,
   replaceDiagnostics,
   replaceServerStatuses,
+  serverMemoryLabel,
   diagnosticsForPath,
   isLspSupportedDocumentPath,
   lspDocumentChangeForWorkspace,
@@ -258,6 +259,11 @@ describe("language model", () => {
       character: 1,
       contents: "fn main",
     });
+  });
+
+  test("formats server memory labels", () => {
+    expect(serverMemoryLabel({ memory_bytes: 1048576 } as any)).toBe("1.0 MB");
+    expect(serverMemoryLabel({ memory_bytes: null } as any)).toBe("not running");
   });
 
   test("scopes language refresh request freshness by workspace root", () => {

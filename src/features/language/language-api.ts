@@ -96,3 +96,18 @@ export function requestLanguageRename(args: {
 }): Promise<unknown> {
   return call<unknown>("lsp_rename", args);
 }
+
+export function restartLanguageServer(args: {
+  workspaceId: string;
+  workspaceRoot: string;
+  path: string;
+}): Promise<LanguageServerStatus> {
+  return call("lsp_restart_server", args);
+}
+
+export function getLanguageServerLogs(args: {
+  workspaceId: string;
+  workspaceRoot: string;
+}): Promise<string[]> {
+  return call("lsp_server_logs", args);
+}

@@ -53,8 +53,10 @@ import {
 import {
   closeLanguageDocument,
   getLanguageServerStatus,
+  getLanguageServerLogs,
   getWorkspaceDiagnostics,
   openLanguageDocument,
+  restartLanguageServer as restartLanguageServerCommand,
   requestLanguageCodeActions,
   requestLanguageCompletion,
   requestLanguageDefinition,
@@ -71,6 +73,7 @@ import {
   lspDocumentChangesForWorkspacePaths,
   lspDocumentPathForWorkspace,
   replaceServerStatuses,
+  storeServerLogs,
   selectDiagnosticBadge,
   type LspDiagnostic,
   type LanguageRefreshRequestState,
@@ -2747,21 +2750,15 @@ export function AppShell() {
     });
   }
 
-  async function refreshLanguageData() {
+  async function refreshLanguageStatus(
+    workspaceId: string,
+    workspaceRoot: string,
+    requestId: number,
+    rootBeforeRefresh: string,
+  ) {
     if (!activeWorkspace || !activeWorkspaceId) {
       return;
     }
-
-    const workspaceId = activeWorkspaceId;
-    const workspaceRoot = activeWorkspace.path;
-    const rootBeforeRefresh = workspaceRoot;
-    const request = nextLanguageRefreshRequest(
-      languageRefreshRequestRef.current,
-      workspaceId,
-      workspaceRoot,
-    );
-    languageRefreshRequestRef.current = request.state;
-    const requestId = request.requestId;
 
     updateLanguage(workspaceId, (language) => ({
       ...language,
@@ -2830,12 +2827,173 @@ export function AppShell() {
     }
   }
 
-  function restartLanguageServer(_server: LanguageServerStatus) {
+  async function refreshLanguageLogs(
+    workspaceId: string,
+    workspaceRoot: string,
+    requestId: number,
+  ) {
     if (!activeWorkspace || !activeWorkspaceId) {
       return;
     }
 
-    void refreshLanguageData();
+    try {
+      const logs = await getLanguageServerLogs({
+        workspaceId,
+        workspaceRoot,
+      });
+
+      if (
+        !isCurrentLanguageRefreshRequest(
+          languageRefreshRequestRef.current,
+          workspaceId,
+          workspaceRoot,
+          requestId,
+        )
+      ) {
+        return;
+      }
+
+      if (!hasRegisteredWorkspace(workspaceId)) {
+        return;
+      }
+
+      const currentWorkspace = workspaceStore
+        .getState()
+        .registry.workspaces.find((workspace) => workspace.id === workspaceId);
+      if (!currentWorkspace || currentWorkspace.path !== workspaceRoot) {
+        return;
+      }
+
+      updateLanguage(workspaceId, (language) => storeServerLogs(language, logs));
+    } catch (error) {
+      if (
+        !isCurrentLanguageRefreshRequest(
+          languageRefreshRequestRef.current,
+          workspaceId,
+          workspaceRoot,
+          requestId,
+        )
+      ) {
+        return;
+      }
+
+      if (!hasRegisteredWorkspace(workspaceId)) {
+        return;
+      }
+
+      updateLanguage(workspaceId, (language) => ({
+        ...language,
+        error: `Refresh language logs failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
+  async function refreshLanguageData() {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const rootBeforeRefresh = workspaceRoot;
+    const request = nextLanguageRefreshRequest(
+      languageRefreshRequestRef.current,
+      workspaceId,
+      workspaceRoot,
+    );
+    languageRefreshRequestRef.current = request.state;
+    const requestId = request.requestId;
+
+    await Promise.all([
+      refreshLanguageStatus(workspaceId, workspaceRoot, requestId, rootBeforeRefresh),
+      refreshLanguageLogs(workspaceId, workspaceRoot, requestId),
+    ]);
+  }
+
+  function languageRestartPathForStatus(
+    workspaceRoot: string,
+    status: LanguageServerStatus,
+  ): string {
+    if (
+      loadedFile &&
+      loadedFile.workspaceId === activeWorkspaceId &&
+      status.language.toLowerCase() === loadedFile.language
+    ) {
+      return lspDocumentPathForWorkspace(workspaceRoot, loadedFile.path);
+    }
+
+    if (status.language === "Rust") {
+      return "src/main.rs";
+    }
+    if (status.language === "TypeScript") {
+      return "src/main.ts";
+    }
+    if (status.language === "JavaScript") {
+      return "src/main.js";
+    }
+
+    return "main.py";
+  }
+
+  function restartLanguageServer(server: LanguageServerStatus) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const path = languageRestartPathForStatus(workspaceRoot, server);
+
+    restartLanguageServerCommand({
+      workspaceId,
+      workspaceRoot,
+      path,
+    })
+      .then(() => {
+        void refreshLanguageData();
+      })
+      .catch((error) => {
+        updateLanguage(workspaceId, (language) => ({
+          ...language,
+          error: `Restart failed: ${terminalErrorMessage(error)}`,
+        }));
+      });
+  }
+
+  function restartActiveLanguageServer() {
+    if (
+      !activeWorkspace ||
+      !activeWorkspaceId ||
+      !loadedFile ||
+      loadedFile.workspaceId !== activeWorkspaceId ||
+      !isLspSupportedDocumentPath(loadedFile.path)
+    ) {
+      if (view.language.serverStatuses[0]) {
+        restartLanguageServer(view.language.serverStatuses[0]);
+      }
+
+      return;
+    }
+
+    const path = lspDocumentPathForWorkspace(
+      activeWorkspace.path,
+      loadedFile.path,
+    );
+
+    restartLanguageServerCommand({
+      workspaceId: activeWorkspaceId,
+      workspaceRoot: activeWorkspace.path,
+      path,
+    })
+      .then(() => {
+        void refreshLanguageData();
+      })
+      .catch((error) => {
+        updateLanguage(activeWorkspaceId, (language) => ({
+          ...language,
+          error: `Restart failed: ${terminalErrorMessage(error)}`,
+        }));
+      });
   }
 
   function runCommand(id: string) {
@@ -2899,11 +3057,7 @@ export function AppShell() {
         void refreshLanguageData();
         break;
       case "language-restart":
-        if (view.language.serverStatuses[0]) {
-          restartLanguageServer(view.language.serverStatuses[0]);
-        } else {
-          void refreshLanguageData();
-        }
+        restartActiveLanguageServer();
         break;
       case "open-workspace":
       case "switch-workspace":

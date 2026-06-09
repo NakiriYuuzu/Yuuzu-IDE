@@ -268,7 +268,33 @@ export function storeServerLogs(
   state: LanguageViewState,
   serverLogs: string[],
 ): LanguageViewState {
-  return { ...state, serverLogs: serverLogs.slice(-80) };
+  return { ...state, serverLogs: serverLogs.slice(-120) };
+}
+
+export function serverMemoryLabel(
+  status: Pick<LanguageServerStatus, "memory_bytes">,
+): string {
+  if (status.memory_bytes === null) {
+    return "not running";
+  }
+
+  const gb = 1024 ** 3;
+  const mb = 1024 ** 2;
+  const kb = 1024;
+
+  if (status.memory_bytes >= gb) {
+    return `${(status.memory_bytes / gb).toFixed(1)} GB`;
+  }
+
+  if (status.memory_bytes >= mb) {
+    return `${(status.memory_bytes / mb).toFixed(1)} MB`;
+  }
+
+  if (status.memory_bytes >= kb) {
+    return `${(status.memory_bytes / kb).toFixed(1)} KB`;
+  }
+
+  return `${status.memory_bytes} B`;
 }
 
 export function normalizeLanguageHover(value: unknown): LanguageHover | null {
