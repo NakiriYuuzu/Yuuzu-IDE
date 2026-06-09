@@ -87,6 +87,12 @@ describe("browser model", () => {
     expect(hardReloadBrowser(idle)).toEqual(idle);
   });
 
+  test("does not reload when there is no active URL even with error state", () => {
+    const withError = setBrowserError(createBrowserState(), "network issue");
+    expect(reloadBrowser(withError)).toEqual(withError);
+    expect(hardReloadBrowser(withError)).toEqual(withError);
+  });
+
   test("setBrowserError accepts null to clear the current error", () => {
     const opened = openBrowserUrl(createBrowserState(), {
       url: "http://localhost:5173",
@@ -149,6 +155,45 @@ describe("browser model", () => {
       "http://127.0.0.1:5173",
       "http://localhost:3010",
       "http://localhost:4321",
+    ]);
+  });
+
+  test("ignores https output URLs and accepts IPv6 loopback output URLs", () => {
+    const targets = detectDevServerTargets({
+      detectedTasks: [],
+      runs: [
+        {
+          id: "run-https",
+          workspace_id: "workspace-1",
+          label: "Server",
+          command: "vite",
+          cwd: "/repo",
+          status: "Running" as const,
+          exit_code: null,
+        },
+        {
+          id: "run-ipv6",
+          workspace_id: "workspace-1",
+          label: "IPv6",
+          command: "vite",
+          cwd: "/repo",
+          status: "Running" as const,
+          exit_code: null,
+        },
+      ],
+      outputByRunId: {
+        "run-https": "running at https://localhost:5173",
+        "run-ipv6": "ready at http://[::1]:8080/",
+      },
+    });
+
+    expect(targets).toEqual([
+      {
+        id: "task-output:run-ipv6:0",
+        label: "IPv6",
+        url: "http://[::1]:8080/",
+        source: "running-task-output",
+      },
     ]);
   });
 
@@ -263,6 +308,48 @@ describe("browser model", () => {
         id: "task-command:serve:0",
         label: "Serve",
         url: "http://localhost:4444",
+        source: "task-command",
+      },
+    ]);
+  });
+
+  test("does not classify vitest command as vite dev server", () => {
+    const targets = detectDevServerTargets({
+      detectedTasks: [
+        {
+          id: "run-vitest",
+          label: "Test",
+          command: "vitest --run",
+          cwd: "/repo",
+          source: "npm",
+        },
+        {
+          id: "run-vite",
+          label: "Vite",
+          command: "vite --host 127.0.0.1",
+          cwd: "/repo",
+          source: "npm",
+        },
+      ],
+      runs: [],
+      outputByRunId: {},
+    } satisfies {
+      detectedTasks: Array<{
+        id: string;
+        label: string;
+        command: string;
+        cwd: string;
+        source: string;
+      }>;
+      runs: [];
+      outputByRunId: Record<string, string>;
+    });
+
+    expect(targets).toEqual([
+      {
+        id: "task-command:run-vite:1",
+        label: "Vite",
+        url: "http://127.0.0.1:5173",
         source: "task-command",
       },
     ]);

@@ -119,7 +119,7 @@ export function setBrowserError(
 }
 
 export function reloadBrowser(state: BrowserViewState): BrowserViewState {
-  if (state.status === "idle") {
+  if (!state.activeUrl) {
     return state;
   }
 
@@ -127,7 +127,7 @@ export function reloadBrowser(state: BrowserViewState): BrowserViewState {
 }
 
 export function hardReloadBrowser(state: BrowserViewState): BrowserViewState {
-  if (state.status === "idle") {
+  if (!state.activeUrl) {
     return state;
   }
 
@@ -238,7 +238,7 @@ export function urlFromTaskCommand(command: string): string | null {
   const parsedPort = parsePortFromCommand(command);
   const lowered = command.toLowerCase();
 
-  if (lowered.includes("vite")) {
+  if (/\b(?:vite)\b/u.test(lowered)) {
     const port = parsedPort ?? 5173;
     return `http://127.0.0.1:${port}`;
   }
@@ -277,7 +277,7 @@ function parsePortFromCommand(command: string): number | null {
 function parseOutputDevServerUrls(
   output: string,
 ): BrowserUrl[] {
-  const matches = output.match(/\bhttps?:\/\/[^\s"'`)\]]+/giu) ?? [];
+  const matches = output.match(/\bhttps?:\/\/[^\s"'`]+/giu) ?? [];
   const parsed = matches
     .map((match) => trimTrailingPunctuation(match))
     .map(parseOutputUrl)
@@ -297,6 +297,10 @@ function parseOutputDevServerUrls(
 function parseOutputUrl(value: string): BrowserUrl | null {
   try {
     const parsed = new URL(value);
+    if (parsed.protocol !== "http:") {
+      return null;
+    }
+
     if (!isLocalhostHost(parsed.hostname)) {
       return null;
     }
@@ -309,7 +313,12 @@ function parseOutputUrl(value: string): BrowserUrl | null {
 }
 
 function isLocalhostHost(host: string): boolean {
-  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+  return (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "[::1]"
+  );
 }
 
 function trimTrailingPunctuation(value: string): string {
