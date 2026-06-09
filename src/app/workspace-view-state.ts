@@ -50,6 +50,7 @@ function freezeWorkspaceView(view: WorkspaceViewState): WorkspaceViewState {
   Object.freeze(view.terminal.sessions);
   Object.freeze(view.terminal.outputBySessionId);
   Object.freeze(view.terminal.pendingOutputBySessionId);
+  Object.freeze(view.terminal.pendingExitBySessionId);
   Object.freeze(view.terminal);
   return Object.freeze(view);
 }

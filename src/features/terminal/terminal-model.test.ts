@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import {
   activateTerminal,
   appendTerminalOutput,
+  bufferTerminalExit,
   bufferTerminalOutput,
   closeTerminal,
   createTerminalState,
@@ -140,5 +141,21 @@ describe("terminal model", () => {
 
     expect(next.sessions[0]?.running).toBe(false);
     expect(next.outputBySessionId["w:terminal-1"]).toBe("last output\n");
+  });
+
+  test("exit before upsert marks the later upserted session stopped", () => {
+    const buffered = bufferTerminalExit(createTerminalState(), "w:terminal-1");
+
+    const state = upsertTerminal(buffered, {
+      id: "w:terminal-1",
+      workspace_id: "w",
+      name: "zsh 1",
+      cwd: "/repo",
+      shell: "/bin/zsh",
+      running: true,
+    });
+
+    expect(state.sessions[0]?.running).toBe(false);
+    expect(state.pendingExitBySessionId["w:terminal-1"]).toBeUndefined();
   });
 });

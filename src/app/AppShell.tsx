@@ -72,6 +72,7 @@ import {
 import {
   activateTerminal,
   appendTerminalOutput,
+  bufferTerminalExit,
   bufferTerminalOutput,
   closeTerminal,
   markTerminalExited,
@@ -403,18 +404,30 @@ export function AppShell() {
       }
 
       const currentView = workspaceViewStore.getState().viewFor(workspaceId);
-      if (
-        !currentView.terminal.sessions.some(
-          (session) => session.id === event.session_id,
-        )
-      ) {
+      const hasSession = currentView.terminal.sessions.some(
+        (session) => session.id === event.session_id,
+      );
+      const derivedWorkspaceId = workspaceIdFromTerminalSessionId(
+        event.session_id,
+      );
+
+      if (hasSession) {
+        workspaceViewStore
+          .getState()
+          .updateTerminal(workspaceId, (terminal) =>
+            markTerminalExited(terminal, event.session_id),
+          );
+        return;
+      }
+
+      if (derivedWorkspaceId !== workspaceId) {
         return;
       }
 
       workspaceViewStore
         .getState()
         .updateTerminal(workspaceId, (terminal) =>
-          markTerminalExited(terminal, event.session_id),
+          bufferTerminalExit(terminal, event.session_id),
         );
     });
 

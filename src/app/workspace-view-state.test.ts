@@ -163,6 +163,10 @@ describe("createWorkspaceViewStore", () => {
         "boot";
     }).toThrow(TypeError);
 
+    expect(() => {
+      unknownView.terminal.pendingExitBySessionId["unknown:terminal-1"] = true;
+    }).toThrow(TypeError);
+
     expect(store.getState().viewFor("other-unknown")).toMatchObject({
       surface: "empty",
       activeActivity: "explorer",
@@ -173,6 +177,7 @@ describe("createWorkspaceViewStore", () => {
         activeTerminalId: null,
         outputBySessionId: {},
         pendingOutputBySessionId: {},
+        pendingExitBySessionId: {},
         cwdInput: "",
       },
     });

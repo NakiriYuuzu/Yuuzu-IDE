@@ -12,6 +12,7 @@ export type TerminalViewState = {
   activeTerminalId: string | null;
   outputBySessionId: Record<string, string>;
   pendingOutputBySessionId: Record<string, string>;
+  pendingExitBySessionId: Record<string, boolean>;
   cwdInput: string;
 };
 
@@ -28,6 +29,7 @@ export function createTerminalState(): TerminalViewState {
     activeTerminalId: null,
     outputBySessionId: {},
     pendingOutputBySessionId: {},
+    pendingExitBySessionId: {},
     cwdInput: "",
   };
 }
@@ -37,12 +39,18 @@ export function upsertTerminal(
   session: TerminalSessionInfo,
 ): TerminalViewState {
   const exists = state.sessions.some((item) => item.id === session.id);
+  const pendingExit = state.pendingExitBySessionId[session.id] === true;
+  const nextSession = pendingExit ? { ...session, running: false } : session;
   const sessions = exists
-    ? state.sessions.map((item) => (item.id === session.id ? session : item))
-    : [...state.sessions, session];
+    ? state.sessions.map((item) =>
+        item.id === session.id ? nextSession : item,
+      )
+    : [...state.sessions, nextSession];
   const pendingOutput = state.pendingOutputBySessionId[session.id] ?? "";
   const pendingOutputBySessionId = { ...state.pendingOutputBySessionId };
+  const pendingExitBySessionId = { ...state.pendingExitBySessionId };
   delete pendingOutputBySessionId[session.id];
+  delete pendingExitBySessionId[session.id];
 
   return {
     ...state,
@@ -56,6 +64,7 @@ export function upsertTerminal(
       ),
     },
     pendingOutputBySessionId,
+    pendingExitBySessionId,
   };
 }
 
@@ -75,8 +84,10 @@ export function closeTerminal(
   const sessions = state.sessions.filter((session) => session.id !== sessionId);
   const outputBySessionId = { ...state.outputBySessionId };
   const pendingOutputBySessionId = { ...state.pendingOutputBySessionId };
+  const pendingExitBySessionId = { ...state.pendingExitBySessionId };
   delete outputBySessionId[sessionId];
   delete pendingOutputBySessionId[sessionId];
+  delete pendingExitBySessionId[sessionId];
 
   const activeTerminalId =
     state.activeTerminalId === sessionId
@@ -89,6 +100,7 @@ export function closeTerminal(
     activeTerminalId,
     outputBySessionId,
     pendingOutputBySessionId,
+    pendingExitBySessionId,
   };
 }
 
@@ -143,5 +155,18 @@ export function markTerminalExited(
     sessions: state.sessions.map((session) =>
       session.id === sessionId ? { ...session, running: false } : session,
     ),
+  };
+}
+
+export function bufferTerminalExit(
+  state: TerminalViewState,
+  sessionId: string,
+): TerminalViewState {
+  return {
+    ...state,
+    pendingExitBySessionId: {
+      ...state.pendingExitBySessionId,
+      [sessionId]: true,
+    },
   };
 }
