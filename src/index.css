@@ -2268,6 +2268,32 @@ button {
     flex-basis: 220px;
   }
 
+  .git-diff-toolbar,
+  .git-graph-toolbar {
+    height: auto;
+    min-height: 38px;
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    padding-block: 6px;
+  }
+
+  .git-diff-toolbar .btn,
+  .git-graph-toolbar .btn {
+    flex: 1 1 92px;
+    justify-content: center;
+    min-width: 0;
+    padding: 0 6px;
+    font-size: 11px;
+  }
+
+  .git-graph-toolbar-spacer {
+    display: none;
+  }
+
+  .git-graph-table-wrap {
+    max-width: 100%;
+  }
+
   .control-grid {
     grid-template-columns: 1fr;
   }
