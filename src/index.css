@@ -2695,6 +2695,10 @@ button {
     padding: 14px 16px 22px;
   }
 
+  .markdown-title {
+    display: none;
+  }
+
   .markdown-preview .badge2 {
     display: inline-flex;
   }

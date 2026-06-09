@@ -28,4 +28,15 @@ describe("docs responsive CSS", () => {
     expect(mobileCssStart).toBeGreaterThanOrEqual(0);
     expect(markdownBadgeRule).toContain("display: inline-flex;");
   });
+
+  test("collapses markdown toolbar title on narrow screens", () => {
+    const mobileCssStart = css.indexOf("@media (max-width: 760px)");
+    const mobileCss = css.slice(mobileCssStart);
+    const markdownTitleRule = mobileCss.match(
+      /\n  \.markdown-title \{(?<body>[\s\S]*?)\n  \}/,
+    )?.groups?.body;
+
+    expect(mobileCssStart).toBeGreaterThanOrEqual(0);
+    expect(markdownTitleRule).toContain("display: none;");
+  });
 });

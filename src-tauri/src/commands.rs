@@ -908,12 +908,17 @@ mod tests {
 
     #[test]
     fn create_context_pack_preserves_flat_command_signature() {
-        let _command: fn(
-            State<'_, AppState>,
-            String,
-            String,
-            Vec<String>,
-        ) -> Result<crate::docs::ContextPack, String> = create_context_pack;
+        type FlatCreateContextPackCommand =
+            for<'app_state> fn(
+                State<'app_state, AppState>,
+                String,
+                String,
+                Vec<String>,
+            ) -> Result<crate::docs::ContextPack, String>;
+
+        fn assert_flat_signature(_command: FlatCreateContextPackCommand) {}
+
+        assert_flat_signature(create_context_pack);
     }
 
     #[test]
