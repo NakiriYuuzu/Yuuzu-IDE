@@ -387,6 +387,18 @@ impl AppState {
         ))
     }
 
+    fn ensure_agent_session_in_active_workspace(&self, session_id: &str) -> Result<(), String> {
+        let active_workspace_root = self.active_workspace_root()?;
+        let session_workspace_root = self.agent_store.session_workspace_root(session_id)?;
+        if session_workspace_root == active_workspace_root.to_string_lossy() {
+            return Ok(());
+        }
+
+        Err(format!(
+            "agent session does not belong to active workspace: {session_id}"
+        ))
+    }
+
     pub fn settings_snapshot(&self) -> Result<AppSettings, String> {
         let settings = self.settings.lock().map_err(|err| err.to_string())?;
         Ok(settings.clone())
@@ -482,6 +494,7 @@ impl AppState {
         session_id: String,
         entry: crate::agent::AgentTranscriptInput,
     ) -> Result<crate::agent::AgentTranscriptEntry, String> {
+        self.ensure_agent_session_in_active_workspace(&session_id)?;
         self.agent_store.append_transcript(&session_id, entry)
     }
 
@@ -491,6 +504,7 @@ impl AppState {
         approval_id: String,
         status: crate::agent::AgentApprovalStatus,
     ) -> Result<crate::agent::AgentSession, String> {
+        self.ensure_agent_session_in_active_workspace(&session_id)?;
         self.agent_store
             .update_approval(&session_id, &approval_id, status)
     }
@@ -499,6 +513,7 @@ impl AppState {
         &self,
         session_id: String,
     ) -> Result<crate::agent::AgentPromptExport, String> {
+        self.ensure_agent_session_in_active_workspace(&session_id)?;
         self.agent_store.export_prompt(&session_id)
     }
 }
@@ -1578,6 +1593,82 @@ mod tests {
         );
 
         assert!(result.unwrap_err().contains("workspace not registered"));
+    }
+
+    #[test]
+    fn agent_session_id_commands_require_active_workspace() {
+        let temp = tempfile::tempdir().expect("config dir");
+        let state = AppState::new(temp.path()).expect("state");
+        let workspace_a = temp.path().join("workspace-a");
+        let workspace_b = temp.path().join("workspace-b");
+        std::fs::create_dir(&workspace_a).expect("workspace a");
+        std::fs::create_dir(&workspace_b).expect("workspace b");
+
+        state
+            .open_workspace_path(workspace_a.clone())
+            .expect("open workspace a");
+        state
+            .open_workspace_path(workspace_b.clone())
+            .expect("open workspace b");
+
+        let registry = state.registry_snapshot().expect("registry");
+        let workspace_b_id = registry
+            .workspaces
+            .into_iter()
+            .find(|workspace| workspace.path == workspace_b)
+            .map(|workspace| workspace.id)
+            .expect("workspace b id");
+        let workspace_a_root = workspace_a
+            .canonicalize()
+            .expect("canonical workspace a")
+            .to_string_lossy()
+            .to_string();
+
+        let session = state
+            .start_agent_session(
+                &workspace_a_root,
+                crate::agent::AgentMode::Edit,
+                "Plan in workspace a".to_string(),
+                Vec::new(),
+            )
+            .expect("start session");
+
+        state
+            .mutate_registry(|registry| {
+                if registry.switch_workspace(&workspace_b_id) {
+                    Ok(())
+                } else {
+                    Err(format!("workspace not found: {workspace_b_id}"))
+                }
+            })
+            .expect("switch workspace");
+
+        let append = state.append_agent_transcript(
+            session.id.clone(),
+            crate::agent::AgentTranscriptInput {
+                kind: crate::agent::AgentTranscriptKind::Verification,
+                title: "Verify".to_string(),
+                content: "ok".to_string(),
+                status: Some(crate::agent::AgentEvidenceStatus::Passed),
+                metadata: serde_json::json!({}),
+            },
+        );
+        let update = state.update_agent_approval(
+            session.id.clone(),
+            "approval-id".to_string(),
+            crate::agent::AgentApprovalStatus::Approved,
+        );
+        let export = state.export_agent_prompt(session.id.clone());
+
+        assert!(append
+            .unwrap_err()
+            .contains("session does not belong to active workspace"));
+        assert!(update
+            .unwrap_err()
+            .contains("session does not belong to active workspace"));
+        assert!(export
+            .unwrap_err()
+            .contains("session does not belong to active workspace"));
     }
 
     #[test]

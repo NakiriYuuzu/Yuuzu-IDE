@@ -10,6 +10,13 @@ use std::{
 
 pub const MAX_AGENT_CONTEXT_CHARS: usize = 120_000;
 pub const MAX_AGENT_TRANSCRIPT_CHARS: usize = 120_000;
+const MAX_AGENT_CONTEXT_ITEMS: usize = 100;
+const MAX_AGENT_CONTEXT_ID_CHARS: usize = 256;
+const MAX_AGENT_CONTEXT_LABEL_CHARS: usize = 512;
+const MAX_AGENT_CONTEXT_PATH_CHARS: usize = 512;
+const MAX_AGENT_METADATA_CHARS: usize = 8_192;
+const MAX_AGENT_TRANSCRIPT_TITLE_CHARS: usize = 512;
+const MAX_AGENT_TRANSCRIPT_ENTRIES: usize = 2_000;
 const MAX_AGENT_SESSIONS: usize = 80;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -189,10 +196,11 @@ impl AgentSessionStore {
             content: session.prompt.clone(),
             status: None,
             approval_status: None,
-            metadata: serde_json::json!({ "mode": session.mode.as_label() }),
+            metadata: bound_metadata(serde_json::json!({ "mode": session.mode.as_label() })),
             created_ms: now,
         });
         sessions.push(session.clone());
+        trim_session_transcript(&mut session.transcript, MAX_AGENT_TRANSCRIPT_ENTRIES);
         trim_sessions(&mut sessions);
         self.save(&sessions)?;
         Ok(session)
@@ -215,14 +223,15 @@ impl AgentSessionStore {
             id: uuid::Uuid::new_v4().to_string(),
             session_id: session_id.to_string(),
             kind: entry.kind,
-            title: bound_string(&entry.title, 512).0,
+            title: bound_string(&entry.title, MAX_AGENT_TRANSCRIPT_TITLE_CHARS).0,
             content: bound_string(&entry.content, MAX_AGENT_TRANSCRIPT_CHARS).0,
             status: entry.status,
             approval_status,
-            metadata: entry.metadata,
+            metadata: bound_metadata(entry.metadata),
             created_ms: now,
         };
         session.transcript.push(transcript.clone());
+        trim_session_transcript(&mut session.transcript, MAX_AGENT_TRANSCRIPT_ENTRIES);
         session.updated_ms = now.max(session.updated_ms.saturating_add(1));
         self.save(&sessions)?;
         Ok(transcript)
@@ -270,6 +279,16 @@ impl AgentSessionStore {
             filename: format!("agent-session-{}.md", &session.id[..8]),
             content: render_prompt_export(session),
         })
+    }
+
+    pub fn session_workspace_root(&self, session_id: &str) -> Result<String, String> {
+        let _guard = self.lock.lock().map_err(|err| err.to_string())?;
+        let sessions = self.load()?;
+        sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .map(|session| session.workspace_root.clone())
+            .ok_or_else(|| format!("agent session not found: {session_id}"))
     }
 
     fn load(&self) -> Result<Vec<AgentSession>, String> {
@@ -353,17 +372,56 @@ fn bound_string(value: &str, max_chars: usize) -> (String, bool) {
 fn bound_context_items(context_items: Vec<AgentContextItem>) -> Vec<AgentContextItem> {
     context_items
         .into_iter()
+        .take(MAX_AGENT_CONTEXT_ITEMS)
         .map(|mut item| {
-            let (content, truncated) = bound_string(&item.content, MAX_AGENT_CONTEXT_CHARS);
+            let (id, id_truncated) = bound_string(&item.id, MAX_AGENT_CONTEXT_ID_CHARS);
+            let (label, label_truncated) = bound_string(&item.label, MAX_AGENT_CONTEXT_LABEL_CHARS);
+            let (path, path_truncated) =
+                item.path.as_ref().map_or((String::new(), false), |path| {
+                    bound_string(path, MAX_AGENT_CONTEXT_PATH_CHARS)
+                });
+            let (content, content_truncated) = bound_string(&item.content, MAX_AGENT_CONTEXT_CHARS);
+            item.id = id;
+            item.label = label;
+            item.path = Some(path).filter(|path| !path.is_empty());
             item.content = content;
-            item.truncated = item.truncated || truncated;
+            item.truncated = item.truncated
+                || id_truncated
+                || label_truncated
+                || path_truncated
+                || content_truncated;
             item
         })
         .collect()
 }
 
+fn bound_metadata(metadata: serde_json::Value) -> serde_json::Value {
+    let serialized = match serde_json::to_string(&metadata) {
+        Ok(value) => value,
+        Err(_) => "{}".to_string(),
+    };
+
+    if serialized.chars().count() <= MAX_AGENT_METADATA_CHARS {
+        return metadata;
+    }
+
+    serde_json::json!({
+        "truncated": true,
+        "original_chars": serialized.chars().count(),
+    })
+}
+
+fn trim_session_transcript(transcript: &mut Vec<AgentTranscriptEntry>, max_entries: usize) {
+    if transcript.len() <= max_entries {
+        return;
+    }
+
+    transcript.sort_by_key(|entry| std::cmp::Reverse(entry.created_ms));
+    transcript.truncate(max_entries);
+}
+
 fn trim_sessions(sessions: &mut Vec<AgentSession>) {
-    sessions.sort_by(|left, right| right.updated_ms.cmp(&left.updated_ms));
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_ms));
     sessions.truncate(MAX_AGENT_SESSIONS);
 }
 
@@ -561,5 +619,100 @@ mod tests {
             MAX_AGENT_CONTEXT_CHARS
         );
         assert!(session.context_items[0].truncated);
+    }
+
+    #[test]
+    fn agent_payload_limits_bound_metadata_and_context_shape() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = AgentSessionStore::new(temp.path().join("agent-sessions.json"));
+        let mut many_context_items = Vec::new();
+
+        for index in 0..(MAX_AGENT_CONTEXT_ITEMS + 5) {
+            let item = context_item(
+                AgentContextKind::File,
+                &format!(
+                    "label-{index}-{}",
+                    "x".repeat(MAX_AGENT_CONTEXT_LABEL_CHARS + 32)
+                ),
+                &"y".repeat(MAX_AGENT_CONTEXT_CHARS + 16),
+            );
+            many_context_items.push(AgentContextItem {
+                path: Some(format!(
+                    "{}/{}",
+                    "z".repeat(MAX_AGENT_CONTEXT_PATH_CHARS + 32),
+                    index
+                )),
+                id: format!("id-{index}-{}", "x".repeat(MAX_AGENT_CONTEXT_ID_CHARS + 48)),
+                ..item
+            });
+        }
+
+        let session = store
+            .start_session(
+                "/workspace",
+                AgentMode::Edit,
+                "payload limit",
+                many_context_items,
+            )
+            .expect("start session");
+
+        assert_eq!(session.context_items.len(), MAX_AGENT_CONTEXT_ITEMS);
+        for item in &session.context_items {
+            assert!(item.id.chars().count() <= MAX_AGENT_CONTEXT_ID_CHARS);
+            assert!(item.label.chars().count() <= MAX_AGENT_CONTEXT_LABEL_CHARS);
+            assert!(item
+                .path
+                .as_deref()
+                .is_some_and(|path| path.chars().count() <= MAX_AGENT_CONTEXT_PATH_CHARS));
+            assert!(item.content.chars().count() <= MAX_AGENT_CONTEXT_CHARS);
+            assert!(item.truncated);
+        }
+
+        let long_metadata = serde_json::json!({
+            "blob": "m".repeat(MAX_AGENT_METADATA_CHARS + 64),
+        });
+        let original_metadata_len = serde_json::to_string(&long_metadata)
+            .expect("metadata size")
+            .chars()
+            .count();
+        let appended = store
+            .append_transcript(
+                &session.id,
+                AgentTranscriptInput {
+                    kind: AgentTranscriptKind::Report,
+                    title: "Metadata".to_string(),
+                    content: "done".to_string(),
+                    status: Some(AgentEvidenceStatus::Passed),
+                    metadata: long_metadata,
+                },
+            )
+            .expect("append transcript");
+
+        let reloaded = store
+            .list_sessions("/workspace")
+            .expect("list sessions")
+            .into_iter()
+            .find(|item| item.id == session.id)
+            .expect("session found");
+        let reloaded_entry = reloaded
+            .transcript
+            .iter()
+            .find(|entry| entry.id == appended.id)
+            .expect("appended entry");
+
+        assert_eq!(
+            reloaded_entry
+                .metadata
+                .get("truncated")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            reloaded_entry
+                .metadata
+                .get("original_chars")
+                .and_then(serde_json::Value::as_u64),
+            Some(original_metadata_len as u64)
+        );
     }
 }
