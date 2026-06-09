@@ -694,9 +694,9 @@ stable.
 
 ## Current Priority
 
-Node 0, Node 1, Node 2, Node 3, Node 4, Node 5, and Node 6 are complete. The
-next active priority is Node 7: integrate agent-assisted development as a
-structured IDE workflow.
+Node 0, Node 1, Node 2, Node 3, Node 4, Node 5, Node 6, and Node 7 are
+complete. The next active priority is Node 8: support frontend and full-stack
+development loops beside code.
 
 - Node 0 measurements keep Tauri 2 as the main route; Rust-native fallback
   research remains deferred.
@@ -724,3 +724,7 @@ structured IDE workflow.
   Python stdio LSP startup covered by Bun/Cargo tests, focused LSP tests, the
   explicit real-language-server smoke, Tauri debug build, and mocked Chromium
   UI smoke with Tauri IPC stubs.
+- Node 7 verification keeps agent session persistence, context selection from
+  files/docs/diffs/diagnostics/terminal output, transcript evidence, approval
+  gates, prompt export, and app shell integration covered by Bun/Cargo tests,
+  spec/code-quality reviews, Tauri debug build, and full test-isolation checks.

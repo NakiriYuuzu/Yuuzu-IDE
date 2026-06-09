@@ -783,3 +783,88 @@ Next decision:
 - Move from language verification to Node 7 agent-workbench delivery, using the
   now-complete language telemetry, restart controls, and diagnostics surfaces for
   richer agent context.
+
+### Node 7: Agent Workbench
+
+Status: completed and passed.
+
+Node 7 finished Tasks 1-7 and records the final agent-workbench results in
+`docs/architecture/node-7-agent-results.md`. The node adds Rust-owned agent
+session persistence, bounded context snapshots, transcript evidence, approval
+state, prompt export, and a React Agent panel integrated into the existing
+workbench shell.
+
+Completed progress:
+
+- Task 1 added Rust agent session storage, context manifests, transcript
+  entries, approval state, prompt export, and flat Tauri commands.
+- Task 2 added frontend agent state, session selection, prompt draft
+  preservation, selected context IDs, pending approval badges, and per-workspace
+  view state.
+- Task 3 added bounded agent context helpers for files, docs, diffs,
+  diagnostics, and terminal output, including deterministic compact IDs.
+- Task 4 added the Agent panel prompt composer, mode controls, context
+  selection rows, session list, transcript rendering, approval buttons, export
+  action, and compact responsive styling.
+- Task 5 wired Agents into the activity rail, command palette, AppShell panel
+  routing, app-state context assembly, session loading, context-pack links,
+  approval updates, and prompt export.
+- Task 6 added verification evidence summaries in the model and Agent panel
+  toolbar.
+- Task 7 ran full verification, stabilized full Bun test isolation, and recorded
+  Node 7 results.
+
+Important files and commit milestones:
+
+- `src-tauri/src/agent.rs`, `src-tauri/src/commands.rs`, and
+  `src-tauri/src/lib.rs` own persisted sessions, command validation,
+  transcript entries, approval updates, context bounds, and prompt export.
+- `src/features/agents/agent-api.ts`, `src/features/agents/agent-model.ts`,
+  `src/features/agents/AgentPanel.tsx`, and related tests own frontend API
+  wrappers, state transitions, context selection, evidence summaries, and UI.
+- `src/app/AppShell.tsx`, `src/app/activity-rail.tsx`,
+  `src/app/command-palette-model.ts`, and `src/app/test-dom.ts` own app shell
+  integration, command routing, rail badges, shared test DOM setup, and
+  workbench context assembly.
+- `8f653e8` docs: add node 7 agent workbench plan
+- `4cd9439` feat: persist agent sessions
+- `cddfbc8` feat: add agent workbench state
+- `3308537` feat: assemble agent context items
+- `03e6268` feat: add agent workbench panel
+- `b212663` feat: wire agent workbench
+- `81e9bfe` feat: show agent transcript evidence
+- `eb9d4b6` fix: stabilize full test isolation
+
+Verification evidence:
+
+- `bun test`: passed with 178 tests, no failures, 446 expect calls across 28
+  files.
+- `bun run build`: passed with `tsc && vite build`; Vite chunk-size warning
+  only.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml`:
+  passed with 166 Rust tests, 1 ignored.
+- `. "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check`:
+  passed.
+- `. "$HOME/.cargo/env" && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings`:
+  passed.
+- `. "$HOME/.cargo/env" && bun run tauri build --debug`: passed and built
+  macOS app and DMG debug artifacts.
+- `git diff --check`: passed.
+
+Residual risks:
+
+- Node 7 records structured sessions and gates approvals; it does not execute
+  fully autonomous edits.
+- Export uses local browser download behavior; native save dialog integration
+  remains a later enhancement.
+- Full native desktop click-through automation remains outside the current
+  verification loop, so confidence comes from Rust command tests, frontend
+  component/state tests, and Tauri debug bundling.
+- Vite chunk-size warning remains expected because Monaco, xterm, and language
+  workers are large assets; Node 7 accepts it because build exits successfully.
+
+Next decision:
+
+- Move from agent-workbench delivery to Node 8 browser preview and local dev
+  loop, using agent sessions, docs context, task output, and language
+  diagnostics as context for frontend/full-stack workflows.
