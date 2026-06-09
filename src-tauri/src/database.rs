@@ -350,6 +350,12 @@ impl DatabaseProfileStore {
             .iter()
             .find(|profile| profile.id == profile_id)
             .cloned();
+        let previous_secret_id = previous
+            .as_ref()
+            .and_then(|profile| profile.source.secret_id())
+            .map(|secret_id| secret_id.to_string());
+        let mut changed_secret = None;
+        let mut old_secret = None;
 
         let source = match input.kind {
             DatabaseKind::SQLite => {
@@ -378,16 +384,21 @@ impl DatabaseProfileStore {
                 validate_not_raw_dsn("database", &database)?;
 
                 let secret_id = if let Some(password) = input.password.as_deref() {
-                    let secret_id = previous
-                        .as_ref()
-                        .and_then(|profile| profile.source.secret_id().map(|id| id.to_string()))
+                    let secret_id = previous_secret_id
+                        .clone()
                         .unwrap_or_else(|| format!("database-profile:{profile_id}"));
+
+                    if let Some(previous_secret_id) = previous_secret_id.as_deref() {
+                        if let Ok(password) = secrets.get_secret(previous_secret_id) {
+                            old_secret = Some(password);
+                        }
+                    }
+
                     secrets.set_secret(&secret_id, password)?;
+                    changed_secret = Some(secret_id.clone());
                     Some(secret_id)
                 } else {
-                    previous
-                        .as_ref()
-                        .and_then(|profile| profile.source.secret_id().map(|id| id.to_string()))
+                    previous_secret_id.clone()
                 };
 
                 DatabaseConnectionSource::Tcp {
@@ -415,7 +426,31 @@ impl DatabaseProfileStore {
 
         profiles.retain(|profile| profile.id != profile_id);
         profiles.push(profile.clone());
-        self.save(&profiles)?;
+        if let Err(save_error) = self.save(&profiles) {
+            if let Some(secret_id) = changed_secret {
+                if let Some(previous_secret_id) = previous_secret_id {
+                    if let Some(previous_secret) = old_secret {
+                        if let Err(secret_error) =
+                            secrets.set_secret(&previous_secret_id, &previous_secret)
+                        {
+                            return Err(format!(
+                                "{save_error}; unable to restore previous secret: {secret_error}"
+                            ));
+                        }
+                    } else if let Err(secret_error) = secrets.delete_secret(&previous_secret_id) {
+                        return Err(format!(
+                            "{save_error}; unable to remove new profile secret: {secret_error}"
+                        ));
+                    }
+                } else if let Err(secret_error) = secrets.delete_secret(&secret_id) {
+                    return Err(format!(
+                        "{save_error}; unable to remove new profile secret: {secret_error}"
+                    ));
+                }
+            }
+
+            return Err(save_error);
+        }
 
         Ok(profile)
     }
@@ -431,12 +466,13 @@ impl DatabaseProfileStore {
             .iter()
             .position(|profile| profile.id == id)
             .ok_or_else(|| format!("database profile not found: {id}"))?;
-        if let Some(secret_id) = profiles[index].source.secret_id() {
-            secrets.delete_secret(secret_id)?;
-        }
-
+        let secret_id = profiles[index].source.secret_id().map(|id| id.to_string());
         profiles.remove(index);
-        self.save(&profiles)
+        self.save(&profiles)?;
+        if let Some(secret_id) = secret_id {
+            secrets.delete_secret(&secret_id)?;
+        }
+        Ok(())
     }
 
     fn load(&self) -> Result<Vec<DatabaseProfile>, String> {
@@ -513,9 +549,10 @@ fn validate_not_raw_dsn(field: &str, value: &str) -> Result<(), String> {
 }
 
 fn has_raw_dsn_prefix(value: &str) -> bool {
-    const RAW_DSN_PREFIXES: [&str; 6] = [
+    const RAW_DSN_PREFIXES: [&str; 7] = [
         "postgres://",
         "postgresql://",
+        "jdbc:postgresql://",
         "mssql://",
         "sqlserver://",
         "sqlite://",
@@ -526,6 +563,40 @@ fn has_raw_dsn_prefix(value: &str) -> bool {
     RAW_DSN_PREFIXES
         .iter()
         .any(|prefix| lowered.starts_with(prefix))
+        || has_dsn_key_value_connection_string(&lowered)
+}
+
+fn has_dsn_key_value_connection_string(value: &str) -> bool {
+    let normalized = value
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+
+    if (normalized.contains("host=") && normalized.contains("password="))
+        || (normalized.contains("server=") && normalized.contains("password="))
+    {
+        return true;
+    }
+
+    let mut has_host_or_server = false;
+    let mut has_password = false;
+
+    for segment in normalized.split([';', '&']) {
+        let segment = segment.trim();
+        if segment.is_empty() {
+            continue;
+        }
+
+        if segment.starts_with("host=") || segment.starts_with("server=") {
+            has_host_or_server = true;
+        }
+
+        if segment.starts_with("password=") {
+            has_password = true;
+        }
+    }
+
+    has_host_or_server && has_password
 }
 
 #[cfg(test)]
@@ -970,12 +1041,22 @@ fn truncate_cell(value: String) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::path::Path;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
 
     use super::*;
+
+    #[cfg(unix)]
+    fn set_permissions(path: &Path, mode: u32) {
+        let permissions = std::fs::Permissions::from_mode(mode);
+        std::fs::set_permissions(path, permissions).expect("set permissions");
+    }
 
     #[test]
     fn classifies_reads_and_mutations_with_confirmation_policy() {
@@ -1145,6 +1226,18 @@ mod tests {
     }
 
     #[test]
+    fn has_raw_dsn_prefix_rejects_key_value_and_jdbc_forms() {
+        assert!(has_raw_dsn_prefix("jdbc:postgresql://localhost/db"));
+        assert!(has_raw_dsn_prefix("host=db;password=secret"));
+        assert!(has_raw_dsn_prefix(
+            "Server=localhost; Password=pw;Database=app"
+        ));
+        assert!(has_raw_dsn_prefix("host = localhost password = pw"));
+        assert!(!has_raw_dsn_prefix("localhost"));
+        assert!(!has_raw_dsn_prefix("user_only"));
+    }
+
+    #[test]
     fn deleting_profile_deletes_associated_secret() {
         let temp = tempfile::tempdir().expect("temp dir");
         let store = DatabaseProfileStore::new(temp.path().join("database-profiles.json"));
@@ -1257,6 +1350,18 @@ mod tests {
                 "postgres://user:pw@db/app".to_string(),
             ),
             (DatabaseKind::MsSql, "mssql://user:pw@db/app".to_string()),
+            (
+                DatabaseKind::PostgreSQL,
+                "jdbc:postgresql://localhost:5432/app".to_string(),
+            ),
+            (
+                DatabaseKind::PostgreSQL,
+                "Server=localhost;Password=pw;Database=app".to_string(),
+            ),
+            (
+                DatabaseKind::PostgreSQL,
+                "host=localhost;password=pw".to_string(),
+            ),
         ];
 
         for (index, (kind, host)) in inputs.iter().enumerate() {
@@ -1288,6 +1393,9 @@ mod tests {
             let contents = std::fs::read_to_string(&profile_file).expect("database profile json");
             assert!(!contents.contains("postgres://"));
             assert!(!contents.contains("mssql://"));
+            assert!(!contents.contains("jdbc:postgresql://"));
+            assert!(!contents.contains("Server=localhost"));
+            assert!(!contents.contains("host=localhost"));
             assert!(!contents.contains("user:pw"));
         }
         let values = secrets.values.lock().expect("secret store lock");
@@ -1324,6 +1432,143 @@ mod tests {
         assert!(!temp.path().join("database-profiles.json").exists());
         let values = secrets.values.lock().expect("secret store lock");
         assert!(values.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_profile_rolls_back_secret_when_json_persist_fails() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = DatabaseProfileStore::new(temp.path().join("database-profiles.json"));
+        let secrets = InMemoryDatabaseSecretStore::default();
+        let saved = store
+            .save_profile(
+                DatabaseProfileInput {
+                    id: Some("profile-1".to_string()),
+                    workspace_root: "/workspace".to_string(),
+                    name: "legacy".to_string(),
+                    kind: DatabaseKind::PostgreSQL,
+                    sqlite_path: None,
+                    host: Some("localhost".to_string()),
+                    port: Some(5432),
+                    database: Some("app".to_string()),
+                    username: Some("user".to_string()),
+                    password: Some("old".to_string()),
+                    read_only: false,
+                    production: false,
+                },
+                &secrets,
+                || Ok(10),
+                || "profile-1".to_string(),
+            )
+            .expect("seed profile");
+        let old_secret_id = saved.source.secret_id().expect("secret id").to_string();
+
+        set_permissions(temp.path(), 0o500);
+        let result = store.save_profile(
+            DatabaseProfileInput {
+                id: Some("profile-1".to_string()),
+                workspace_root: "/workspace".to_string(),
+                name: "legacy-updated".to_string(),
+                kind: DatabaseKind::PostgreSQL,
+                sqlite_path: None,
+                host: Some("localhost".to_string()),
+                port: Some(5432),
+                database: Some("app".to_string()),
+                username: Some("user".to_string()),
+                password: Some("new".to_string()),
+                read_only: false,
+                production: false,
+            },
+            &secrets,
+            || Ok(11),
+            || "profile-1".to_string(),
+        );
+        set_permissions(temp.path(), 0o700);
+
+        assert!(result.is_err());
+        assert_eq!(
+            secrets
+                .get_secret(&old_secret_id)
+                .expect("existing secret should be restored"),
+            "old"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_profile_rolls_back_new_secret_when_json_persist_fails() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        set_permissions(temp.path(), 0o500);
+        let store = DatabaseProfileStore::new(temp.path().join("database-profiles.json"));
+        let secrets = InMemoryDatabaseSecretStore::default();
+        let result = store.save_profile(
+            DatabaseProfileInput {
+                id: Some("profile-1".to_string()),
+                workspace_root: "/workspace".to_string(),
+                name: "new".to_string(),
+                kind: DatabaseKind::PostgreSQL,
+                sqlite_path: None,
+                host: Some("localhost".to_string()),
+                port: Some(5432),
+                database: Some("app".to_string()),
+                username: Some("user".to_string()),
+                password: Some("new-password".to_string()),
+                read_only: false,
+                production: false,
+            },
+            &secrets,
+            || Ok(10),
+            || "profile-1".to_string(),
+        );
+        set_permissions(temp.path(), 0o700);
+
+        assert!(result.is_err());
+        assert!(secrets.values.lock().expect("secret store lock").is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_profile_does_not_delete_secret_when_json_persist_fails() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = DatabaseProfileStore::new(temp.path().join("database-profiles.json"));
+        let secrets = InMemoryDatabaseSecretStore::default();
+        let saved = store
+            .save_profile(
+                DatabaseProfileInput {
+                    id: Some("profile-1".to_string()),
+                    workspace_root: "/workspace".to_string(),
+                    name: "legacy".to_string(),
+                    kind: DatabaseKind::PostgreSQL,
+                    sqlite_path: None,
+                    host: Some("localhost".to_string()),
+                    port: Some(5432),
+                    database: Some("app".to_string()),
+                    username: Some("user".to_string()),
+                    password: Some("pw".to_string()),
+                    read_only: false,
+                    production: false,
+                },
+                &secrets,
+                || Ok(10),
+                || "profile-1".to_string(),
+            )
+            .expect("seed profile");
+        let secret_id = saved.source.secret_id().expect("secret id").to_string();
+
+        set_permissions(temp.path(), 0o500);
+        let result = store.delete_profile("profile-1", &secrets);
+        set_permissions(temp.path(), 0o700);
+
+        assert!(result.is_err());
+        let persisted = std::fs::read_to_string(temp.path().join("database-profiles.json"))
+            .expect("profile json");
+        assert!(persisted.contains("profile-1"));
+        assert_eq!(
+            secrets
+                .get_secret(&secret_id)
+                .expect("secret should remain"),
+            "pw"
+        );
     }
 
     #[test]

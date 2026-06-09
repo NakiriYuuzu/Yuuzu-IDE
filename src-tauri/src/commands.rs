@@ -526,6 +526,21 @@ impl AppState {
             .list_sessions(&workspace_root.to_string_lossy())
     }
 
+    pub fn delete_database_profile(
+        &self,
+        workspace_root: &str,
+        profile_id: &str,
+    ) -> Result<(), String> {
+        let workspace_root = self.trusted_workspace_root(workspace_root)?;
+        let profile = self.database_profiles.get_profile(profile_id)?;
+        if profile.workspace_root != workspace_root.to_string_lossy() {
+            return Err("database profile does not belong to workspace".to_string());
+        }
+
+        self.database_profiles
+            .delete_profile(profile_id, &self.database_secrets)
+    }
+
     pub fn start_agent_session(
         &self,
         workspace_root: &str,
@@ -801,11 +816,10 @@ pub fn save_database_profile(
 #[tauri::command]
 pub fn delete_database_profile(
     state: State<'_, AppState>,
+    workspace_root: String,
     profile_id: String,
 ) -> Result<(), String> {
-    state
-        .database_profiles
-        .delete_profile(&profile_id, &state.database_secrets)
+    state.delete_database_profile(&workspace_root, &profile_id)
 }
 
 #[tauri::command]
@@ -1763,11 +1777,79 @@ mod tests {
     #[test]
     fn delete_database_profile_preserves_flat_command_signature() {
         type FlatDeleteDatabaseProfileCommand =
-            fn(State<'_, AppState>, String) -> Result<(), String>;
+            fn(State<'_, AppState>, String, String) -> Result<(), String>;
 
         fn assert_flat_signature(_command: FlatDeleteDatabaseProfileCommand) {}
 
         assert_flat_signature(super::delete_database_profile);
+    }
+
+    #[test]
+    fn delete_database_profile_rejects_unregistered_workspace_root() {
+        let config = tempdir().expect("config dir");
+        let unregistered = tempdir().expect("unregistered workspace");
+        let state = AppState::new(config.path()).expect("state");
+
+        let result = state.delete_database_profile(
+            unregistered.path().to_str().expect("unregistered path"),
+            "profile-id",
+        );
+
+        assert!(result.is_err());
+        assert!(result
+            .expect_err("unregistered workspace")
+            .contains("workspace not registered"));
+    }
+
+    #[test]
+    fn delete_database_profile_rejects_profile_outside_workspace_root() {
+        let config = tempdir().expect("config dir");
+        let workspace_a = config.path().join("workspace-a");
+        let workspace_b = config.path().join("workspace-b");
+        std::fs::create_dir_all(&workspace_a).expect("workspace a");
+        std::fs::create_dir_all(&workspace_b).expect("workspace b");
+
+        let state = AppState::new(config.path()).expect("state");
+        state
+            .open_workspace_path(workspace_a.clone())
+            .expect("open workspace a");
+        state
+            .open_workspace_path(workspace_b.clone())
+            .expect("open workspace b");
+
+        let profile = state
+            .database_profiles
+            .save_profile(
+                crate::database::DatabaseProfileInput {
+                    id: Some("profile-1".to_string()),
+                    workspace_root: workspace_a.to_str().expect("workspace root").to_string(),
+                    name: "legacy".to_string(),
+                    kind: crate::database::DatabaseKind::PostgreSQL,
+                    sqlite_path: None,
+                    host: Some("localhost".to_string()),
+                    port: Some(5432),
+                    database: Some("app".to_string()),
+                    username: Some("user".to_string()),
+                    password: None,
+                    read_only: false,
+                    production: false,
+                },
+                &state.database_secrets,
+                || Ok(10),
+                || "profile-1".to_string(),
+            )
+            .expect("save profile");
+
+        let result = state.delete_database_profile(
+            workspace_b.to_str().expect("workspace b"),
+            profile.id.as_str(),
+        );
+
+        assert!(result.is_err());
+        assert!(result
+            .expect_err("workspace mismatch should be rejected")
+            .contains("does not belong to workspace"));
+        assert!(state.database_profiles.get_profile(&profile.id).is_ok());
     }
 
     #[test]
