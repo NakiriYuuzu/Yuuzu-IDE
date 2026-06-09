@@ -15,6 +15,7 @@ import {
   createRevealState,
   fileIconClassFromName,
   forgetManualCollapse,
+  gitDecorationForPath,
   isExpanded,
   joinRelativePath,
   nextAutoRevealPaths,
@@ -23,6 +24,7 @@ import {
   removePathAndDescendantsFromRecord,
   shouldApplyDirectoryLoadResult,
   type ExpandedPaths,
+  type GitDecorationMap,
 } from "./file-tree-model";
 import {
   scanDirectory,
@@ -37,6 +39,7 @@ type FileTreePanelProps = {
   onCreateFile: (relativePath: string) => Promise<void>;
   onRenamePath: (path: string, newName: string) => Promise<void>;
   onDeletePath: (path: string) => Promise<void>;
+  gitDecorations?: GitDecorationMap;
 };
 
 function iconClass(entry: FileTreeEntry): string {
@@ -65,6 +68,7 @@ export function FileTreePanel({
   onCreateFile,
   onRenamePath,
   onDeletePath,
+  gitDecorations = {},
 }: FileTreePanelProps) {
   const registry = useWorkspaceStore((state) => state.registry);
   const [entries, setEntries] = useState<FileTreeEntry[]>([]);
@@ -293,6 +297,13 @@ export function FileTreePanel({
       const childEntries = expandedPaths[entry.path] ?? [];
       const isLoadingChildren = Boolean(loadingPaths[entry.path]);
       const childError = directoryErrors[entry.path];
+      const relativePath = activeWorkspace
+        ? relativePathFromWorkspace(activeWorkspace.path, entry.path)
+        : null;
+      const gitDecoration =
+        !entry.is_dir && relativePath !== null
+          ? gitDecorationForPath(gitDecorations, relativePath)
+          : null;
 
       return (
         <div className="tree-node" key={entry.path}>
@@ -322,6 +333,14 @@ export function FileTreePanel({
               </span>
               <Icon className={className} aria-hidden="true" />
               <span className="nm mono">{entry.name}</span>
+              {gitDecoration ? (
+                <span
+                  className={`git-decoration-token git-token-${gitDecoration}`}
+                  aria-label={`Git status ${gitDecoration}`}
+                >
+                  {gitDecoration}
+                </span>
+              ) : null}
             </button>
             <div className="tree-row-actions">
               {entry.is_dir ? (

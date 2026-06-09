@@ -52,6 +52,8 @@ import {
   listGitBranches,
   pullGit,
   pushGit,
+  rebaseGitOnto,
+  resetGitHard,
   stageGitPaths,
   stashGit,
   unstageGitPaths,
@@ -60,17 +62,20 @@ import { GitDiffView } from "../features/git/GitDiffView";
 import { GitGraphView } from "../features/git/GitGraphView";
 import { GitPanel } from "../features/git/GitPanel";
 import {
-  branchCheckoutConfirmation,
   changeBadgeCount,
   confirmationTextForGitAction,
+  decorationMapFromStatus,
   replaceGitStatus,
   selectDiff,
   setGitError,
   setGitLoading,
+  shouldRefreshGitAfterFileEvent,
+  shouldRefreshGitAfterTask,
   statusBranchLabel,
   storeBranches,
   storeDiff,
   storeGraph,
+  type GitConfirmationAction,
   updateGitCommitMessage,
   type GitRepositoryStatus,
   type GitViewState,
@@ -87,8 +92,10 @@ import {
 } from "../features/files/file-model";
 import {
   fileIconClassFromName,
+  gitDecorationForPath,
   isSameOrDescendant,
   parentNameFromPath,
+  relativePathFromWorkspace,
   removeEditorPath,
   renameEditorPath,
   replacePathPrefix,
@@ -153,6 +160,13 @@ type FileChangedPayload = {
   workspace_root: string;
   path: string;
   version: FileVersion | null;
+};
+
+type GitConfirmationRequest = {
+  action: GitConfirmationAction;
+  title: string;
+  detail: string;
+  run: (confirmation: string) => Promise<unknown>;
 };
 
 const EditorTab = lazy(() =>
@@ -302,6 +316,7 @@ function PanelBody({
   taskState,
   taskError,
   gitState,
+  gitDecorations,
   onOpenFile,
   onCreateFile,
   onRenamePath,
@@ -342,6 +357,7 @@ function PanelBody({
   taskState: TaskViewState;
   taskError: string | null;
   gitState: GitViewState;
+  gitDecorations: ReturnType<typeof decorationMapFromStatus>;
   onOpenFile: (path: string) => void;
   onCreateFile: (relativePath: string) => Promise<void>;
   onRenamePath: (path: string, newName: string) => Promise<void>;
@@ -450,6 +466,7 @@ function PanelBody({
       onCreateFile={onCreateFile}
       onRenamePath={onRenamePath}
       onDeletePath={onDeletePath}
+      gitDecorations={gitDecorations}
     />
   );
 }
@@ -465,6 +482,9 @@ export function AppShell() {
   const [findOpen, setFindOpen] = useState(false);
   const [findFocusRequest, setFindFocusRequest] = useState(0);
   const [findQuery, setFindQuery] = useState("");
+  const [gitConfirmation, setGitConfirmation] =
+    useState<GitConfirmationRequest | null>(null);
+  const [gitConfirmationInput, setGitConfirmationInput] = useState("");
   const savedContentByPathRef = useRef<Record<string, string>>({});
   const openRequestRef = useRef(0);
   const registry = useWorkspaceStore((state) => state.registry);
@@ -551,12 +571,23 @@ export function AppShell() {
         gitDiffCacheKey(view.git.selectedDiff.path, view.git.selectedDiff.staged)
       ] ?? null)
     : null;
+  const gitDecorations = useMemo(
+    () => decorationMapFromStatus(view.git.status),
+    [view.git.status],
+  );
+  const gitConfirmationText = gitConfirmation
+    ? confirmationTextForGitAction(gitConfirmation.action)
+    : "";
+  const gitConfirmationReady =
+    gitConfirmation !== null && gitConfirmationInput === gitConfirmationText;
 
   useEffect(() => {
     setFindOpen(false);
     setFindFocusRequest(0);
     setFindQuery("");
     setTerminalError(null);
+    setGitConfirmation(null);
+    setGitConfirmationInput("");
   }, [activeWorkspaceId]);
 
   useEffect(() => {
@@ -699,6 +730,11 @@ export function AppShell() {
         return;
       }
 
+      const currentRegistry = workspaceStore.getState().registry;
+      const currentWorkspace =
+        currentRegistry.workspaces.find(
+          (workspace) => workspace.id === workspaceId,
+        ) ?? null;
       const currentView = workspaceViewStore.getState().viewFor(workspaceId);
       const hasRun = currentView.task.runs.some(
         (run) => run.id === event.run_id,
@@ -711,6 +747,20 @@ export function AppShell() {
           .updateTask(workspaceId, (task) =>
             finishTaskRun(task, event.run_id, event.exit_code),
           );
+        if (
+          currentWorkspace &&
+          shouldRefreshGitAfterTask({
+            activeWorkspaceId: currentRegistry.active_workspace_id,
+            runWorkspaceId: workspaceId,
+            exitCode: event.exit_code,
+          })
+        ) {
+          void refreshGitStatusForWorkspace(
+            workspaceId,
+            currentWorkspace.path,
+            "Refresh",
+          );
+        }
         return;
       }
 
@@ -726,6 +776,20 @@ export function AppShell() {
         .updateTask(workspaceId, (task) =>
           finishTaskRun(task, event.run_id, event.exit_code),
         );
+      if (
+        currentWorkspace &&
+        shouldRefreshGitAfterTask({
+          activeWorkspaceId: currentRegistry.active_workspace_id,
+          runWorkspaceId: workspaceId,
+          exitCode: event.exit_code,
+        })
+      ) {
+        void refreshGitStatusForWorkspace(
+          workspaceId,
+          currentWorkspace.path,
+          "Refresh",
+        );
+      }
     });
 
     return () => {
@@ -889,6 +953,27 @@ export function AppShell() {
             event.payload.version,
           ),
         );
+        const eventPath =
+          watched === null
+            ? event.payload.path
+            : (relativePathFromWorkspace(
+                watched.watchedRoot,
+                event.payload.path,
+              ) ?? event.payload.path);
+        if (
+          currentWorkspace &&
+          shouldRefreshGitAfterFileEvent({
+            activeWorkspaceId: currentRegistry.active_workspace_id,
+            eventWorkspaceId: workspaceId,
+            path: eventPath,
+          })
+        ) {
+          void refreshGitStatusForWorkspace(
+            workspaceId,
+            currentWorkspace.path,
+            "Refresh",
+          );
+        }
       },
     );
 
@@ -1505,13 +1590,11 @@ export function AppShell() {
     }
   }
 
-  async function refreshGitStatus(label = "Refresh") {
-    if (!activeWorkspace || !activeWorkspaceId) {
-      return;
-    }
-
-    const workspaceId = activeWorkspaceId;
-    const workspaceRoot = activeWorkspace.path;
+  async function refreshGitStatusForWorkspace(
+    workspaceId: string,
+    workspaceRoot: string,
+    label = "Refresh",
+  ): Promise<void> {
     updateGit(workspaceId, (git) => setGitLoading(setGitError(git, null), true));
 
     try {
@@ -1525,6 +1608,18 @@ export function AppShell() {
     }
   }
 
+  async function refreshGitStatus(label = "Refresh") {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    await refreshGitStatusForWorkspace(
+      activeWorkspaceId,
+      activeWorkspace.path,
+      label,
+    );
+  }
+
   async function runGitStatusMutation(
     label: string,
     mutation: (workspaceRoot: string) => Promise<GitRepositoryStatus>,
@@ -1533,8 +1628,20 @@ export function AppShell() {
       return false;
     }
 
-    const workspaceId = activeWorkspaceId;
-    const workspaceRoot = activeWorkspace.path;
+    return runGitStatusMutationForWorkspace(
+      activeWorkspaceId,
+      activeWorkspace.path,
+      label,
+      mutation,
+    );
+  }
+
+  async function runGitStatusMutationForWorkspace(
+    workspaceId: string,
+    workspaceRoot: string,
+    label: string,
+    mutation: (workspaceRoot: string) => Promise<GitRepositoryStatus>,
+  ): Promise<boolean> {
     updateGit(workspaceId, (git) => setGitLoading(setGitError(git, null), true));
 
     try {
@@ -1550,6 +1657,31 @@ export function AppShell() {
     }
   }
 
+  function openGitConfirmation(request: GitConfirmationRequest) {
+    setGitConfirmation(request);
+    setGitConfirmationInput("");
+  }
+
+  function closeGitConfirmation() {
+    setGitConfirmation(null);
+    setGitConfirmationInput("");
+  }
+
+  async function confirmGitAction() {
+    const request = gitConfirmation;
+    if (!request) {
+      return;
+    }
+
+    const confirmation = confirmationTextForGitAction(request.action);
+    if (gitConfirmationInput !== confirmation) {
+      return;
+    }
+
+    closeGitConfirmation();
+    await request.run(confirmation);
+  }
+
   function stageGitPath(path: string) {
     void runGitStatusMutation("Stage", (workspaceRoot) =>
       stageGitPaths(workspaceRoot, [path]),
@@ -1563,13 +1695,24 @@ export function AppShell() {
   }
 
   function discardGitPath(path: string) {
-    void runGitStatusMutation("Discard", (workspaceRoot) =>
-      discardGitPaths(
-        workspaceRoot,
-        [path],
-        confirmationTextForGitAction({ kind: "discard", paths: [path] }),
-      ),
-    );
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    openGitConfirmation({
+      action: { kind: "discard", paths: [path] },
+      title: "Discard file changes",
+      detail: path,
+      run: (confirmation) =>
+        runGitStatusMutationForWorkspace(
+          workspaceId,
+          workspaceRoot,
+          "Discard",
+          (root) => discardGitPaths(root, [path], confirmation),
+        ),
+    });
   }
 
   function commitFromGitPanel(options: { amend: boolean; pushAfter: boolean }) {
@@ -1697,7 +1840,7 @@ export function AppShell() {
     }
   }
 
-  async function checkoutBranchFromGitPanel(branch: string) {
+  function checkoutBranchFromGitPanel(branch: string) {
     if (!activeWorkspace || !activeWorkspaceId) {
       return;
     }
@@ -1712,21 +1855,61 @@ export function AppShell() {
 
     const workspaceId = activeWorkspaceId;
     const workspaceRoot = activeWorkspace.path;
-    updateGit(workspaceId, (git) => setGitLoading(setGitError(git, null), true));
+    openGitConfirmation({
+      action: { kind: "checkout", branch },
+      title: "Checkout branch",
+      detail: branch,
+      run: (confirmation) =>
+        runGitStatusMutationForWorkspace(
+          workspaceId,
+          workspaceRoot,
+          "Checkout",
+          (root) => checkoutGitBranch(root, branch, confirmation),
+        ),
+    });
+  }
 
-    try {
-      const status = await checkoutGitBranch(
-        workspaceRoot,
-        branch,
-        branchCheckoutConfirmation(branch),
-      );
-      updateGit(workspaceId, (git) => replaceGitStatus(git, status));
-      await refreshGitBranchesForWorkspace(workspaceId, workspaceRoot);
-    } catch (error) {
-      updateGit(workspaceId, (git) =>
-        setGitError(git, `Checkout failed: ${terminalErrorMessage(error)}`),
-      );
+  function resetHardFromGitPanel() {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
     }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    openGitConfirmation({
+      action: { kind: "reset-hard" },
+      title: "Reset hard",
+      detail: "Discard all tracked working tree changes.",
+      run: (confirmation) =>
+        runGitStatusMutationForWorkspace(
+          workspaceId,
+          workspaceRoot,
+          "Reset hard",
+          (root) => resetGitHard(root, confirmation),
+        ),
+    });
+  }
+
+  function rebaseOntoFromGitPanel(target: string) {
+    const trimmedTarget = target.trim();
+    if (!activeWorkspace || !activeWorkspaceId || !trimmedTarget) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    openGitConfirmation({
+      action: { kind: "rebase", target: trimmedTarget },
+      title: "Rebase branch",
+      detail: trimmedTarget,
+      run: (confirmation) =>
+        runGitStatusMutationForWorkspace(
+          workspaceId,
+          workspaceRoot,
+          "Rebase",
+          (root) => rebaseGitOnto(root, trimmedTarget, confirmation),
+        ),
+    });
   }
 
   function openGitDiff(path: string, staged: boolean) {
@@ -1774,6 +1957,12 @@ export function AppShell() {
         break;
       case "stop-task":
         stopActiveTaskRun();
+        break;
+      case "git-reset-hard":
+        resetHardFromGitPanel();
+        break;
+      case "git-rebase-main":
+        rebaseOntoFromGitPanel("main");
         break;
       case "toggle-sidebar":
         setPanelOpen(!panelOpen);
@@ -1891,6 +2080,7 @@ export function AppShell() {
               taskState={view.task}
               taskError={taskError}
               gitState={view.git}
+              gitDecorations={gitDecorations}
               onOpenFile={openFile}
               onCreateFile={createFileFromExplorer}
               onRenamePath={renamePathFromExplorer}
@@ -1933,6 +2123,13 @@ export function AppShell() {
                 const isActive =
                   surface === "editor" && tab.path === view.editor.activePath;
                 const iconClass = fileIconClassFromName(tab.name);
+                const tabRelativePath = activeWorkspace
+                  ? relativePathFromWorkspace(activeWorkspace.path, tab.path)
+                  : null;
+                const tabGitDecoration =
+                  tabRelativePath === null
+                    ? null
+                    : gitDecorationForPath(gitDecorations, tabRelativePath);
 
                 return (
                   <div
@@ -1959,6 +2156,14 @@ export function AppShell() {
                     <span className={`tlabel mono${tab.dirty ? " dirty" : ""}`}>
                       {tab.name}
                     </span>
+                    {tabGitDecoration ? (
+                      <span
+                        className={`git-decoration-token git-token-${tabGitDecoration}`}
+                        aria-label={`Git status ${tabGitDecoration}`}
+                      >
+                        {tabGitDecoration}
+                      </span>
+                    ) : null}
                     {tab.externalChange ? (
                       <span className="meta">changed</span>
                     ) : null}
@@ -2309,6 +2514,57 @@ export function AppShell() {
         onClose={() => setPaletteOpen(false)}
         onRun={runCommand}
       />
+      {gitConfirmation ? (
+        <div className="git-confirm-backdrop">
+          <div
+            className="git-confirm-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="git-confirm-title"
+          >
+            <div>
+              <h2 id="git-confirm-title">{gitConfirmation.title}</h2>
+              <p>{gitConfirmation.detail}</p>
+            </div>
+            <div className="git-confirm-danger">
+              Type <span className="mono">{gitConfirmationText}</span> to
+              continue.
+            </div>
+            <input
+              className="input2 mono"
+              value={gitConfirmationInput}
+              aria-label="Git confirmation text"
+              autoFocus
+              onChange={(event) => setGitConfirmationInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  closeGitConfirmation();
+                }
+                if (event.key === "Enter" && gitConfirmationReady) {
+                  void confirmGitAction();
+                }
+              }}
+            />
+            <div className="git-confirm-actions">
+              <button
+                type="button"
+                className="btn"
+                onClick={closeGitConfirmation}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn primary"
+                disabled={!gitConfirmationReady}
+                onClick={() => void confirmGitAction()}
+              >
+                Run
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

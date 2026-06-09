@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import type { EditorFileState } from "../files/file-model";
 import {
   createRevealState,
+  gitDecorationForPath,
   nextAutoRevealPaths,
   removeEditorPath,
   rememberManualCollapse,
@@ -112,5 +113,17 @@ describe("workspace file tree model", () => {
     expect(surfaceAfterEditorRemoval("editor", previous, previous)).toBe(
       "editor",
     );
+  });
+
+  test("returns git decoration for exact file path", () => {
+    expect(gitDecorationForPath({ "src/main.ts": "M" }, "src/main.ts")).toBe(
+      "M",
+    );
+  });
+
+  test("returns no git decoration for undecorated path", () => {
+    expect(
+      gitDecorationForPath({ "src/main.ts": "M" }, "src/other.ts"),
+    ).toBeNull();
   });
 });

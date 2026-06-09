@@ -4,6 +4,7 @@ import type { FileTreeEntry } from "./workspace-api";
 
 export type ExpandedPaths = Record<string, FileTreeEntry[]>;
 export type LoadingPaths = Record<string, boolean>;
+export type GitDecorationMap = Record<string, "M" | "A" | "D" | "U">;
 
 export type RevealState = {
   workspaceRoot: string;
@@ -41,6 +42,13 @@ export function fileIconClassFromName(name: string): string {
   return lowerName.endsWith(".ts") || lowerName.endsWith(".tsx")
     ? "ico-ts"
     : "";
+}
+
+export function gitDecorationForPath(
+  decorations: GitDecorationMap,
+  path: string,
+): GitDecorationMap[string] | null {
+  return decorations[path] ?? null;
 }
 
 export function normalizeExplorerPath(path: string): string {

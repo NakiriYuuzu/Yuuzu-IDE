@@ -75,6 +75,18 @@ export type GitConfirmationAction =
 
 export type GitAction = "commit" | "commit-push" | "amend" | "stash";
 
+export type GitFileEventRefreshCheck = {
+  activeWorkspaceId: string | null;
+  eventWorkspaceId: string | null;
+  path: string;
+};
+
+export type GitTaskRefreshCheck = {
+  activeWorkspaceId: string | null;
+  runWorkspaceId: string | null;
+  exitCode: number | null;
+};
+
 export type GitViewState = {
   status: GitRepositoryStatus | null;
   loading: boolean;
@@ -288,6 +300,30 @@ export function branchCheckoutConfirmation(branch: string): string {
   return confirmationTextForGitAction({ kind: "checkout", branch });
 }
 
+export function shouldRefreshGitAfterFileEvent({
+  activeWorkspaceId,
+  eventWorkspaceId,
+  path,
+}: GitFileEventRefreshCheck): boolean {
+  if (!activeWorkspaceId || activeWorkspaceId !== eventWorkspaceId) {
+    return false;
+  }
+
+  return normalizeGitEventPath(path) !== ".git/index.lock";
+}
+
+export function shouldRefreshGitAfterTask({
+  activeWorkspaceId,
+  runWorkspaceId,
+  exitCode,
+}: GitTaskRefreshCheck): boolean {
+  return Boolean(
+    activeWorkspaceId &&
+      activeWorkspaceId === runWorkspaceId &&
+      exitCode !== null,
+  );
+}
+
 export function decorationMapFromStatus(
   status: GitRepositoryStatus | null,
 ): GitDecorationMap {
@@ -303,6 +339,10 @@ export function decorationMapFromStatus(
 
 function diffKey(path: string, staged: boolean): string {
   return `${staged ? "staged" : "unstaged"}:${path}`;
+}
+
+function normalizeGitEventPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\/+/, "");
 }
 
 function isBlankStatus(status: string): boolean {

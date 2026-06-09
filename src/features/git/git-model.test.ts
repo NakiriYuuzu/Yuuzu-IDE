@@ -15,6 +15,8 @@ import {
   groupGitChanges,
   replaceGitStatus,
   selectDiff,
+  shouldRefreshGitAfterFileEvent,
+  shouldRefreshGitAfterTask,
   storeBranches,
   statusBranchLabel,
   storeDiff,
@@ -269,5 +271,35 @@ describe("git-model", () => {
     expect(branchCheckoutConfirmation("feature/git")).toBe(
       "CHECKOUT feature/git",
     );
+  });
+
+  test("refreshes git after file watcher events in active workspace", () => {
+    expect(
+      shouldRefreshGitAfterFileEvent({
+        activeWorkspaceId: "w1",
+        eventWorkspaceId: "w1",
+        path: "README.md",
+      }),
+    ).toBe(true);
+  });
+
+  test("does not refresh git for ignored internal git files", () => {
+    expect(
+      shouldRefreshGitAfterFileEvent({
+        activeWorkspaceId: "w1",
+        eventWorkspaceId: "w1",
+        path: ".git/index.lock",
+      }),
+    ).toBe(false);
+  });
+
+  test("refreshes git after completed task runs because external commands may change repository state", () => {
+    expect(
+      shouldRefreshGitAfterTask({
+        activeWorkspaceId: "w1",
+        runWorkspaceId: "w1",
+        exitCode: 0,
+      }),
+    ).toBe(true);
   });
 });
