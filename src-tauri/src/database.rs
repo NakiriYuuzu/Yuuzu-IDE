@@ -375,36 +375,220 @@ pub fn database_now_ms() -> u64 {
 }
 
 fn first_sql_token(sql: &str) -> Option<String> {
-    let mut remaining = sql.trim_start();
+    let bytes = sql.as_bytes();
+    let mut index = 0;
+    let first = next_token(bytes, &mut index)?;
+    if first != "WITH" {
+        return Some(first);
+    }
+
+    let mut current = skip_whitespace_and_comments(bytes, index).unwrap_or(index);
+
+    let mut recursive_probe = current;
+    if next_token(bytes, &mut recursive_probe).as_deref() == Some("RECURSIVE") {
+        current = skip_whitespace_and_comments(bytes, recursive_probe).unwrap_or(recursive_probe);
+    }
+
     loop {
-        if remaining.is_empty() {
+        current = skip_whitespace_and_comments(bytes, current).unwrap_or(current);
+        if current >= bytes.len() {
             return None;
         }
 
-        if remaining.starts_with("--") {
-            if let Some(end) = remaining.find('\n') {
-                remaining = remaining[end + 1..].trim_start();
-                continue;
-            }
+        next_token(bytes, &mut current)?;
+
+        current = skip_whitespace_and_comments(bytes, current).unwrap_or(current);
+        if matches_current_char(bytes, current, b'(') {
+            current = skip_nested_parentheses(bytes, current)?;
+            current = skip_whitespace_and_comments(bytes, current).unwrap_or(current);
+        }
+
+        if next_token(bytes, &mut current).as_deref() != Some("AS") {
             return None;
         }
 
-        if remaining.starts_with("/*") {
-            if let Some(end) = remaining.find("*/") {
-                remaining = remaining[end + 2..].trim_start();
-                continue;
-            }
+        current = skip_whitespace_and_comments(bytes, current).unwrap_or(current);
+        if !matches_current_char(bytes, current, b'(') {
             return None;
+        }
+
+        current = skip_nested_parentheses(bytes, current)?;
+        current = skip_whitespace_and_comments(bytes, current).unwrap_or(current);
+        if current >= bytes.len() {
+            return None;
+        }
+
+        if bytes[current] == b',' {
+            current += 1;
+            continue;
         }
 
         break;
     }
 
-    remaining.split_ascii_whitespace().next().map(|token| {
-        token
-            .trim_end_matches(&[';', '(', ')'][..])
-            .to_ascii_uppercase()
-    })
+    next_token(bytes, &mut current)
+}
+
+fn skip_nested_parentheses(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut index = start;
+    if !matches_current_char(bytes, index, b'(') {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    index += 1;
+    depth += 1;
+
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'\'' {
+            index = skip_single_quote(bytes, index)?;
+            continue;
+        }
+        if byte == b'"' {
+            index = skip_double_quote(bytes, index)?;
+            continue;
+        }
+        if byte == b'-' && index + 1 < bytes.len() && bytes[index + 1] == b'-' {
+            index = skip_line_comment(bytes, index)?;
+            continue;
+        }
+        if byte == b'/' && index + 1 < bytes.len() && bytes[index + 1] == b'*' {
+            index = skip_block_comment(bytes, index)?;
+            continue;
+        }
+
+        if byte == b'(' {
+            depth = depth.saturating_add(1);
+        } else if byte == b')' {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return Some(index + 1);
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
+fn next_token(bytes: &[u8], index: &mut usize) -> Option<String> {
+    *index = skip_whitespace_and_comments(bytes, *index)?;
+    let start = *index;
+
+    while *index < bytes.len() {
+        if bytes[*index].is_ascii_whitespace() {
+            break;
+        }
+        if bytes[*index] == b'-'
+            && *index + 1 < bytes.len()
+            && bytes[*index + 1] == b'-'
+        {
+            break;
+        }
+        if bytes[*index] == b'/'
+            && *index + 1 < bytes.len()
+            && bytes[*index + 1] == b'*'
+        {
+            break;
+        }
+        if bytes[*index] == b';' || bytes[*index] == b',' {
+            break;
+        }
+        *index += 1;
+    }
+
+    if *index == start {
+        return None;
+    }
+
+    let token = std::str::from_utf8(&bytes[start..*index]).ok()?;
+    let token = token.trim_matches(&[';', '(', ')'][..]);
+    Some(token.to_ascii_uppercase())
+}
+
+fn skip_whitespace_and_comments(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut index = start;
+
+    while index < bytes.len() {
+        if bytes[index].is_ascii_whitespace() {
+            index += 1;
+            continue;
+        }
+
+        if bytes[index] == b'-' && index + 1 < bytes.len() && bytes[index + 1] == b'-' {
+            index = skip_line_comment(bytes, index)?;
+            continue;
+        }
+
+        if bytes[index] == b'/' && index + 1 < bytes.len() && bytes[index + 1] == b'*' {
+            index = skip_block_comment(bytes, index)?;
+            continue;
+        }
+
+        return Some(index);
+    }
+
+    None
+}
+
+fn skip_line_comment(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut index = start + 2;
+    while index < bytes.len() && bytes[index] != b'\n' {
+        index += 1;
+    }
+    if index < bytes.len() {
+        Some(index + 1)
+    } else {
+        None
+    }
+}
+
+fn skip_block_comment(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut index = start + 2;
+    while index + 1 < bytes.len() {
+        if bytes[index] == b'*' && bytes[index + 1] == b'/' {
+            return Some(index + 2);
+        }
+        index += 1;
+    }
+    None
+}
+
+fn skip_single_quote(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut index = start + 1;
+    while index < bytes.len() {
+        if bytes[index] == b'\'' {
+            if index + 1 < bytes.len() && bytes[index + 1] == b'\'' {
+                index += 2;
+                continue;
+            }
+            return Some(index + 1);
+        }
+        index += 1;
+    }
+    None
+}
+
+fn skip_double_quote(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut index = start + 1;
+    while index < bytes.len() {
+        if bytes[index] == b'"' {
+            if index + 1 < bytes.len() && bytes[index + 1] == b'"' {
+                index += 2;
+                continue;
+            }
+            return Some(index + 1);
+        }
+        index += 1;
+    }
+    None
+}
+
+fn matches_current_char(bytes: &[u8], index: usize, expected: u8) -> bool {
+    if index >= bytes.len() {
+        return false;
+    }
+    bytes[index] == expected
 }
 
 fn truncate_cell(value: String) -> String {
@@ -444,6 +628,19 @@ mod tests {
     }
 
     #[test]
+    fn with_cte_with_mutation_is_not_read() {
+        let result = classify_sql("WITH cte AS (SELECT 1) DELETE FROM users");
+
+        assert_ne!(result.kind, QueryKind::Read);
+        assert!(result.requires_confirmation);
+        match result.kind {
+            QueryKind::Mutation => assert_eq!(result.confirmation_text, "RUN MUTATION"),
+            QueryKind::Destructive => assert_eq!(result.confirmation_text, "RUN DESTRUCTIVE SQL"),
+            QueryKind::Read => unreachable!(),
+        }
+    }
+
+    #[test]
     fn readonly_profiles_reject_mutating_sql_even_with_confirmation() {
         let profile = database_profile("profile-1", DatabaseKind::PostgreSQL, true, true);
 
@@ -472,6 +669,26 @@ mod tests {
             &DatabaseQueryRequest {
                 profile_id: profile.id.clone(),
                 sql: "SELECT 1; DELETE FROM users".to_string(),
+                limit: 100,
+                confirmation: Some("RUN DESTRUCTIVE SQL".to_string()),
+            },
+        );
+
+        assert_eq!(
+            result.expect_err("read-only profile blocks mutation"),
+            "read-only database profile blocks mutating SQL"
+        );
+    }
+
+    #[test]
+    fn readonly_profiles_reject_with_mutating_cte() {
+        let profile = database_profile("profile-1", DatabaseKind::PostgreSQL, true, true);
+
+        let result = validate_query_request(
+            &profile,
+            &DatabaseQueryRequest {
+                profile_id: profile.id.clone(),
+                sql: "WITH cte AS (SELECT 1) DELETE FROM users".to_string(),
                 limit: 100,
                 confirmation: Some("RUN DESTRUCTIVE SQL".to_string()),
             },
