@@ -7,6 +7,8 @@ import {
   contextPackByLinkedTaskRunId,
   contextPackSummary,
   createDocsState,
+  isCurrentDocsLoadRequest,
+  nextDocsLoadRequest,
   docsBadgeCount,
   docsPreviewPathLabel,
   docsSearchSummary,
@@ -170,6 +172,19 @@ describe("docs model", () => {
       "workspace:task-2": "pack-2",
       "workspace:task-3": "pack-2",
     });
+  });
+
+  test("scopes docs load request freshness by workspace", () => {
+    const first = nextDocsLoadRequest({}, "workspace-a");
+    const second = nextDocsLoadRequest(first.state, "workspace-b");
+    const third = nextDocsLoadRequest(second.state, "workspace-a");
+
+    expect(first.requestId).toBe(1);
+    expect(second.requestId).toBe(1);
+    expect(third.requestId).toBe(2);
+    expect(isCurrentDocsLoadRequest(third.state, "workspace-a", 1)).toBe(false);
+    expect(isCurrentDocsLoadRequest(third.state, "workspace-a", 2)).toBe(true);
+    expect(isCurrentDocsLoadRequest(third.state, "workspace-b", 1)).toBe(true);
   });
 
   test("tracks active docs preview independently from cached preview order", () => {

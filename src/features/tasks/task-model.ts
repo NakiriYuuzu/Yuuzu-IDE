@@ -185,6 +185,16 @@ export function hydrateTaskRunContextPacks(
   };
 }
 
+export function replaceTaskRunContextPacks(
+  state: TaskViewState,
+  contextPackByRunId: Record<string, string>,
+): TaskViewState {
+  return {
+    ...state,
+    contextPackByRunId: contextPackLinksForRuns(contextPackByRunId, state.runs),
+  };
+}
+
 export function upsertTaskRun(state: TaskViewState, run: TaskRun): TaskViewState {
   const pendingOutput = state.pendingOutputByRunId[run.id] ?? "";
   const pendingFinish = state.pendingFinishByRunId[run.id];

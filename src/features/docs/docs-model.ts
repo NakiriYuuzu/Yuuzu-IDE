@@ -52,6 +52,13 @@ export type DocsRequestIdentity = {
   query: string;
 };
 
+export type DocsLoadRequestState = Record<string, number>;
+
+export type DocsLoadRequestNext = {
+  state: DocsLoadRequestState;
+  requestId: number;
+};
+
 export type DocsViewState = {
   index: DocIndexEntry[];
   previewByPath: Record<string, DocPreview>;
@@ -94,6 +101,29 @@ export function createDocsRequestIdentity({
     workspacePath,
     query: query.trim(),
   };
+}
+
+export function nextDocsLoadRequest(
+  state: DocsLoadRequestState,
+  workspaceId: string,
+): DocsLoadRequestNext {
+  const requestId = (state[workspaceId] ?? 0) + 1;
+
+  return {
+    state: {
+      ...state,
+      [workspaceId]: requestId,
+    },
+    requestId,
+  };
+}
+
+export function isCurrentDocsLoadRequest(
+  state: DocsLoadRequestState,
+  workspaceId: string,
+  requestId: number,
+): boolean {
+  return state[workspaceId] === requestId;
 }
 
 export function shouldApplyDocsResult(

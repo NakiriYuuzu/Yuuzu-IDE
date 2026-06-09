@@ -9,6 +9,7 @@ import {
   finishTaskRun,
   hydrateTaskRunContextPacks,
   linkTaskRunContextPack,
+  replaceTaskRunContextPacks,
   replaceDetectedTasks,
   replaceTaskRuns,
   rerunnableTaskForState,
@@ -278,6 +279,32 @@ describe("task model", () => {
     expect(hydrated.contextPackByRunId).toEqual({
       "workspace:task-1": "persisted-pack",
       "workspace:task-2": "local-pack",
+    });
+  });
+
+  test("replaces task context pack links from persisted metadata", () => {
+    const restored = replaceTaskRuns(createTaskState(), [
+      runningRun({
+        id: "workspace:task-1",
+        workspace_id: "workspace",
+      }),
+      runningRun({
+        id: "workspace:task-2",
+        workspace_id: "workspace",
+      }),
+    ]);
+    const locallyLinked = linkTaskRunContextPack(
+      linkTaskRunContextPack(restored, "workspace:task-1", "deleted-pack"),
+      "workspace:task-2",
+      "kept-pack",
+    );
+
+    const replaced = replaceTaskRunContextPacks(locallyLinked, {
+      "workspace:task-2": "kept-pack",
+    });
+
+    expect(replaced.contextPackByRunId).toEqual({
+      "workspace:task-2": "kept-pack",
     });
   });
 
