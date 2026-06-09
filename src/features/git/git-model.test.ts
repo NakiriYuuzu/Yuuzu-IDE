@@ -293,6 +293,26 @@ describe("git-model", () => {
     ).toBe(false);
   });
 
+  test("does not refresh git for internal git HEAD updates", () => {
+    expect(
+      shouldRefreshGitAfterFileEvent({
+        activeWorkspaceId: "w1",
+        eventWorkspaceId: "w1",
+        path: ".git/HEAD",
+      }),
+    ).toBe(false);
+  });
+
+  test("does not refresh git for internal git object updates", () => {
+    expect(
+      shouldRefreshGitAfterFileEvent({
+        activeWorkspaceId: "w1",
+        eventWorkspaceId: "w1",
+        path: ".git/objects/ab/cd",
+      }),
+    ).toBe(false);
+  });
+
   test("refreshes git after completed task runs because external commands may change repository state", () => {
     expect(
       shouldRefreshGitAfterTask({

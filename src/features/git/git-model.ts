@@ -309,7 +309,8 @@ export function shouldRefreshGitAfterFileEvent({
     return false;
   }
 
-  return normalizeGitEventPath(path) !== ".git/index.lock";
+  const normalizedPath = normalizeGitEventPath(path);
+  return normalizedPath !== ".git" && !normalizedPath.startsWith(".git/");
 }
 
 export function shouldRefreshGitAfterTask({
