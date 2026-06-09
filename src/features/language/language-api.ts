@@ -45,3 +45,54 @@ export function requestLanguageHover(args: {
 }): Promise<LanguageHover | null> {
   return call<unknown>("lsp_hover", args).then(normalizeLanguageHover);
 }
+
+export function requestLanguageDefinition(args: {
+  workspaceId: string;
+  workspaceRoot: string;
+  path: string;
+  line: number;
+  character: number;
+}): Promise<void> {
+  return call<unknown>("lsp_definition", args).then(() => {});
+}
+
+export function requestLanguageReferences(args: {
+  workspaceId: string;
+  workspaceRoot: string;
+  path: string;
+  line: number;
+  character: number;
+}): Promise<void> {
+  return call<unknown>("lsp_references", args).then(() => {});
+}
+
+export function requestLanguageCompletion(args: {
+  workspaceId: string;
+  workspaceRoot: string;
+  path: string;
+  line: number;
+  character: number;
+}): Promise<unknown[]> {
+  return call<unknown[]>("lsp_completion", args);
+}
+
+export function requestLanguageCodeActions(args: {
+  workspaceId: string;
+  workspaceRoot: string;
+  path: string;
+  line: number;
+  character: number;
+}): Promise<unknown[]> {
+  return call<unknown[]>("lsp_code_actions", args);
+}
+
+export function requestLanguageRename(args: {
+  workspaceId: string;
+  workspaceRoot: string;
+  path: string;
+  line: number;
+  character: number;
+  newName: string;
+}): Promise<void> {
+  return call<unknown>("lsp_rename", args).then(() => {});
+}

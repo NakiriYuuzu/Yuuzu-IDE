@@ -11,17 +11,33 @@ describe("createEditorIdentity", () => {
       filePath: "/repo/src/main.ts",
       language: "typescript",
       readOnly: false,
-      content: "draft v1",
     });
     const next = createEditorIdentity({
       workspaceId: "workspace-a",
       filePath: "/repo/src/main.ts",
       language: "typescript",
       readOnly: false,
-      content: "draft v2",
     });
 
     expect(next).toBe(first);
+  });
+
+  test("ignores diagnostics so Monaco is not recreated", () => {
+    const first = createEditorIdentity({
+      workspaceId: "workspace",
+      filePath: "src/main.rs",
+      language: "rust",
+      readOnly: false,
+    });
+
+    const second = createEditorIdentity({
+      workspaceId: "workspace",
+      filePath: "src/main.rs",
+      language: "rust",
+      readOnly: false,
+    });
+
+    expect(first).toBe(second);
   });
 
   test("changes when file identity changes", () => {
@@ -30,14 +46,12 @@ describe("createEditorIdentity", () => {
       filePath: "/repo/src/main.ts",
       language: "typescript",
       readOnly: false,
-      content: "draft v1",
     });
     const next = createEditorIdentity({
       workspaceId: "workspace-b",
       filePath: "/repo/src/main.ts",
       language: "typescript",
       readOnly: false,
-      content: "draft v1",
     });
 
     expect(next).not.toBe(first);

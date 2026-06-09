@@ -4,6 +4,8 @@ import {
   createLanguageState,
   replaceDiagnostics,
   replaceServerStatuses,
+  diagnosticsForPath,
+  severityToMonacoMarker,
   selectDiagnosticBadge,
   storeHover,
   storeServerLogs,
@@ -45,6 +47,28 @@ describe("language model", () => {
     expect(state.diagnosticsByPath["src/main.rs"][0].message).toBe(
       "expected item",
     );
+  });
+
+  test("selects diagnostics for a path and maps marker severity", () => {
+    const state = replaceDiagnostics(createLanguageState(), [
+      {
+        path: "src/main.rs",
+        range: {
+          start_line: 0,
+          start_character: 1,
+          end_line: 0,
+          end_character: 4,
+        },
+        severity: "error",
+        message: "expected item",
+        source: "rust-analyzer",
+      },
+    ]);
+
+    expect(diagnosticsForPath(state, "src/main.rs")).toHaveLength(1);
+    expect(diagnosticsForPath(state, "src/lib.rs")).toEqual([]);
+    expect(severityToMonacoMarker("error")).toBe(8);
+    expect(severityToMonacoMarker("warning")).toBe(4);
   });
 
   test("stores server status, hover, and logs without mutating defaults", () => {

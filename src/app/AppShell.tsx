@@ -50,11 +50,23 @@ import {
   type DocsRequestIdentity,
   type DocsViewState,
 } from "../features/docs/docs-model";
-import { getLanguageServerStatus, getWorkspaceDiagnostics } from "../features/language/language-api";
+import {
+  closeLanguageDocument,
+  getLanguageServerStatus,
+  getWorkspaceDiagnostics,
+  openLanguageDocument,
+  requestLanguageCodeActions,
+  requestLanguageCompletion,
+  requestLanguageDefinition,
+  requestLanguageHover,
+  requestLanguageReferences,
+  requestLanguageRename,
+} from "../features/language/language-api";
 import {
   isCurrentLanguageRefreshRequest,
   nextLanguageRefreshRequest,
   replaceDiagnostics,
+  diagnosticsForPath,
   replaceServerStatuses,
   selectDiagnosticBadge,
   type LspDiagnostic,
@@ -246,6 +258,7 @@ function languageForPath(path: string): string {
   if (lower.endsWith(".ts") || lower.endsWith(".tsx")) return "typescript";
   if (lower.endsWith(".js") || lower.endsWith(".jsx")) return "javascript";
   if (lower.endsWith(".rs")) return "rust";
+  if (lower.endsWith(".py") || lower.endsWith(".pyi")) return "python";
   if (lower.endsWith(".json")) return "json";
   if (lower.endsWith(".md")) return "markdown";
   if (lower.endsWith(".css")) return "css";
@@ -254,6 +267,15 @@ function languageForPath(path: string): string {
   if (lower.endsWith(".toml")) return "toml";
   if (lower.endsWith(".yaml") || lower.endsWith(".yml")) return "yaml";
   return "plaintext";
+}
+
+function isLspSupportedLanguage(language: string): boolean {
+  return (
+    language === "rust" ||
+    language === "typescript" ||
+    language === "javascript" ||
+    language === "python"
+  );
 }
 
 function localStorageOrNull(): Storage | null {
@@ -640,6 +662,9 @@ export function AppShell() {
     ? (view.task.problemsByRunId[activeTaskRun.id] ?? [])
     : [];
   const languageDiagnosticBadge = selectDiagnosticBadge(view.language);
+  const activeFileDiagnostics = loadedFile
+    ? diagnosticsForPath(view.language, loadedFile.path)
+    : [];
   const contextPackNameById = useMemo(
     () =>
       Object.fromEntries(
@@ -1226,6 +1251,7 @@ export function AppShell() {
       const diskContent = read.content ?? "";
       const draft = read.too_large ? null : tryLoadDraft(activeWorkspaceId, path);
       const content = draft ?? diskContent;
+      const language = languageForPath(path);
       const fileKey = createLoadedFileKey(activeWorkspaceId, path);
 
       savedContentByPathRef.current[fileKey] = diskContent;
@@ -1243,9 +1269,17 @@ export function AppShell() {
         workspaceId: activeWorkspaceId,
         path,
         content,
-        language: languageForPath(path),
+        language,
         readOnly: read.too_large,
       });
+      if (isLspSupportedLanguage(language)) {
+        void openLanguageDocument({
+          workspaceId: activeWorkspaceId,
+          workspaceRoot: activeWorkspace.path,
+          path,
+          content,
+        }).catch(() => {});
+      }
       setSurface("editor");
     } catch (err) {
       if (requestId !== openRequestRef.current) {
@@ -1356,6 +1390,19 @@ export function AppShell() {
           applySavedVersion(editor, activePath, result.version!),
         );
         tryClearDraft(activeWorkspaceId, activePath);
+
+        if (
+          isLspSupportedLanguage(loadedFile.language) &&
+          loadedFile.workspaceId === activeWorkspaceId &&
+          loadedFile.path === activePath
+        ) {
+          void openLanguageDocument({
+            workspaceId: activeWorkspaceId,
+            workspaceRoot: activeWorkspace.path,
+            path: activePath,
+            content,
+          }).catch(() => {});
+        }
       }
     } catch (err) {
       setEditorError(err instanceof Error ? err.message : String(err));
@@ -1458,6 +1505,17 @@ export function AppShell() {
 
   function closeEditorTab(path: string) {
     const nextEditor = closeFileTab(view.editor, path);
+    if (
+      isLspSupportedLanguage(languageForPath(path)) &&
+      activeWorkspaceId &&
+      activeWorkspace
+    ) {
+      void closeLanguageDocument({
+        workspaceId: activeWorkspaceId,
+        workspaceRoot: activeWorkspace.path,
+        path,
+      }).catch(() => {});
+    }
     updateEditor(activeWorkspaceId, () => nextEditor);
 
     if (view.editor.activePath !== path) {
@@ -2491,6 +2549,130 @@ export function AppShell() {
     void openFile(diagnostic.path);
   }
 
+  function onLanguageHover(line: number, character: number) {
+    if (
+      !activeWorkspace ||
+      !activeWorkspaceId ||
+      !loadedFile ||
+      loadedFile.workspaceId !== activeWorkspaceId
+    ) {
+      return Promise.resolve(null);
+    }
+
+    if (!isLspSupportedLanguage(loadedFile.language)) {
+      return Promise.resolve(null);
+    }
+
+    return requestLanguageHover({
+      workspaceId: activeWorkspaceId,
+      workspaceRoot: activeWorkspace.path,
+      path: loadedFile.path,
+      line,
+      character,
+    }).then((hover) => hover?.contents ?? null);
+  }
+
+  function onLanguageGoToDefinition(line: number, character: number) {
+    if (
+      !activeWorkspace ||
+      !activeWorkspaceId ||
+      !loadedFile ||
+      loadedFile.workspaceId !== activeWorkspaceId ||
+      !isLspSupportedLanguage(loadedFile.language)
+    ) {
+      return Promise.resolve();
+    }
+
+    return requestLanguageDefinition({
+      workspaceId: activeWorkspaceId,
+      workspaceRoot: activeWorkspace.path,
+      path: loadedFile.path,
+      line,
+      character,
+    });
+  }
+
+  function onLanguageReferences(line: number, character: number) {
+    if (
+      !activeWorkspace ||
+      !activeWorkspaceId ||
+      !loadedFile ||
+      loadedFile.workspaceId !== activeWorkspaceId ||
+      !isLspSupportedLanguage(loadedFile.language)
+    ) {
+      return Promise.resolve();
+    }
+
+    return requestLanguageReferences({
+      workspaceId: activeWorkspaceId,
+      workspaceRoot: activeWorkspace.path,
+      path: loadedFile.path,
+      line,
+      character,
+    });
+  }
+
+  function onLanguageCompletion(line: number, character: number) {
+    if (
+      !activeWorkspace ||
+      !activeWorkspaceId ||
+      !loadedFile ||
+      loadedFile.workspaceId !== activeWorkspaceId ||
+      !isLspSupportedLanguage(loadedFile.language)
+    ) {
+      return Promise.resolve([]);
+    }
+
+    return requestLanguageCompletion({
+      workspaceId: activeWorkspaceId,
+      workspaceRoot: activeWorkspace.path,
+      path: loadedFile.path,
+      line,
+      character,
+    });
+  }
+
+  function onLanguageCodeActions(line: number, character: number) {
+    if (
+      !activeWorkspace ||
+      !activeWorkspaceId ||
+      !loadedFile ||
+      loadedFile.workspaceId !== activeWorkspaceId ||
+      !isLspSupportedLanguage(loadedFile.language)
+    ) {
+      return Promise.resolve([]);
+    }
+
+    return requestLanguageCodeActions({
+      workspaceId: activeWorkspaceId,
+      workspaceRoot: activeWorkspace.path,
+      path: loadedFile.path,
+      line,
+      character,
+    });
+  }
+
+  function onLanguageRename(line: number, character: number, newName: string) {
+    if (
+      !activeWorkspace ||
+      !activeWorkspaceId ||
+      !loadedFile ||
+      loadedFile.workspaceId !== activeWorkspaceId ||
+      !isLspSupportedLanguage(loadedFile.language)
+    ) {
+      return Promise.resolve();
+    }
+
+    return requestLanguageRename({
+      workspaceId: activeWorkspaceId,
+      workspaceRoot: activeWorkspace.path,
+      path: loadedFile.path,
+      line,
+      character,
+      newName,
+    });
+  }
+
   async function refreshLanguageData() {
     if (!activeWorkspace || !activeWorkspaceId) {
       return;
@@ -3037,11 +3219,18 @@ export function AppShell() {
                         content={loadedFile!.content}
                         language={loadedFile!.language}
                         readOnly={loadedFile!.readOnly}
+                        diagnostics={activeFileDiagnostics}
                         findOpen={findOpen}
                         findFocusRequest={findFocusRequest}
                         findQuery={findQuery}
                         onFindQueryChange={setFindQuery}
                         onContentChange={handleEditorContentChange}
+                        onHover={onLanguageHover}
+                        onGoToDefinition={onLanguageGoToDefinition}
+                        onReferences={onLanguageReferences}
+                        onCompletion={onLanguageCompletion}
+                        onCodeActions={onLanguageCodeActions}
+                        onRename={onLanguageRename}
                         onDirtyChange={() => undefined}
                       />
                     </Suspense>

@@ -51,6 +51,29 @@ export type LanguageRefreshRequestNext = {
   requestId: number;
 };
 
+export function diagnosticsForPath(
+  state: LanguageViewState,
+  path: string,
+): LspDiagnostic[] {
+  return state.diagnosticsByPath[path] ?? [];
+}
+
+export function severityToMonacoMarker(severity: string): number {
+  if (severity === "error") {
+    return 8;
+  }
+
+  if (severity === "warning") {
+    return 4;
+  }
+
+  if (severity === "information") {
+    return 2;
+  }
+
+  return 1;
+}
+
 export function createLanguageState(): LanguageViewState {
   return {
     diagnosticsByPath: {},
