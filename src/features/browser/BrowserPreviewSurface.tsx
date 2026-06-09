@@ -40,12 +40,17 @@ export function BrowserPreviewSurface({
     () => providedResolveGeometry ?? browserPaneGeometryFromElement,
     [providedResolveGeometry],
   );
+  const onBoundsChangeRef = useRef(onBoundsChange);
+  const onErrorRef = useRef(onError);
+
+  onBoundsChangeRef.current = onBoundsChange;
+  onErrorRef.current = onError;
 
   useEffect(() => {
     const hostElement = hostRef.current;
 
     if (!workspaceId || !url || !hostElement) {
-      onBoundsChange(null);
+      onBoundsChangeRef.current(null);
       void adapter.detach();
       return;
     }
@@ -59,7 +64,7 @@ export function BrowserPreviewSurface({
           return;
         }
 
-        onBoundsChange(geometry.captureBounds);
+        onBoundsChangeRef.current(geometry.captureBounds);
         await adapter.attach({
           workspaceId,
           url,
@@ -67,21 +72,23 @@ export function BrowserPreviewSurface({
         });
 
         if (!disposed) {
-          onError(null);
+          onErrorRef.current(null);
         }
       } catch (error) {
         if (!disposed) {
-          onError(error instanceof Error ? error.message : `${error}`);
+          onErrorRef.current(
+            error instanceof Error ? error.message : `${error}`,
+          );
         }
       }
     })();
 
     return () => {
       disposed = true;
-      onBoundsChange(null);
+      onBoundsChangeRef.current(null);
       void adapter.detach();
     };
-  }, [workspaceId, url, adapter, resolveGeometry, onBoundsChange, onError]);
+  }, [workspaceId, url, adapter, resolveGeometry]);
 
   useEffect(() => {
     if (reloadVersion <= 0 || !url) {
@@ -94,7 +101,9 @@ export function BrowserPreviewSurface({
         await adapter.reload(url);
       } catch (error) {
         if (!disposed) {
-          onError(error instanceof Error ? error.message : `${error}`);
+          onErrorRef.current(
+            error instanceof Error ? error.message : `${error}`,
+          );
         }
       }
     })();
@@ -102,7 +111,7 @@ export function BrowserPreviewSurface({
     return () => {
       disposed = true;
     };
-  }, [reloadVersion, url, adapter, onError]);
+  }, [reloadVersion, url, adapter]);
 
   useEffect(() => {
     if (hardReloadVersion <= 0 || !url) {
@@ -115,7 +124,9 @@ export function BrowserPreviewSurface({
         await adapter.hardReload(url);
       } catch (error) {
         if (!disposed) {
-          onError(error instanceof Error ? error.message : `${error}`);
+          onErrorRef.current(
+            error instanceof Error ? error.message : `${error}`,
+          );
         }
       }
     })();
@@ -123,7 +134,7 @@ export function BrowserPreviewSurface({
     return () => {
       disposed = true;
     };
-  }, [hardReloadVersion, url, adapter, onError]);
+  }, [hardReloadVersion, url, adapter]);
 
   if (!url) {
     return (

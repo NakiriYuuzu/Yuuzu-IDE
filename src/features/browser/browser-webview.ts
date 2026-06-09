@@ -4,6 +4,10 @@ import type { Window as TauriWindow } from "@tauri-apps/api/window";
 
 type BrowserWebviewHandle = {
   close: () => Promise<void>;
+  once?: (
+    event: "tauri://created" | "tauri://error",
+    listener: (event: unknown) => void,
+  ) => void;
 };
 
 export type BrowserWebviewBounds = {
@@ -80,6 +84,72 @@ export function hardReloadUrl(url: string, version: number): string {
   return parsed.toString();
 }
 
+function eventPayloadToMessage(event: unknown): string {
+  if (event instanceof Error) {
+    return event.message;
+  }
+
+  if (typeof event === "string") {
+    return event;
+  }
+
+  const payload =
+    typeof event === "object" &&
+    event !== null &&
+    "payload" in event
+      ? (event as { payload?: unknown }).payload
+      : undefined;
+
+  if (payload instanceof Error) {
+    return payload.message;
+  }
+
+  if (typeof payload === "string") {
+    return payload;
+  }
+
+  return `${event}`;
+}
+
+function createWebviewLabel(workspaceId: string): string {
+  return `browser-preview-${sanitizeWorkspaceId(workspaceId)}`;
+}
+
+function ensureCreateCompletes(
+  view: BrowserWebviewHandle,
+): Promise<void> {
+  if (!view.once) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve, reject) => {
+    const once = view.once;
+
+    if (!once) {
+      return;
+    }
+
+    let finalized = false;
+    const finish = (fn: () => void) => {
+      if (finalized) {
+        return;
+      }
+      finalized = true;
+      fn();
+    };
+
+    const onCreated = () => {
+      finish(resolve);
+    };
+    const onError = (event: unknown) => {
+      finish(() => reject(new Error(eventPayloadToMessage(event))));
+    };
+
+    once("tauri://created", onCreated);
+    once("tauri://error", onError);
+  });
+}
+
 export async function browserPaneGeometryFromElement(
   element: Element,
 ): Promise<BrowserPaneGeometry> {
@@ -116,6 +186,13 @@ export function createTauriBrowserPreviewAdapterWithDependencies(
   let webview: BrowserWebviewHandle | null = null;
   let lastRequest: BrowserAttachRequest | null = null;
   let hardReloadVersion = 0;
+  let pendingOperation: Promise<unknown> = Promise.resolve();
+
+  const queueOperation = <T,>(operation: () => Promise<T>): Promise<T> => {
+    const next = pendingOperation.then(operation, operation);
+    pendingOperation = next.then(() => undefined, () => undefined);
+    return next;
+  };
 
   const closeCurrent = async (): Promise<void> => {
     if (!webview) {
@@ -123,64 +200,19 @@ export function createTauriBrowserPreviewAdapterWithDependencies(
     }
 
     const currentWebview = webview;
-    webview = null;
     await currentWebview.close();
+    if (webview === currentWebview) {
+      webview = null;
+    }
   };
 
-  return {
-    attach: async (request) => {
-      await closeCurrent();
-      const appWindow = dependencies.getCurrentWindow();
-      const view = dependencies.createWebview(
-        appWindow,
-        `browser-preview-${sanitizeWorkspaceId(request.workspaceId)}`,
-        {
-          url: request.url,
-          x: request.webviewBounds.x,
-          y: request.webviewBounds.y,
-          width: request.webviewBounds.width,
-          height: request.webviewBounds.height,
-          devtools: true,
-        },
-      );
-
-      webview = view;
-      lastRequest = request;
-    },
-    detach: async () => {
-      await closeCurrent();
-      lastRequest = null;
-    },
-    reload: async (url) => {
-      if (!lastRequest) {
-        return;
-      }
-
-      await closeCurrent();
-      await thisAttach({
-        ...lastRequest,
-        url,
-      });
-    },
-    hardReload: async (url) => {
-      if (!lastRequest) {
-        return;
-      }
-
-      hardReloadVersion += 1;
-      await closeCurrent();
-      await thisAttach({
-        ...lastRequest,
-        url: hardReloadUrl(url, hardReloadVersion),
-      });
-    },
-  };
-
-  async function thisAttach(request: BrowserAttachRequest): Promise<void> {
+  const createAndAwait = async (
+    request: BrowserAttachRequest,
+  ): Promise<void> => {
     const appWindow = dependencies.getCurrentWindow();
     const view = dependencies.createWebview(
       appWindow,
-      `browser-preview-${sanitizeWorkspaceId(request.workspaceId)}`,
+      createWebviewLabel(request.workspaceId),
       {
         url: request.url,
         x: request.webviewBounds.x,
@@ -191,7 +223,51 @@ export function createTauriBrowserPreviewAdapterWithDependencies(
       },
     );
 
+    await ensureCreateCompletes(view);
+
     webview = view;
     lastRequest = request;
-  }
+  };
+
+  return {
+    attach: async (request) => {
+      await queueOperation(async () => {
+        await closeCurrent();
+        await createAndAwait(request);
+      });
+    },
+    detach: async () => {
+      await queueOperation(async () => {
+        await closeCurrent();
+        lastRequest = null;
+      });
+    },
+    reload: async (url) => {
+      await queueOperation(async () => {
+        if (!lastRequest) {
+          return;
+        }
+
+        await closeCurrent();
+        await createAndAwait({
+          ...lastRequest,
+          url,
+        });
+      });
+    },
+    hardReload: async (url) => {
+      await queueOperation(async () => {
+        if (!lastRequest) {
+          return;
+        }
+
+        hardReloadVersion += 1;
+        await closeCurrent();
+        await createAndAwait({
+          ...lastRequest,
+          url: hardReloadUrl(url, hardReloadVersion),
+        });
+      });
+    },
+  };
 }
