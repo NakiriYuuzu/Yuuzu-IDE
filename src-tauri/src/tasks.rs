@@ -381,8 +381,16 @@ impl TaskState {
             .map(|registry| registry.list_runs(workspace_id))
     }
 
+    pub fn get_run(&self, run_id: &str) -> Result<TaskRun, String> {
+        self.registry
+            .lock()
+            .map_err(|err| err.to_string())?
+            .get_run(run_id)
+            .ok_or_else(|| format!("missing task run: {run_id}"))
+    }
+
     #[cfg(test)]
-    fn register_test_run(
+    pub(crate) fn register_test_run(
         &self,
         workspace_id: String,
         label: String,

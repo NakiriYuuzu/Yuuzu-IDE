@@ -375,6 +375,14 @@ impl AppState {
             .map_err(|err| format!("active workspace unavailable: {err}"))
     }
 
+    fn active_workspace_id(&self) -> Result<String, String> {
+        let registry = self.registry.lock().map_err(|err| err.to_string())?;
+        registry
+            .active_workspace_id
+            .clone()
+            .ok_or_else(|| "no active workspace selected".to_string())
+    }
+
     fn ensure_context_pack_in_active_workspace(&self, id: &str) -> Result<(), String> {
         let active_workspace_root = self.active_workspace_root()?;
         let pack_workspace_root = self.docs_store.pack_workspace_root(id)?;
@@ -396,6 +404,22 @@ impl AppState {
 
         Err(format!(
             "agent session does not belong to active workspace: {session_id}"
+        ))
+    }
+
+    fn ensure_task_run_in_active_workspace(
+        &self,
+        task_state: &TaskState,
+        task_run_id: &str,
+    ) -> Result<(), String> {
+        let active_workspace_id = self.active_workspace_id()?;
+        let run = task_state.get_run(task_run_id)?;
+        if run.workspace_id == active_workspace_id {
+            return Ok(());
+        }
+
+        Err(format!(
+            "task run does not belong to active workspace: {task_run_id}"
         ))
     }
 
@@ -456,10 +480,14 @@ impl AppState {
     pub fn link_context_pack(
         &self,
         id: String,
+        task_state: &TaskState,
         task_run_id: Option<String>,
         agent_session_id: Option<String>,
     ) -> Result<crate::docs::ContextPack, String> {
         self.ensure_context_pack_in_active_workspace(&id)?;
+        if let Some(task_run_id) = task_run_id.as_deref() {
+            self.ensure_task_run_in_active_workspace(task_state, task_run_id)?;
+        }
         if let Some(agent_session_id) = agent_session_id.as_deref() {
             self.ensure_agent_session_in_active_workspace(agent_session_id)?;
         }
@@ -694,11 +722,12 @@ pub fn delete_context_pack(state: State<'_, AppState>, id: String) -> Result<(),
 #[tauri::command]
 pub fn link_context_pack(
     state: State<'_, AppState>,
+    task_state: State<'_, TaskState>,
     id: String,
     task_run_id: Option<String>,
     agent_session_id: Option<String>,
 ) -> Result<crate::docs::ContextPack, String> {
-    state.link_context_pack(id, task_run_id, agent_session_id)
+    state.link_context_pack(id, &task_state, task_run_id, agent_session_id)
 }
 
 #[tauri::command]
@@ -1976,10 +2005,12 @@ mod tests {
                 vec!["README.md".into()],
             )
             .expect("create link pack");
+        let task_state = TaskState::new();
 
         let delete_result = state.delete_context_pack(delete_pack.id.clone());
         let link_result = state.link_context_pack(
             link_pack.id.clone(),
+            &task_state,
             Some("workspace:task-1".to_string()),
             Some("agent-session-1".to_string()),
         );
@@ -2063,7 +2094,13 @@ mod tests {
             )
             .expect("create pack in workspace b");
 
-        let reject = state.link_context_pack(pack_b.id.clone(), None, Some(session_a.id.clone()));
+        let task_state = TaskState::new();
+        let reject = state.link_context_pack(
+            pack_b.id.clone(),
+            &task_state,
+            None,
+            Some(session_a.id.clone()),
+        );
         assert!(reject
             .unwrap_err()
             .contains("agent session does not belong to active workspace"));
@@ -2076,7 +2113,109 @@ mod tests {
                 Vec::new(),
             )
             .expect("start session B");
-        let link_ok = state.link_context_pack(pack_b.id.clone(), None, Some(session_b.id.clone()));
+        let link_ok = state.link_context_pack(
+            pack_b.id.clone(),
+            &task_state,
+            None,
+            Some(session_b.id.clone()),
+        );
+        assert!(link_ok.is_ok());
+    }
+
+    #[test]
+    fn context_pack_task_link_rejects_inactive_or_missing_task_run() {
+        let config = tempdir().expect("config dir");
+        let workspace_a = config.path().join("workspace-a");
+        let workspace_b = config.path().join("workspace-b");
+        std::fs::create_dir_all(&workspace_a).expect("workspace a");
+        std::fs::create_dir_all(&workspace_b).expect("workspace b");
+        std::fs::write(workspace_a.join("A.md"), "# Workspace A\n").expect("workspace a note");
+        std::fs::write(workspace_b.join("B.md"), "# Workspace B\n").expect("workspace b note");
+
+        let state = AppState::new(config.path()).expect("state");
+        state
+            .open_workspace_path(workspace_a.clone())
+            .expect("open workspace a");
+        state
+            .open_workspace_path(workspace_b.clone())
+            .expect("open workspace b");
+
+        let registry = state.registry_snapshot().expect("registry");
+        let workspace_a_id = registry
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.path == workspace_a)
+            .map(|workspace| workspace.id.clone())
+            .expect("workspace a id");
+        let workspace_b_id = registry
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.path == workspace_b)
+            .map(|workspace| workspace.id.clone())
+            .expect("workspace b id");
+
+        let workspace_a_root = workspace_a
+            .canonicalize()
+            .expect("canonical workspace a")
+            .to_string_lossy()
+            .to_string();
+        let workspace_b_root = workspace_b
+            .canonicalize()
+            .expect("canonical workspace b")
+            .to_string_lossy()
+            .to_string();
+
+        let task_state = TaskState::new();
+        let run_a = task_state
+            .register_test_run(
+                workspace_a_id,
+                "A task".to_string(),
+                "echo A".to_string(),
+                PathBuf::from(&workspace_a_root),
+            )
+            .expect("register A task");
+        let run_b = task_state
+            .register_test_run(
+                workspace_b_id.clone(),
+                "B task".to_string(),
+                "echo B".to_string(),
+                PathBuf::from(&workspace_b_root),
+            )
+            .expect("register B task");
+
+        state
+            .mutate_registry(|registry| {
+                if registry.switch_workspace(&workspace_b_id) {
+                    Ok(())
+                } else {
+                    Err(format!("workspace not found: {workspace_b_id}"))
+                }
+            })
+            .expect("switch workspace");
+
+        let pack_b = state
+            .create_context_pack(
+                workspace_b_root.as_str(),
+                "Workspace B Pack".to_string(),
+                vec!["B.md".to_string()],
+            )
+            .expect("create pack in workspace b");
+
+        let reject_workspace =
+            state.link_context_pack(pack_b.id.clone(), &task_state, Some(run_a.id), None);
+        assert!(reject_workspace
+            .unwrap_err()
+            .contains("task run does not belong to active workspace"));
+
+        let reject_missing = state.link_context_pack(
+            pack_b.id.clone(),
+            &task_state,
+            Some("workspace-a:task-999".to_string()),
+            None,
+        );
+        assert!(reject_missing.unwrap_err().contains("missing task run"));
+
+        let link_ok = state.link_context_pack(pack_b.id.clone(), &task_state, Some(run_b.id), None);
         assert!(link_ok.is_ok());
     }
 
