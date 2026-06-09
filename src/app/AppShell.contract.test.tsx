@@ -49,7 +49,7 @@ afterEach(() => {
 
 describe("AppShell AppShell helpers", () => {
   test("collects all bounded agent context pieces", () => {
-    const source: AgentAvailableContextSource = {
+    const source = {
       workspaceRoot: "/repo",
       loadedFile: {
         workspaceId: "w:1",
@@ -58,11 +58,18 @@ describe("AppShell AppShell helpers", () => {
         language: "typescript",
         readOnly: false,
       },
-      docsPreview: {
-        path: "docs/guide.md",
-        title: "Guide",
-        content: "# Guide",
-      },
+      docsPreviews: [
+        {
+          path: "docs/guide.md",
+          title: "Guide",
+          content: "# Guide",
+        },
+        {
+          path: "docs/faq.md",
+          title: "FAQ",
+          content: "# FAQ",
+        },
+      ],
       selectedDiff: {
         path: "src/app/AppShell.tsx",
         original_path: null,
@@ -94,16 +101,20 @@ describe("AppShell AppShell helpers", () => {
         running: true,
       },
       terminalOutput: "$ bun test",
-    };
+    } as AgentAvailableContextSource;
 
     const contextItems = collectAgentAvailableContext(source);
     const labels = contextItems.map((item) => item.label);
+    const contents = contextItems.map((item) => item.content);
 
     expect(labels).toContain("src/app/AppShell.tsx");
     expect(labels).toContain("Guide");
+    expect(labels).toContain("FAQ");
     expect(labels).toContain("unstaged diff: src/app/AppShell.tsx");
     expect(labels).toContain("error: src/app/AppShell.tsx:4");
     expect(labels).toContain("zsh");
+    expect(contents).toContain("# Guide");
+    expect(contents).toContain("# FAQ");
   });
 
   test("PanelBody renders AgentPanel and routes callbacks", () => {

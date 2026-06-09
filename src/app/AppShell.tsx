@@ -31,6 +31,7 @@ import { DocsPanel } from "../features/docs/DocsPanel";
 import { MarkdownPreview } from "../features/docs/MarkdownPreview";
 import {
   activeDocPreview,
+  type DocPreview,
   beginDocPreview,
   contextPackByLinkedTaskRunId,
   createDocsRequestIdentity,
@@ -289,11 +290,9 @@ const panelTitles: Record<ActivityId, string> = {
 export type AgentAvailableContextSource = {
   workspaceRoot: string;
   loadedFile: LoadedFile | null;
-  docsPreview: {
-    path: string;
-    title: string;
-    content: string;
-  } | null;
+  docsPreviews: Array<
+    Pick<DocPreview, "path" | "title" | "content">
+  >;
   selectedDiff:
     | {
         path: string;
@@ -324,12 +323,12 @@ export function collectAgentAvailableContext(
     );
   }
 
-  if (source.docsPreview) {
+  for (const docsPreview of source.docsPreviews) {
     context.push(
       agentContextFromDoc({
-        path: source.docsPreview.path,
-        title: source.docsPreview.title,
-        content: source.docsPreview.content,
+        path: docsPreview.path,
+        title: docsPreview.title,
+        content: docsPreview.content,
       }),
     );
   }
@@ -915,12 +914,13 @@ export function AppShell() {
     view.docs,
     "Docs preview",
   );
+  const docsPreviews = Object.values(view.docs.previewByPath);
   const availableAgentContext = useMemo(
     () =>
       collectAgentAvailableContext({
         workspaceRoot: activeWorkspace?.path ?? "",
         loadedFile,
-        docsPreview: activeDocsPreview,
+        docsPreviews,
         selectedDiff: selectedGitDiff,
         activeFileDiagnostics,
         terminalSession: activeTerminal,
@@ -929,7 +929,7 @@ export function AppShell() {
     [
       activeWorkspace?.path,
       loadedFile,
-      activeDocsPreview,
+      docsPreviews,
       selectedGitDiff,
       activeFileDiagnostics,
       activeTerminal,
