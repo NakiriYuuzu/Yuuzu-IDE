@@ -541,3 +541,134 @@ Residual risks:
 - Vite chunk-size warning remains during `bun run build`; it is accepted for
   Node 4 because the build exits successfully and Monaco/xterm remain
   lazy-loaded.
+
+### Node 5: Docs Context And Markdown Workflows
+
+Status: completed and passed.
+
+Node 5 finished Tasks 1-7 and records the final docs workflow evidence in
+`docs/architecture/node-5-docs-results.md`. The node adds Rust-owned docs
+indexing, docs-only search, markdown preview payloads, stale reference hints,
+persisted context packs, and frontend Docs and Markdown Preview workflows for
+reusing documentation as development context.
+
+Completed progress:
+
+- Task 1 added Rust docs index, preview, stale reference extraction, docs-only
+  search, trusted path handling, symlink escape guards, and scan/read budgets.
+- Task 2 added persisted context packs with workspace scoping, task run links,
+  agent session links, duplicate prevention, inactive-workspace guards, and
+  context pack command wrappers.
+- Task 3 added typed frontend docs APIs, pure docs state, stale async-result
+  guards, selected source state, context pack summaries, and per-workspace docs
+  restoration.
+- Task 4 added the Docs activity panel with docs index rows, stale badges,
+  search results, context source controls, context pack creation, and pack
+  actions.
+- Task 5 added the Markdown Preview surface with rendered markdown, reference
+  hints, stale reference badges, refresh behavior, and responsive reference
+  badge handling.
+- Task 6 linked context packs to active task runs and agent sessions, hydrated
+  task context metadata from persisted context packs, scoped docs load request
+  freshness by workspace, and cleared stale task badges after context pack
+  deletion.
+- Task 7 verified the full node, ran browser smoke with Tauri IPC mocks, fixed
+  the mobile Markdown Preview toolbar overflow and a Rust clippy warning found
+  during verification, and recorded the results.
+
+Important files and commit milestones:
+
+- `src-tauri/src/docs.rs`, `src-tauri/src/commands.rs`, and
+  `src-tauri/src/lib.rs` own the Rust docs domain, context pack persistence,
+  and Tauri command surface.
+- `src/features/docs/docs-api.ts`, `src/features/docs/docs-model.ts`,
+  `src/features/docs/DocsPanel.tsx`,
+  `src/features/docs/MarkdownPreview.tsx`,
+  `src/features/docs/docs-model.test.ts`, and
+  `src/features/docs/docs-responsive-css.test.ts` own frontend docs APIs,
+  state, UI panels, preview surface, and responsive CSS contracts.
+- `src/features/tasks/task-model.ts`, `src/features/tasks/TaskPanel.tsx`,
+  `src/app/workspace-view-state.ts`, `src/app/command-palette-model.ts`,
+  `src/app/AppShell.tsx`, `src/app/activity-rail.tsx`, and `src/index.css`
+  own task context metadata, workbench wiring, command palette docs commands,
+  activity rail integration, and layout.
+- `982a836` and `d0dd5cf` added and hardened docs index, preview, docs-only
+  search, stale hints, and bounds.
+- `9b4adf6` and `d5ae8a1` added and scoped context pack persistence and
+  mutations.
+- `368ea34` and `f2543c9` added and hardened frontend docs state.
+- `0b58b8` and `4845f76` added and hardened the Docs panel.
+- `bcb58ab`, `c43f114`, `a4f667d`, and `f3490a3` added and hardened Markdown
+  Preview and responsive docs CSS.
+- `4ab817e`, `335f86c`, `7139169`, and `ea20a04` added and hardened context
+  pack links to task runs and agent sessions.
+- `60111ca` fixed the mobile Markdown Preview toolbar overflow and Rust
+  command-signature clippy warning found during final verification.
+
+Verification evidence:
+
+- `bun test`: passed with 124 tests, 0 failed, and 234 expect calls across
+  22 files.
+- `bun run build`: passed; Vite emitted a chunk-size warning only.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml`:
+  passed with 111 Rust lib tests plus 0 main/doc tests.
+- `. "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check`:
+  passed.
+- `. "$HOME/.cargo/env" && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings`:
+  passed after the lint-only command-signature type alias cleanup.
+- `. "$HOME/.cargo/env" && bun run tauri build --debug`: passed and built the
+  debug app plus macOS debug app/dmg bundles under
+  `src-tauri/target/debug/bundle`.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml docs::tests -- --nocapture`:
+  passed with 12 focused docs tests.
+- `bun test src/features/docs/docs-model.test.ts src/features/tasks/task-model.test.ts`:
+  passed with 29 focused docs/task metadata tests.
+- `bun test src/features/docs/docs-responsive-css.test.ts`: passed with 3
+  focused responsive CSS tests.
+- Browser smoke against `http://127.0.0.1:1420/` covered docs index, stale
+  badges, docs search, Markdown Preview, context source selection, context pack
+  creation, task run metadata links, agent session metadata links, and 390 by
+  844 mobile Docs and Markdown Preview containment.
+
+TDD red/green/refactor evidence summary:
+
+- Rust docs indexing, preview, search, stale hint, symlink guard, context pack
+  persistence, and context pack link behavior were introduced and hardened under
+  focused Rust tests.
+- Frontend docs state, Docs panel, Markdown Preview, task context metadata, and
+  command palette behavior were introduced and hardened under Bun tests and
+  mocked browser UI smoke.
+- Task 6 follow-up tests reproduced and fixed workspace-scoped docs load request
+  races and stale task context badges after deleted packs.
+- Final verification reproduced and fixed the `clippy::type_complexity` warning
+  in the Rust command-signature test and the mobile Markdown Preview toolbar
+  overflow found by browser smoke.
+
+Final measurement evidence:
+
+- Debug app path:
+  `src-tauri/target/debug/bundle/macos/Yuuzu-IDE.app`.
+- Debug DMG path:
+  `src-tauri/target/debug/bundle/dmg/Yuuzu-IDE_0.1.0_aarch64.dmg`.
+- Browser smoke target: `http://127.0.0.1:1420/`.
+- Full Bun test runtime: 336 ms.
+- Focused docs/task Bun runtime: 96 ms.
+- Focused docs Rust test binary runtime: 0.27 s.
+- Docs search smoke result: 2 matches in 2 docs.
+- Context pack smoke selection: 1 selected doc path captured in
+  `create_context_pack`.
+- Browser smoke viewports: 1280 by 800 and 390 by 844.
+- Mobile Docs panel and Markdown Preview containment: no horizontal overflow in
+  their own containers after the toolbar-title fix.
+
+Residual risks:
+
+- Normal browser preview cannot execute real Tauri docs IPC. Runtime confidence
+  comes from Rust docs command tests, Tauri debug build, frontend state tests,
+  and mocked browser UI smoke.
+- Desktop WebView automation for real docs UI interaction remains unavailable
+  in this environment, so full native click-through confidence is covered by
+  command-level tests and browser mocks rather than a real desktop WebView run.
+- Vite chunk-size warning remains during `bun run build`; it is accepted for
+  Node 5 because the build exits successfully and Monaco/xterm remain
+  lazy-loaded.

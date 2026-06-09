@@ -397,6 +397,9 @@ in `docs/architecture/node-2-editor-results.md`.
 
 ### Node 5: Docs Context And Markdown Workflows
 
+**Status:** completed and passed; measured docs results are recorded in
+`docs/architecture/node-5-docs-results.md`.
+
 **Goal:** make project docs visible, searchable, and reusable as development
 context.
 
@@ -691,10 +694,9 @@ stable.
 
 ## Current Priority
 
-Node 0, Node 1, Node 2, Node 3, and Node 4 are complete. The next active
-priority is Node 5: make project docs visible, searchable, and reusable as
-development context while preserving the single-WebView, Rust-owned workspace
-core proven in the first five nodes.
+Node 0, Node 1, Node 2, Node 3, Node 4, and Node 5 are complete. The next
+active priority is Node 6: add modern code intelligence while keeping idle
+overhead low.
 
 - Node 0 measurements keep Tauri 2 as the main route; Rust-native fallback
   research remains deferred.
@@ -713,3 +715,7 @@ core proven in the first five nodes.
   command tests, frontend Git state tests, mocked browser UI smoke, destructive
   confirmation guardrails, bounded diff and graph payloads, and responsive Git
   surfaces.
+- Node 5 verification keeps docs index, docs-only search, Markdown Preview,
+  stale reference hints, context pack persistence, task/agent metadata links,
+  and mobile docs surfaces covered by Rust docs tests, Bun docs/task tests,
+  Tauri debug build, and mocked browser UI smoke.
