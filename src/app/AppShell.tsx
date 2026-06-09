@@ -61,6 +61,30 @@ import {
 } from "../features/workspace/file-tree-model";
 import { FileTreePanel } from "../features/workspace/FileTreePanel";
 import { SearchPanel } from "../features/workspace/SearchPanel";
+import { TaskPanel } from "../features/tasks/TaskPanel";
+import {
+  listTaskRuns,
+  listWorkspaceTasks,
+  onTaskFinished,
+  onTaskOutput,
+  runWorkspaceTask as invokeRunWorkspaceTask,
+  stopTaskRun,
+} from "../features/tasks/task-api";
+import {
+  activateTaskRun,
+  appendTaskOutput,
+  finishTaskRun,
+  replaceDetectedTasks,
+  replaceTaskRuns,
+  rerunnableTaskForState,
+  runningTaskRunForState,
+  setCustomCommand,
+  stopTaskRunInState,
+  upsertTaskRun,
+  type TaskRun,
+  type TaskViewState,
+  type WorkspaceTask,
+} from "../features/tasks/task-model";
 import { TerminalPanel } from "../features/terminal/TerminalPanel";
 import {
   closeTerminalSession,
@@ -110,6 +134,7 @@ const panelTitles: Record<ActivityId, string> = {
   search: "Search",
   git: "Source Control",
   terminal: "Terminal",
+  tasks: "Tasks",
   database: "Database",
   settings: "Settings",
 };
@@ -186,6 +211,12 @@ function workspaceIdFromTerminalSessionId(sessionId: string): string | null {
   return markerIndex > 0 ? sessionId.slice(0, markerIndex) : null;
 }
 
+function workspaceIdFromTaskRunId(runId: string): string | null {
+  const marker = ":task-";
+  const markerIndex = runId.indexOf(marker);
+  return markerIndex > 0 ? runId.slice(0, markerIndex) : null;
+}
+
 function knownWorkspaceIdForTerminal(sessionId: string): string | null {
   const { views } = workspaceViewStore.getState();
   const match = Object.entries(views).find(([, workspaceView]) =>
@@ -193,6 +224,15 @@ function knownWorkspaceIdForTerminal(sessionId: string): string | null {
   );
 
   return match?.[0] ?? workspaceIdFromTerminalSessionId(sessionId);
+}
+
+function knownWorkspaceIdForTaskRun(runId: string): string | null {
+  const { views } = workspaceViewStore.getState();
+  const match = Object.entries(views).find(([, workspaceView]) =>
+    workspaceView.task.runs.some((run) => run.id === runId),
+  );
+
+  return match?.[0] ?? workspaceIdFromTaskRunId(runId);
 }
 
 function hasRegisteredWorkspace(workspaceId: string): boolean {
@@ -217,6 +257,8 @@ function PanelBody({
   activeTerminalId,
   terminalCwdInput,
   terminalError,
+  taskState,
+  taskError,
   onOpenFile,
   onCreateFile,
   onRenamePath,
@@ -226,6 +268,12 @@ function PanelBody({
   onActivateTerminal,
   onCloseTerminal,
   onRestartTerminal,
+  onTaskCustomCommandChange,
+  onRunTask,
+  onRunCustomTask,
+  onActivateTaskRun,
+  onStopTaskRun,
+  onRerunTaskRun,
 }: {
   active: ActivityId;
   refreshKey: number;
@@ -234,6 +282,8 @@ function PanelBody({
   activeTerminalId: string | null;
   terminalCwdInput: string;
   terminalError: string | null;
+  taskState: TaskViewState;
+  taskError: string | null;
   onOpenFile: (path: string) => void;
   onCreateFile: (relativePath: string) => Promise<void>;
   onRenamePath: (path: string, newName: string) => Promise<void>;
@@ -243,6 +293,12 @@ function PanelBody({
   onActivateTerminal: (id: string) => void;
   onCloseTerminal: (id: string) => void;
   onRestartTerminal: (id: string) => void;
+  onTaskCustomCommandChange: (value: string) => void;
+  onRunTask: (task: WorkspaceTask) => void;
+  onRunCustomTask: (command: string) => void;
+  onActivateTaskRun: (runId: string) => void;
+  onStopTaskRun: (runId: string) => void;
+  onRerunTaskRun: (run: TaskRun) => void;
 }) {
   if (active === "search") {
     return <SearchPanel onOpenFile={onOpenFile} />;
@@ -260,6 +316,26 @@ function PanelBody({
         onActivateTerminal={onActivateTerminal}
         onCloseTerminal={onCloseTerminal}
         onRestartTerminal={onRestartTerminal}
+      />
+    );
+  }
+
+  if (active === "tasks") {
+    return (
+      <TaskPanel
+        detectedTasks={taskState.detectedTasks}
+        runs={taskState.runs}
+        activeRunId={taskState.activeRunId}
+        outputByRunId={taskState.outputByRunId}
+        problemsByRunId={taskState.problemsByRunId}
+        customCommand={taskState.customCommand}
+        error={taskError}
+        onCustomCommandChange={onTaskCustomCommandChange}
+        onRunTask={onRunTask}
+        onRunCustomTask={onRunCustomTask}
+        onActivateRun={onActivateTaskRun}
+        onStopRun={onStopTaskRun}
+        onRerunRun={onRerunTaskRun}
       />
     );
   }
@@ -290,6 +366,7 @@ export function AppShell() {
   const [loadedFile, setLoadedFile] = useState<LoadedFile | null>(null);
   const [editorError, setEditorError] = useState<string | null>(null);
   const [terminalError, setTerminalError] = useState<string | null>(null);
+  const [taskError, setTaskError] = useState<string | null>(null);
   const [findOpen, setFindOpen] = useState(false);
   const [findFocusRequest, setFindFocusRequest] = useState(0);
   const [findQuery, setFindQuery] = useState("");
@@ -315,6 +392,13 @@ export function AppShell() {
     ? (view.terminal.outputBySessionId[activeTerminal.id] ?? "")
     : "";
   const activeTerminalName = activeTerminal?.name ?? "terminal";
+  const activeTaskRun =
+    view.task.runs.find((run) => run.id === view.task.activeRunId) ??
+    view.task.runs[0] ??
+    null;
+  const activeTaskProblems = activeTaskRun
+    ? (view.task.problemsByRunId[activeTaskRun.id] ?? [])
+    : [];
 
   function setActiveActivity(activeActivity: ActivityId) {
     updateView(activeWorkspaceId, { activeActivity });
@@ -331,6 +415,7 @@ export function AppShell() {
   const updateTerminal = useWorkspaceViewStore(
     (state) => state.updateTerminal,
   );
+  const updateTask = useWorkspaceViewStore((state) => state.updateTask);
 
   const activeWorkspace = useMemo(
     () =>
@@ -358,6 +443,7 @@ export function AppShell() {
     setFindFocusRequest(0);
     setFindQuery("");
     setTerminalError(null);
+    setTaskError(null);
   }, [activeWorkspaceId]);
 
   useEffect(() => {
@@ -449,6 +535,135 @@ export function AppShell() {
       void exitUnlisten.then((dispose) => dispose()).catch(() => {});
     };
   }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    const outputUnlisten = onTaskOutput((event) => {
+      if (disposed) {
+        return;
+      }
+
+      const workspaceId = knownWorkspaceIdForTaskRun(event.run_id);
+      if (!workspaceId) {
+        return;
+      }
+
+      const currentView = workspaceViewStore.getState().viewFor(workspaceId);
+      const hasRun = currentView.task.runs.some(
+        (run) => run.id === event.run_id,
+      );
+      const derivedWorkspaceId = workspaceIdFromTaskRunId(event.run_id);
+
+      if (hasRun) {
+        workspaceViewStore
+          .getState()
+          .updateTask(workspaceId, (task) =>
+            appendTaskOutput(task, event.run_id, event.chunk),
+          );
+        return;
+      }
+
+      if (
+        derivedWorkspaceId !== workspaceId ||
+        !hasRegisteredWorkspace(workspaceId)
+      ) {
+        return;
+      }
+
+      workspaceViewStore
+        .getState()
+        .updateTask(workspaceId, (task) =>
+          appendTaskOutput(task, event.run_id, event.chunk),
+        );
+    });
+    const finishedUnlisten = onTaskFinished((event) => {
+      if (disposed) {
+        return;
+      }
+
+      const workspaceId = knownWorkspaceIdForTaskRun(event.run_id);
+      if (!workspaceId) {
+        return;
+      }
+
+      const currentView = workspaceViewStore.getState().viewFor(workspaceId);
+      const hasRun = currentView.task.runs.some(
+        (run) => run.id === event.run_id,
+      );
+      const derivedWorkspaceId = workspaceIdFromTaskRunId(event.run_id);
+
+      if (hasRun) {
+        workspaceViewStore
+          .getState()
+          .updateTask(workspaceId, (task) =>
+            finishTaskRun(task, event.run_id, event.exit_code),
+          );
+        return;
+      }
+
+      if (
+        derivedWorkspaceId !== workspaceId ||
+        !hasRegisteredWorkspace(workspaceId)
+      ) {
+        return;
+      }
+
+      workspaceViewStore
+        .getState()
+        .updateTask(workspaceId, (task) =>
+          finishTaskRun(task, event.run_id, event.exit_code),
+        );
+    });
+
+    return () => {
+      disposed = true;
+      void outputUnlisten.then((dispose) => dispose()).catch(() => {});
+      void finishedUnlisten.then((dispose) => dispose()).catch(() => {});
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    let disposed = false;
+
+    void listWorkspaceTasks(workspaceRoot)
+      .then((tasks) => {
+        if (disposed) {
+          return;
+        }
+
+        updateTask(workspaceId, (task) => replaceDetectedTasks(task, tasks));
+        setTaskError(null);
+      })
+      .catch((error) => {
+        if (!disposed) {
+          setTaskError(`Detect failed: ${terminalErrorMessage(error)}`);
+        }
+      });
+
+    void listTaskRuns(workspaceId)
+      .then((runs) => {
+        if (disposed) {
+          return;
+        }
+
+        updateTask(workspaceId, (task) => replaceTaskRuns(task, runs));
+      })
+      .catch((error) => {
+        if (!disposed) {
+          setTaskError(`History failed: ${terminalErrorMessage(error)}`);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [activeWorkspaceId, activeWorkspace?.path, updateTask]);
 
   useEffect(() => {
     if (!activeWorkspace || !activeWorkspaceId) {
@@ -945,6 +1160,153 @@ export function AppShell() {
     });
   }
 
+  function updateTaskCustomCommand(value: string) {
+    updateTask(activeWorkspaceId, (task) => setCustomCommand(task, value));
+  }
+
+  function activateTaskRunById(runId: string) {
+    const workspaceId = knownWorkspaceIdForTaskRun(runId);
+    if (!workspaceId) {
+      return;
+    }
+
+    updateTask(workspaceId, (task) => activateTaskRun(task, runId));
+    updateView(workspaceId, {
+      activeActivity: "tasks",
+      panelOpen: true,
+    });
+  }
+
+  async function runTaskCommand(task: {
+    label: string;
+    command: string;
+    cwd: string;
+  }) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+
+    try {
+      const run = await invokeRunWorkspaceTask({
+        workspaceId,
+        workspaceRoot,
+        label: task.label,
+        command: task.command,
+        cwd: task.cwd,
+      });
+
+      updateTask(workspaceId, (state) =>
+        activateTaskRun(upsertTaskRun(state, run), run.id),
+      );
+      updateView(workspaceId, {
+        activeActivity: "tasks",
+        panelOpen: true,
+      });
+      setTaskError(null);
+    } catch (error) {
+      setTaskError(`Run failed: ${terminalErrorMessage(error)}`);
+      updateView(workspaceId, {
+        activeActivity: "tasks",
+        panelOpen: true,
+      });
+    }
+  }
+
+  function runDetectedTask(task: WorkspaceTask) {
+    void runTaskCommand({
+      label: task.label,
+      command: task.command,
+      cwd: task.cwd,
+    });
+  }
+
+  function runCustomTask(command: string) {
+    const trimmed = command.trim();
+    if (!trimmed || !activeWorkspace) {
+      return;
+    }
+
+    void runTaskCommand({
+      label: trimmed,
+      command: trimmed,
+      cwd: activeWorkspace.path,
+    });
+  }
+
+  async function stopTaskRunById(runId: string) {
+    const workspaceId = knownWorkspaceIdForTaskRun(runId) ?? activeWorkspaceId;
+    if (!workspaceId) {
+      return;
+    }
+
+    try {
+      const stopped = await stopTaskRun(runId);
+      updateTask(workspaceId, (task) =>
+        activateTaskRun(
+          upsertTaskRun(stopTaskRunInState(task, runId), stopped),
+          runId,
+        ),
+      );
+      setTaskError(null);
+    } catch (error) {
+      setTaskError(`Stop failed: ${terminalErrorMessage(error)}`);
+      updateView(workspaceId, {
+        activeActivity: "tasks",
+        panelOpen: true,
+      });
+    }
+  }
+
+  function rerunTaskRun(run?: TaskRun) {
+    const state = workspaceViewStore.getState().viewFor(activeWorkspaceId).task;
+    const task = run
+      ? { label: run.label, command: run.command, cwd: run.cwd }
+      : rerunnableTaskForState(state);
+
+    if (!task) {
+      setActiveActivity("tasks");
+      setPanelOpen(true);
+      return;
+    }
+
+    void runTaskCommand(task);
+  }
+
+  function runTaskFromPalette() {
+    const taskState = workspaceViewStore.getState().viewFor(activeWorkspaceId).task;
+    const customCommand = taskState.customCommand.trim();
+
+    if (customCommand) {
+      runCustomTask(customCommand);
+      return;
+    }
+
+    const firstDetectedTask = taskState.detectedTasks[0];
+    if (firstDetectedTask) {
+      runDetectedTask(firstDetectedTask);
+      return;
+    }
+
+    setActiveActivity("tasks");
+    setPanelOpen(true);
+  }
+
+  function stopActiveTaskRun() {
+    const taskState = workspaceViewStore.getState().viewFor(activeWorkspaceId).task;
+    const run = runningTaskRunForState(taskState);
+
+    if (!run) {
+      setActiveActivity("tasks");
+      setPanelOpen(true);
+      return;
+    }
+
+    void stopTaskRunById(run.id);
+  }
+
   function runCommand(id: string) {
     switch (id) {
       case "save-file":
@@ -965,6 +1327,18 @@ export function AppShell() {
       case "open-terminal":
         setSurface("terminal");
         setActiveActivity("terminal");
+        break;
+      case "new-terminal":
+        void newTerminal();
+        break;
+      case "run-task":
+        runTaskFromPalette();
+        break;
+      case "rerun-task":
+        rerunTaskRun();
+        break;
+      case "stop-task":
+        stopActiveTaskRun();
         break;
       case "toggle-sidebar":
         setPanelOpen(!panelOpen);
@@ -1073,6 +1447,8 @@ export function AppShell() {
               activeTerminalId={activeTerminalId}
               terminalCwdInput={view.terminal.cwdInput}
               terminalError={terminalError}
+              taskState={view.task}
+              taskError={taskError}
               onOpenFile={openFile}
               onCreateFile={createFileFromExplorer}
               onRenamePath={renamePathFromExplorer}
@@ -1082,6 +1458,12 @@ export function AppShell() {
               onActivateTerminal={activateTerminalById}
               onCloseTerminal={(id) => void closeTerminalById(id)}
               onRestartTerminal={(id) => void restartTerminalById(id)}
+              onTaskCustomCommandChange={updateTaskCustomCommand}
+              onRunTask={runDetectedTask}
+              onRunCustomTask={runCustomTask}
+              onActivateTaskRun={activateTaskRunById}
+              onStopTaskRun={(id) => void stopTaskRunById(id)}
+              onRerunTaskRun={rerunTaskRun}
             />
           </aside>
         ) : null}
@@ -1424,6 +1806,8 @@ export function AppShell() {
           main
         </div>
         <div className="sb">registry {registry.workspaces.length}</div>
+        <div className="sb">tasks {view.task.runs.length}</div>
+        <div className="sb">problems {activeTaskProblems.length}</div>
         <div className="sb-spacer" />
         <div className="sb">
           <span className="live" />

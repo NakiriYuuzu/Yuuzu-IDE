@@ -1284,6 +1284,138 @@ button {
   min-height: 140px;
 }
 
+.task-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.task-custom {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px;
+}
+
+.task-custom .btn {
+  flex: 0 0 auto;
+}
+
+.task-row {
+  position: relative;
+  min-width: 0;
+}
+
+.task-row .tree-row {
+  height: 36px;
+  padding-right: 34px;
+}
+
+.task-row.active .tree-row {
+  background: var(--active);
+}
+
+.task-list-row {
+  align-items: center;
+}
+
+.task-row-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.15;
+}
+
+.task-row-sub {
+  overflow: hidden;
+  color: var(--txt-faint);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+}
+
+.task-row .badge2 {
+  flex: 0 0 auto;
+  max-width: 88px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge2.warn {
+  color: var(--c-attr);
+  border-color: color-mix(in srgb, var(--c-attr) 42%, var(--line));
+  background: color-mix(in srgb, var(--c-attr) 10%, transparent);
+}
+
+.badge2.danger {
+  color: var(--c-tag);
+  border-color: color-mix(in srgb, var(--c-tag) 42%, var(--line));
+  background: color-mix(in srgb, var(--c-tag) 10%, transparent);
+}
+
+.badge2.danger svg {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 11px;
+}
+
+.task-row-actions {
+  position: absolute;
+  top: 8px;
+  right: 4px;
+  display: flex;
+  gap: 1px;
+  opacity: 0;
+}
+
+.task-row:hover .task-row-actions,
+.task-row:focus-within .task-row-actions {
+  opacity: 1;
+}
+
+.task-row-actions .iconbtn {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+}
+
+.task-row-actions .iconbtn svg {
+  width: 12px;
+  height: 12px;
+}
+
+.task-empty {
+  min-height: 74px;
+}
+
+.task-output-wrap {
+  min-height: 180px;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.task-output {
+  flex: 1;
+  min-height: 148px;
+  max-height: 260px;
+  margin: 0 10px 10px;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--txt-dim);
+  background: var(--editor);
+  font-size: 11px;
+  line-height: 1.45;
+  user-select: text;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .statusbar {
   height: 24px;
   flex: 0 0 24px;

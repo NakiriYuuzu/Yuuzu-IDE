@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { upsertTaskRun } from "../features/tasks/task-model";
 import { upsertTerminal } from "../features/terminal/terminal-model";
 import { createWorkspaceViewStore } from "./workspace-view-state";
 
@@ -115,6 +116,62 @@ describe("createWorkspaceViewStore", () => {
     expect(store.getState().viewFor("workspace-b").terminal.sessions).toEqual([]);
   });
 
+  test("task runs are restored per workspace", () => {
+    const store = createWorkspaceViewStore();
+
+    store.getState().updateTask("workspace-a", (task) =>
+      upsertTaskRun(task, {
+        id: "workspace-a:task-1",
+        workspace_id: "workspace-a",
+        label: "bun test",
+        command: "bun test",
+        cwd: "/repo-a",
+        status: "Running",
+        exit_code: null,
+      }),
+    );
+
+    expect(store.getState().viewFor("workspace-a").task.activeRunId).toBe(
+      "workspace-a:task-1",
+    );
+    expect(store.getState().viewFor("workspace-b").task.runs).toEqual([]);
+  });
+
+  test("unknown workspace task defaults cannot be mutated across future defaults", () => {
+    const store = createWorkspaceViewStore();
+
+    const unknownView = store.getState().viewFor("unknown");
+
+    expect(() => {
+      unknownView.task.customCommand = "bun test";
+    }).toThrow(TypeError);
+
+    expect(() => {
+      unknownView.task.detectedTasks.push({
+        id: "package:test",
+        label: "bun run test",
+        command: "bun run test",
+        cwd: "/unknown",
+        source: "package.json",
+      });
+    }).toThrow(TypeError);
+
+    expect(() => {
+      unknownView.task.outputByRunId["unknown:task-1"] = "boot";
+    }).toThrow(TypeError);
+
+    expect(store.getState().viewFor("other-unknown").task).toMatchObject({
+      detectedTasks: [],
+      runs: [],
+      activeRunId: null,
+      outputByRunId: {},
+      problemsByRunId: {},
+      pendingOutputByRunId: {},
+      pendingFinishByRunId: {},
+      customCommand: "",
+    });
+  });
+
   test("unknown workspace defaults use a stable reference", () => {
     const store = createWorkspaceViewStore();
 
@@ -184,6 +241,16 @@ describe("createWorkspaceViewStore", () => {
         pendingExitBySessionId: {},
         ignoredSessionIds: {},
         cwdInput: "",
+      },
+      task: {
+        detectedTasks: [],
+        runs: [],
+        activeRunId: null,
+        outputByRunId: {},
+        problemsByRunId: {},
+        pendingOutputByRunId: {},
+        pendingFinishByRunId: {},
+        customCommand: "",
       },
     });
   });

@@ -22,4 +22,15 @@ describe("filterCommands", () => {
     expect(node1Commands.map((item) => item.id)).toContain("find-in-file");
     expect(node1Commands.map((item) => item.id)).toContain("search-workspace");
   });
+
+  test("includes node 3 terminal and task commands", () => {
+    expect(node1Commands.map((item) => item.id)).toEqual(
+      expect.arrayContaining([
+        "new-terminal",
+        "run-task",
+        "rerun-task",
+        "stop-task",
+      ]),
+    );
+  });
 });

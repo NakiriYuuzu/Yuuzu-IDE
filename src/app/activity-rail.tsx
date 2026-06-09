@@ -1,4 +1,5 @@
 import {
+  ClipboardList,
   Database,
   Files,
   GitBranch,
@@ -13,6 +14,7 @@ export type ActivityId =
   | "search"
   | "git"
   | "terminal"
+  | "tasks"
   | "database"
   | "settings";
 
@@ -28,6 +30,7 @@ const activities: ActivityItem[] = [
   { id: "search", label: "Search", icon: Search },
   { id: "git", label: "Git", icon: GitBranch, badge: "3" },
   { id: "terminal", label: "Terminal", icon: SquareTerminal },
+  { id: "tasks", label: "Tasks", icon: ClipboardList },
   { id: "database", label: "Database", icon: Database },
   { id: "settings", label: "Settings", icon: Settings },
 ];

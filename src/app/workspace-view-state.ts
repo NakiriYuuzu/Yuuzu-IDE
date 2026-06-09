@@ -2,6 +2,10 @@ import { create, type StoreApi, useStore } from "zustand";
 
 import type { EditorFileState } from "../features/files/file-model";
 import {
+  createTaskState,
+  type TaskViewState,
+} from "../features/tasks/task-model";
+import {
   createTerminalState,
   type TerminalViewState,
 } from "../features/terminal/terminal-model";
@@ -15,6 +19,7 @@ export type WorkspaceViewState = {
   surface: Surface;
   editor: EditorFileState;
   terminal: TerminalViewState;
+  task: TaskViewState;
 };
 
 type WorkspaceViewStore = {
@@ -32,6 +37,10 @@ type WorkspaceViewStore = {
     workspaceId: string | null,
     update: (terminal: TerminalViewState) => TerminalViewState,
   ) => void;
+  updateTask: (
+    workspaceId: string | null,
+    update: (task: TaskViewState) => TaskViewState,
+  ) => void;
 };
 
 function defaultWorkspaceView(): WorkspaceViewState {
@@ -41,6 +50,7 @@ function defaultWorkspaceView(): WorkspaceViewState {
     surface: "empty",
     editor: { tabs: [], activePath: null },
     terminal: createTerminalState(),
+    task: createTaskState(),
   };
 }
 
@@ -53,6 +63,13 @@ function freezeWorkspaceView(view: WorkspaceViewState): WorkspaceViewState {
   Object.freeze(view.terminal.pendingExitBySessionId);
   Object.freeze(view.terminal.ignoredSessionIds);
   Object.freeze(view.terminal);
+  Object.freeze(view.task.detectedTasks);
+  Object.freeze(view.task.runs);
+  Object.freeze(view.task.outputByRunId);
+  Object.freeze(view.task.problemsByRunId);
+  Object.freeze(view.task.pendingOutputByRunId);
+  Object.freeze(view.task.pendingFinishByRunId);
+  Object.freeze(view.task);
   return Object.freeze(view);
 }
 
@@ -99,6 +116,18 @@ export function createWorkspaceViewStore() {
           views: {
             ...state.views,
             [key]: { ...current, terminal: update(current.terminal) },
+          },
+        };
+      }),
+    updateTask: (workspaceId, update) =>
+      set((state) => {
+        const key = workspaceId ?? shellKey;
+        const current = state.views[key] ?? defaultView;
+
+        return {
+          views: {
+            ...state.views,
+            [key]: { ...current, task: update(current.task) },
           },
         };
       }),
