@@ -572,31 +572,20 @@ fn has_dsn_key_value_connection_string(value: &str) -> bool {
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
 
-    if (normalized.contains("host=") && normalized.contains("password="))
-        || (normalized.contains("server=") && normalized.contains("password="))
-    {
-        return true;
-    }
+    const RAW_DSN_KEYS: [&str; 6] = [
+        "host=",
+        "server=",
+        "database=",
+        "dbname=",
+        "user=",
+        "username=",
+    ];
 
-    let mut has_host_or_server = false;
-    let mut has_password = false;
-
-    for segment in normalized.split([';', '&']) {
-        let segment = segment.trim();
-        if segment.is_empty() {
-            continue;
-        }
-
-        if segment.starts_with("host=") || segment.starts_with("server=") {
-            has_host_or_server = true;
-        }
-
-        if segment.starts_with("password=") {
-            has_password = true;
-        }
-    }
-
-    has_host_or_server && has_password
+    RAW_DSN_KEYS.iter().any(|key| {
+        normalized.starts_with(key)
+            || normalized.contains(&format!(";{key}"))
+            || normalized.contains(&format!("&{key}"))
+    })
 }
 
 #[cfg(test)]
@@ -1232,6 +1221,8 @@ mod tests {
         assert!(has_raw_dsn_prefix(
             "Server=localhost; Password=pw;Database=app"
         ));
+        assert!(has_raw_dsn_prefix("host=localhost dbname=app user=yuuzu"));
+        assert!(has_raw_dsn_prefix("Server=localhost;Database=app"));
         assert!(has_raw_dsn_prefix("host = localhost password = pw"));
         assert!(!has_raw_dsn_prefix("localhost"));
         assert!(!has_raw_dsn_prefix("user_only"));
@@ -1361,6 +1352,14 @@ mod tests {
             (
                 DatabaseKind::PostgreSQL,
                 "host=localhost;password=pw".to_string(),
+            ),
+            (
+                DatabaseKind::PostgreSQL,
+                "Server=localhost;Database=app".to_string(),
+            ),
+            (
+                DatabaseKind::PostgreSQL,
+                "host=localhost dbname=app user=yuuzu".to_string(),
             ),
         ];
 
