@@ -484,6 +484,9 @@ context.
 
 ### Node 8: Browser Preview And Local Dev Loop
 
+**Status:** completed and passed. Final results are recorded in
+`docs/architecture/node-8-browser-results.md`.
+
 **Goal:** support frontend and full-stack development loops beside code.
 
 **Scope**
@@ -695,7 +698,7 @@ stable.
 ## Current Priority
 
 Node 0, Node 1, Node 2, Node 3, Node 4, Node 5, Node 6, and Node 7 are
-complete. The next active priority is Node 8: support frontend and full-stack
+complete. The next active priority is Node 9: Database Tools.
 development loops beside code.
 
 - Node 0 measurements keep Tauri 2 as the main route; Rust-native fallback

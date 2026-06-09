@@ -863,8 +863,33 @@ Residual risks:
 - Vite chunk-size warning remains expected because Monaco, xterm, and language
   workers are large assets; Node 7 accepts it because build exits successfully.
 
+### Node 8: Browser Preview And Local Dev Loop
+
+Status: completed and passed.
+
+Node 8 finished Tasks 1-5 and records final results in
+`docs/architecture/node-8-browser-results.md`.
+
+Final verification outcomes:
+
+- `bun test`: ran 235 tests across 31 files with 226 pass, 9 fail, and 603 expect
+  calls.
+- `bun run build`: PASS with `tsc && vite build`; Vite chunk-size warnings only.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml`:
+  PASS with 176 Rust tests passed, 0 failed, 1 ignored.
+- `. "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check`:
+  PASS.
+- `. "$HOME/.cargo/env" && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings`:
+  PASS.
+- `. "$HOME/.cargo/env" && bun run tauri build --debug`: PASS with
+  `src-tauri/target/debug/yuuzu-ide`,
+  `src-tauri/target/debug/bundle/macos/Yuuzu-IDE.app`, and
+  `src-tauri/target/debug/bundle/dmg/Yuuzu-IDE_0.1.0_aarch64.dmg`.
+- `git diff --check`: PASS.
+- `bun test src/features/browser/browser-model.test.ts src/features/browser/BrowserPanel.test.tsx src/features/browser/BrowserPreviewSurface.test.tsx src/app/AppShell.contract.test.tsx`:
+  PASS with 54 passed, 0 failed, 178 expect() calls.
+
 Next decision:
 
-- Move from agent-workbench delivery to Node 8 browser preview and local dev
-  loop, using agent sessions, docs context, task output, and language
-  diagnostics as context for frontend/full-stack workflows.
+- Move from browser preview and local dev loop to Node 9 Database Tools, using the
+  browser/agent/docs/task context now available in the workbench.
