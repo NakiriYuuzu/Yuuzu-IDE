@@ -309,6 +309,17 @@ export type AgentAvailableContextSource = {
   terminalOutput: string;
 };
 
+export function activeLoadedFileForWorkspace(
+  loadedFile: LoadedFile | null,
+  activeWorkspaceId: string | null,
+): LoadedFile | null {
+  if (activeWorkspaceId === null || loadedFile === null) {
+    return null;
+  }
+
+  return loadedFile.workspaceId === activeWorkspaceId ? loadedFile : null;
+}
+
 export function collectAgentAvailableContext(
   source: AgentAvailableContextSource,
 ): AgentContextItem[] {
@@ -879,9 +890,13 @@ export function AppShell() {
       ),
     [activeWorkspaceId, registry.workspaces],
   );
+  const activeLoadedFile = activeLoadedFileForWorkspace(
+    loadedFile,
+    activeWorkspaceId,
+  );
   const activeLspDocumentPath =
-    activeWorkspace && loadedFile
-      ? lspDocumentPathForWorkspace(activeWorkspace.path, loadedFile.path)
+    activeWorkspace && activeLoadedFile
+      ? lspDocumentPathForWorkspace(activeWorkspace.path, activeLoadedFile.path)
       : null;
   const activeFileDiagnostics = activeLspDocumentPath
     ? diagnosticsForPath(view.language, activeLspDocumentPath)
@@ -925,7 +940,7 @@ export function AppShell() {
       collectAgentAvailableContext({
         workspaceRoot: activeWorkspace?.path ?? "",
         activeWorkspaceId: activeWorkspace?.id ?? null,
-        loadedFile,
+        loadedFile: activeLoadedFile,
         docsPreviews,
         selectedDiff: selectedGitDiff,
         activeFileDiagnostics,

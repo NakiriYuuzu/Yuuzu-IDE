@@ -12,6 +12,7 @@ import { createLanguageState } from "../features/language/language-model";
 import { createDocsState } from "../features/docs/docs-model";
 import {
   collectAgentAvailableContext,
+  activeLoadedFileForWorkspace,
   PanelBody,
   type AgentAvailableContextSource,
 } from "./AppShell";
@@ -157,6 +158,19 @@ describe("AppShell AppShell helpers", () => {
     expect(contents).not.toContain("export const legacy = false;");
     expect(labels).toContain("Guide");
     expect(labels).toContain("bash");
+  });
+
+  test("activeLoadedFileForWorkspace filters stale loaded files", () => {
+    const staleLoadedFile = {
+      workspaceId: "w:old",
+      path: "src/legacy/AppShell.tsx",
+      content: "export const legacy = false;",
+      language: "typescript",
+      readOnly: false,
+    };
+
+    const matched = activeLoadedFileForWorkspace(staleLoadedFile, "w:1");
+    expect(matched).toBeNull();
   });
 
   test("PanelBody renders AgentPanel and routes callbacks", () => {
