@@ -426,10 +426,16 @@ impl LanguageServerManager {
         statuses
     }
 
-    pub fn status_for_workspace(&self, workspace_id: &str) -> Vec<LanguageServerStatus> {
+    pub fn status_for_workspace(
+        &self,
+        workspace_id: &str,
+        workspace_root: &str,
+    ) -> Vec<LanguageServerStatus> {
         self.statuses()
             .into_iter()
-            .filter(|status| status.workspace_id == workspace_id)
+            .filter(|status| {
+                status.workspace_id == workspace_id && status.workspace_root == workspace_root
+            })
             .collect()
     }
 
@@ -548,10 +554,14 @@ impl LspState {
         manager.close_document(workspace_id, workspace_root, path)
     }
 
-    pub fn statuses(&self, workspace_id: String) -> Vec<LanguageServerStatus> {
+    pub fn statuses(
+        &self,
+        workspace_id: String,
+        workspace_root: String,
+    ) -> Vec<LanguageServerStatus> {
         self.manager
             .lock()
-            .map(|manager| manager.status_for_workspace(&workspace_id))
+            .map(|manager| manager.status_for_workspace(&workspace_id, &workspace_root))
             .unwrap_or_default()
     }
 
@@ -771,5 +781,32 @@ mod tests {
 
         manager.sweep_idle_servers(1701, 500);
         assert_eq!(manager.statuses()[0].state, ServerState::Stopped);
+    }
+
+    #[test]
+    fn workspace_statuses_are_scoped_by_workspace_root() {
+        let manager = LanguageServerManager::default_for_tests();
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/old-root".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}".to_string(),
+            )
+            .expect("open old root");
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/new-root".to_string(),
+                "src/app.ts".to_string(),
+                "export {};".to_string(),
+            )
+            .expect("open new root");
+
+        let statuses = manager.status_for_workspace("workspace", "/new-root");
+
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].workspace_root, "/new-root");
+        assert_eq!(statuses[0].language, LanguageId::TypeScript);
     }
 }

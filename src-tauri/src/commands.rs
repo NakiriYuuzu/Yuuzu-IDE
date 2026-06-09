@@ -105,9 +105,9 @@ impl AppState {
         lsp_state: &crate::lsp::LspState,
         workspace_root: &str,
     ) -> Result<Vec<crate::lsp::LanguageServerStatus>, String> {
-        let (workspace_id, _workspace_root) = self.lsp_workspace_identity(workspace_root)?;
+        let (workspace_id, workspace_root) = self.lsp_workspace_identity(workspace_root)?;
 
-        Ok(lsp_state.statuses(workspace_id))
+        Ok(lsp_state.statuses(workspace_id, workspace_root))
     }
 
     fn lsp_workspace_identity(&self, workspace_root: &str) -> Result<(String, String), String> {
