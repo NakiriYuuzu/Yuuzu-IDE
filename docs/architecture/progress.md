@@ -672,3 +672,114 @@ Residual risks:
 - Vite chunk-size warning remains during `bun run build`; it is accepted for
   Node 5 because the build exits successfully and Monaco/xterm remain
   lazy-loaded.
+
+### Node 6: Language Intelligence
+
+Status: completed and passed.
+
+Node 6 finished Tasks 1-7 and records the final language results in
+`docs/architecture/node-6-language-results.md`. The node adds Rust-owned LSP
+stdio transport, lazy lifecycle, status/log/memory/runtime surfaces, and
+frontend Monaco wiring for diagnostics and provider actions.
+
+Completed progress:
+
+- Task 1 added LSP protocol profiles, language detection, JSON-RPC helpers,
+  stdio transport, server-request handling, and language server process
+  management.
+- Task 2 added validated workspace-root command plumbing for document open/close,
+  diagnostics, provider request, symbol, rename, restart, and log entry points.
+- Task 3 added frontend language state, language API wrappers, per-workspace
+  language view state, normalized document support checks, and stale async result
+  guards.
+- Task 4 added diagnostics panel, statusbar/rail integration, language controls,
+  command-palette entries, and responsive language rows.
+- Task 5 added Monaco provider hooks for hover/definition/references/completion/
+  code actions/rename, relative-path document lifecycle handling, and refresh
+  guards for inactive or unsupported documents.
+- Task 6 added server logs, restart controls, memory reporting, browser smoke,
+  root-scoped runtime state, stale-memory suppression, and corrective real LSP
+  lifecycle coverage.
+- Task 7 recorded verification, real language-server smoke, measurements,
+  review evidence, progress, and roadmap status.
+
+Important files and commit milestones:
+
+- `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `src-tauri/src/lsp.rs`,
+  `src-tauri/src/commands.rs`, `src-tauri/src/lib.rs`, and `src-tauri/src/metrics.rs`
+  own LSP process state, commands, JSON-RPC helpers, root scoping, and memory
+  sampling.
+- `src/features/language/language-api.ts`, `src/features/language/language-model.ts`,
+  `src/features/language/language-model.test.ts`, `src/features/language/LanguagePanel.tsx`,
+  `src/features/language/LanguagePanel.test.tsx`, `src/features/editor/EditorTab.tsx`,
+  `src/app/workspace-view-state.ts`, `src/app/workspace-view-state.test.ts`,
+  `src/app/AppShell.tsx`, `src/app/activity-rail.tsx`, `src/app/command-palette-model.ts`,
+  and `src/index.css` own front-end language state, panel/workbench integration, and
+  Monaco wiring.
+- `fd01a89` docs: add node 6 language plan
+- `b2ee5ae` feat: add lsp protocol profiles
+- `ff725b8` fix: harden lsp protocol parsing
+- `e0fb5a5` feat: add lsp lifecycle commands
+- `91a5f11` fix: validate lsp command inputs
+- `4997f83` fix: reject lsp parent paths
+- `acf34fd` fix: scope lsp status by workspace root
+- `85d7f32` fix: scope lsp diagnostics by workspace root
+- `0035642` feat: add language frontend state
+- `df76c79` fix: harden language frontend state
+- `781e736` feat: add language diagnostics panel
+- `9bf2d40` fix: align language panel chrome
+- `a090678` fix: guard language refresh freshness
+- `0a92026` feat: wire editor language providers
+- `fc44db3` fix: send relative lsp document paths
+- `f9b5de7` fix: harden editor language providers
+- `8946590` fix: close inactive lsp documents
+- `203794c` fix: align lsp document support checks
+- `6634764` feat: add language server controls
+- `2c5c990` fix: scope language server runtime state
+- `6c603bd` fix: complete lsp transport lifecycle
+
+Verification evidence:
+
+- `bun test`: passed with 145 tests, 0 failed, 293 expect calls across 24 files.
+- `bun run build`: passed with `tsc && vite build`; Vite chunk-size warning only.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml`:
+  passed with 153 Rust tests, 0 failed, 1 ignored; 0 doc tests.
+- `. "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check`:
+  passed.
+- `. "$HOME/.cargo/env" && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings`:
+  passed.
+- `. "$HOME/.cargo/env" && bun run tauri build --debug`: passed and built macOS app and
+  DMG debug artifacts.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml lsp::tests -- --nocapture`:
+  passed with 36 LSP tests, 0 failed, 1 ignored.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml lsp::tests::real_language_servers_open_baseline_documents -- --ignored --exact --nocapture`:
+  passed with real Rust, TypeScript, JavaScript, and Python stdio language
+  servers; external pylsp/rust-analyzer warnings only.
+- `git diff --check`: passed.
+
+Smoke evidence:
+
+- Real LSP smoke created a temporary workspace and opened Rust
+  (`src/main.rs`), TypeScript (`src/app.ts`), JavaScript (`src/app.js`), and
+  Python (`app.py`) documents through actual stdio language-server processes.
+- The real smoke confirmed each language reached `Running`, exposed a PID, and
+  closed cleanly.
+- Browser smoke with Tauri IPC mocks still verifies the Language panel,
+  diagnostics count, restart action, logs, and responsive row/log containment,
+  but is treated as UI evidence only.
+
+Residual risks:
+
+- The real language-server smoke is ignored by the default Rust suite because it
+  requires `rust-analyzer`, `typescript-language-server`, and `pylsp` on `PATH`.
+- LSP requests are synchronous while the manager lock is held, so a slow server
+  can serialize other LSP operations until the 10 second request timeout.
+- Browser smoke cannot run real Tauri IPC or native LSP process interactions.
+- Vite chunk-size warning is still expected in this node due lazy Monaco and
+  xterm assets; Node 6 accepts it because build exits successfully.
+
+Next decision:
+
+- Move from language verification to Node 7 agent-workbench delivery, using the
+  now-complete language telemetry, restart controls, and diagnostics surfaces for
+  richer agent context.

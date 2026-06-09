@@ -694,9 +694,9 @@ stable.
 
 ## Current Priority
 
-Node 0, Node 1, Node 2, Node 3, Node 4, and Node 5 are complete. The next
-active priority is Node 6: add modern code intelligence while keeping idle
-overhead low.
+Node 0, Node 1, Node 2, Node 3, Node 4, Node 5, and Node 6 are complete. The
+next active priority is Node 7: integrate agent-assisted development as a
+structured IDE workflow.
 
 - Node 0 measurements keep Tauri 2 as the main route; Rust-native fallback
   research remains deferred.
@@ -719,3 +719,8 @@ overhead low.
   stale reference hints, context pack persistence, task/agent metadata links,
   and mobile docs surfaces covered by Rust docs tests, Bun docs/task tests,
   Tauri debug build, and mocked browser UI smoke.
+- Node 6 verification keeps language diagnostics, language panel, LSP controls,
+  restart/log behavior, memory visibility, and real Rust/TypeScript/JavaScript/
+  Python stdio LSP startup covered by Bun/Cargo tests, focused LSP tests, the
+  explicit real-language-server smoke, Tauri debug build, and mocked Chromium
+  UI smoke with Tauri IPC stubs.
