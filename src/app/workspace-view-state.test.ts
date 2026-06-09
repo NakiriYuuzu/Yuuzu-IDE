@@ -9,6 +9,7 @@ import {
   replaceDiagnostics,
   replaceServerStatuses,
 } from "../features/language/language-model";
+import { createBrowserState } from "../features/browser/browser-model";
 import { upsertTaskRun } from "../features/tasks/task-model";
 import { upsertTerminal } from "../features/terminal/terminal-model";
 import { createWorkspaceViewStore } from "./workspace-view-state";
@@ -188,6 +189,43 @@ describe("createWorkspaceViewStore", () => {
     expect(store.getState().viewFor("workspace-b").agent.sessions).toEqual([]);
   });
 
+  test("browser state is restored per workspace", () => {
+    const store = createWorkspaceViewStore();
+
+    store.getState().updateBrowser("workspace-a", (browser) => ({
+      ...browser,
+      activeUrl: "http://localhost:5173",
+      urlInput: "http://localhost:5173",
+      status: "ready",
+    }));
+
+    expect(store.getState().viewFor("workspace-a").browser.activeUrl).toBe(
+      "http://localhost:5173",
+    );
+    expect(store.getState().viewFor("workspace-b").browser.activeUrl).toBeNull();
+  });
+
+  test("browser update is scoped by workspace key including shell workspace", () => {
+    const store = createWorkspaceViewStore();
+
+    store.getState().updateBrowser("workspace-a", (browser) => ({
+      ...browser,
+      activeUrl: "http://localhost:5173",
+    }));
+    store.getState().updateBrowser(null, (browser) => ({
+      ...browser,
+      activeUrl: "http://localhost:3000",
+    }));
+
+    expect(store.getState().viewFor("workspace-a").browser.activeUrl).toBe(
+      "http://localhost:5173",
+    );
+    expect(store.getState().viewFor("workspace-b").browser.activeUrl).toBeNull();
+    expect(store.getState().viewFor(null).browser.activeUrl).toBe(
+      "http://localhost:3000",
+    );
+  });
+
   test("unknown workspace task defaults cannot be mutated across future defaults", () => {
     const store = createWorkspaceViewStore();
 
@@ -279,6 +317,27 @@ describe("createWorkspaceViewStore", () => {
       unknownView.terminal.ignoredSessionIds["unknown:terminal-1"] = true;
     }).toThrow(TypeError);
 
+    expect(() => {
+      unknownView.browser.urlInput = "http://localhost:8080";
+    }).toThrow(TypeError);
+
+    expect(Object.isFrozen(unknownView.browser)).toBe(true);
+    expect(Object.isFrozen(unknownView.browser.screenshots)).toBe(true);
+    expect(Object.isFrozen(unknownView.browser.consoleErrors)).toBe(true);
+
+    expect(() => {
+      unknownView.browser.screenshots.push({
+        id: "shot-1",
+        workspace_root: "/unknown",
+        url: "http://localhost:5173",
+        title: "shot",
+        data_url: "data:image/png;base64,abc",
+        width: 100,
+        height: 100,
+        captured_ms: 1,
+      });
+    }).toThrow(TypeError);
+
     expect(store.getState().viewFor("other-unknown")).toMatchObject({
       surface: "empty",
       activeActivity: "explorer",
@@ -316,6 +375,7 @@ describe("createWorkspaceViewStore", () => {
         loading: false,
         error: null,
       },
+      browser: createBrowserState(),
     });
   });
 

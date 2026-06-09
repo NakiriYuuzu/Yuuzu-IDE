@@ -1287,6 +1287,24 @@ button {
   background: var(--editor);
 }
 
+.browser-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+  height: 100%;
+}
+
+.browser-split.has-editor {
+  grid-template-columns: minmax(280px, 1fr) minmax(320px, 1fr);
+}
+
+.browser-split-editor {
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+  overflow: hidden;
+}
+
 .editor-toolbar {
   height: 34px;
   flex: 0 0 34px;
@@ -3262,5 +3280,17 @@ button {
 
   .workspace-hero {
     flex-direction: column;
+  }
+}
+
+@media (max-width: 820px) {
+  .browser-split.has-editor {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(220px, 1fr) minmax(260px, 1fr);
+  }
+
+  .browser-split-editor {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
   }
 }

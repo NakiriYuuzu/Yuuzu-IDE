@@ -10,6 +10,7 @@ import {
 } from "../features/agents/agent-model";
 import { createLanguageState } from "../features/language/language-model";
 import { createDocsState } from "../features/docs/docs-model";
+import { createBrowserState } from "../features/browser/browser-model";
 import {
   collectAgentAvailableContext,
   activeLoadedFileForWorkspace,
@@ -49,7 +50,16 @@ afterEach(() => {
 });
 
 describe("AppShell AppShell helpers", () => {
-  test("PanelBody renders browser placeholder when active", () => {
+  test("PanelBody renders BrowserPanel for browser activity", () => {
+    const onBrowserOpenTarget = mock<(url: string) => void>(() => {});
+    const state = {
+      ...createBrowserState(),
+      activeUrl: "http://localhost:5173",
+      urlInput: "http://localhost:5173",
+      activeTitle: "localhost:5173",
+      status: "ready" as const,
+    };
+
     const renderResult = render(
       <PanelBody
         active="browser"
@@ -136,17 +146,178 @@ describe("AppShell AppShell helpers", () => {
         onLanguageOpenDiagnostic={() => {}}
         onLanguageRefresh={() => Promise.resolve()}
         onLanguageRestartServer={() => {}}
+        browserState={state}
+        browserTargets={[
+          {
+            id: "t1",
+            label: "Frontend",
+            url: "http://localhost:5173",
+            source: "task-command",
+          },
+          {
+            id: "t2",
+            label: "Admin",
+            url: "http://localhost:5173/admin",
+            source: "running-task-output",
+          },
+        ]}
+        browserCanCapture={true}
+        onBrowserUrlInputChange={() => {}}
+        onBrowserOpenUrl={() => {}}
+        onBrowserOpenTarget={onBrowserOpenTarget}
+        onBrowserReload={() => {}}
+        onBrowserHardReload={() => {}}
+        onBrowserCapture={() => {}}
+        onBrowserSelectScreenshot={() => {}}
         languageState={createLanguageState()}
       />,
     );
 
-    expect(renderResult.getByText("Browser")).toBeTruthy();
+    expect(
+      renderResult.getByRole("button", { name: "Open browser preview" }),
+    ).toBeTruthy();
+    expect(
+      renderResult.getByRole("button", {
+        name: "Open Frontend at http://localhost:5173",
+      }),
+    ).toBeTruthy();
+    fireEvent.click(
+      renderResult.getByRole("button", {
+        name: "Open Frontend at http://localhost:5173",
+      }),
+    );
+    expect(onBrowserOpenTarget).toHaveBeenCalledWith("http://localhost:5173");
+  });
+
+  test("PanelBody disables browser capture when capture is unavailable", () => {
+    const renderResult = render(
+      <PanelBody
+        active="browser"
+        refreshKey={0}
+        activeFilePath="src/app/AppShell.tsx"
+        terminalSessions={[]}
+        activeTerminalId={null}
+        terminalCwdInput=""
+        terminalError={null}
+        taskState={{
+          detectedTasks: [],
+          runs: [],
+          activeRunId: null,
+          outputByRunId: {},
+          problemsByRunId: {},
+          pendingOutputByRunId: {},
+          pendingFinishByRunId: {},
+          contextPackByRunId: {},
+          customCommand: "",
+        }}
+        taskError={null}
+        gitState={{
+          status: null,
+          loading: false,
+          error: null,
+          commitMessage: "",
+          selectedDiff: null,
+          diffByKey: {},
+          branches: [],
+          graph: [],
+        }}
+        docsState={createDocsState()}
+        contextPackNameById={{}}
+        gitDecorations={{}}
+        agentState={createAgentState()}
+        availableAgentContext={[]}
+        onAgentModeChange={() => {}}
+        onAgentPromptChange={() => {}}
+        onAgentToggleContext={() => {}}
+        onAgentStartSession={() => {}}
+        onAgentSelectSession={() => {}}
+        onAgentApprove={() => {}}
+        onAgentReject={() => {}}
+        onAgentExport={() => {}}
+        onOpenFile={() => Promise.resolve()}
+        onCreateFile={async () => {}}
+        onRenamePath={async () => {}}
+        onDeletePath={async () => {}}
+        onTerminalCwdInputChange={() => {}}
+        onNewTerminal={() => Promise.resolve()}
+        onActivateTerminal={() => {}}
+        onCloseTerminal={() => Promise.resolve()}
+        onRestartTerminal={() => Promise.resolve()}
+        onTaskCustomCommandChange={() => {}}
+        onRunTask={() => {}}
+        onRunCustomTask={() => {}}
+        onActivateTaskRun={() => {}}
+        onStopTaskRun={() => Promise.resolve()}
+        onRerunTaskRun={() => {}}
+        onGitRefresh={() => Promise.resolve()}
+        onGitCommitMessageChange={() => {}}
+        onGitCommit={() => {}}
+        onGitStage={() => {}}
+        onGitUnstage={() => {}}
+        onGitDiscard={() => {}}
+        onGitOpenDiff={() => {}}
+        onGitStash={() => {}}
+        onGitFetch={() => {}}
+        onGitPull={() => {}}
+        onGitPush={() => {}}
+        onGitCheckoutBranch={() => {}}
+        onGitCreateBranch={() => {}}
+        onGitOpenGraph={() => {}}
+        onDocsRefresh={() => Promise.resolve()}
+        onDocsSearch={() => {}}
+        onDocsOpenPreview={() => Promise.resolve()}
+        onDocsToggleSource={() => {}}
+        onDocsPackNameChange={() => {}}
+        onDocsCreatePack={() => Promise.resolve()}
+        onDocsSelectPack={() => {}}
+        onDocsDeletePack={() => Promise.resolve()}
+        onDocsUsePackForActiveTask={() => Promise.resolve()}
+        onDocsLinkPackToAgentSession={() => Promise.resolve()}
+        onLanguageOpenDiagnostic={() => {}}
+        onLanguageRefresh={() => Promise.resolve()}
+        onLanguageRestartServer={() => {}}
+        browserState={{
+          ...createBrowserState(),
+          activeUrl: "http://localhost:5173",
+          activeTitle: "localhost:5173",
+          status: "ready",
+        }}
+        browserTargets={[]}
+        browserCanCapture={false}
+        onBrowserUrlInputChange={() => {}}
+        onBrowserOpenUrl={() => {}}
+        onBrowserOpenTarget={() => {}}
+        onBrowserReload={() => {}}
+        onBrowserHardReload={() => {}}
+        onBrowserCapture={() => {}}
+        onBrowserSelectScreenshot={() => {}}
+        languageState={createLanguageState()}
+      />,
+    );
+
+    expect(
+      (renderResult.getByRole("button", {
+        name: "Capture browser screenshot",
+      }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   test("collects all bounded agent context pieces", () => {
     const source = {
       workspaceRoot: "/repo",
       activeWorkspaceId: "w:1",
+      browserScreenshots: [
+        {
+          id: "shot-1",
+          workspace_root: "/repo",
+          url: "http://localhost:5173",
+          title: "localhost:5173",
+          data_url: "data:image/png;base64,shot",
+          width: 1280,
+          height: 720,
+          captured_ms: 1700000000000,
+        },
+      ],
       loadedFile: {
         workspaceId: "w:1",
         path: "src/app/AppShell.tsx",
@@ -209,14 +380,30 @@ describe("AppShell AppShell helpers", () => {
     expect(labels).toContain("unstaged diff: src/app/AppShell.tsx");
     expect(labels).toContain("error: src/app/AppShell.tsx:4");
     expect(labels).toContain("zsh");
+    expect(labels).toContain("Browser screenshot: localhost:5173");
     expect(contents).toContain("# Guide");
     expect(contents).toContain("# FAQ");
+    expect(contents.some((entry) => entry.includes("URL: http://localhost:5173"))).toBe(
+      true,
+    );
   });
 
   test("collects bounded context excluding stale loaded file from inactive workspace", () => {
     const source = {
       workspaceRoot: "/repo",
       activeWorkspaceId: "w:1",
+      browserScreenshots: [
+        {
+          id: "shot-other",
+          workspace_root: "/old",
+          url: "http://localhost:1234",
+          title: "Other workspace",
+          data_url: "data:image/png;base64,old",
+          width: 640,
+          height: 480,
+          captured_ms: 1700000000002,
+        },
+      ],
       loadedFile: {
         workspaceId: "w:old",
         path: "src/legacy/AppShell.tsx",
@@ -369,6 +556,16 @@ describe("AppShell AppShell helpers", () => {
         onLanguageOpenDiagnostic={() => {}}
         onLanguageRefresh={() => Promise.resolve()}
         onLanguageRestartServer={() => {}}
+        browserState={createBrowserState()}
+        browserTargets={[]}
+        browserCanCapture={false}
+        onBrowserUrlInputChange={() => {}}
+        onBrowserOpenUrl={() => {}}
+        onBrowserOpenTarget={() => {}}
+        onBrowserReload={() => {}}
+        onBrowserHardReload={() => {}}
+        onBrowserCapture={() => {}}
+        onBrowserSelectScreenshot={() => {}}
         languageState={createLanguageState()}
       />,
     );

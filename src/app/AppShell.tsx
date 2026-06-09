@@ -5,6 +5,7 @@ import {
   ChevronDown,
   FileCode2,
   GitBranch,
+  Globe,
   PanelLeft,
   Play,
   Plus,
@@ -18,6 +19,8 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import { ActivityRail, type ActivityId } from "./activity-rail";
 import { CommandPalette } from "./CommandPalette";
+import { BrowserPanel } from "../features/browser/BrowserPanel";
+import { BrowserPreviewSurface } from "../features/browser/BrowserPreviewSurface";
 import {
   createContextPack,
   deleteContextPack,
@@ -107,6 +110,24 @@ import {
   type LanguageServerStatus,
   type LanguageViewState,
 } from "../features/language/language-model";
+import {
+  browserScreenshotToContext,
+  type BrowserScreenshot,
+  type BrowserViewState,
+  type DevServerTarget,
+  detectDevServerTargets,
+  hardReloadBrowser,
+  openBrowserUrl,
+  reloadBrowser,
+  setBrowserError,
+  setBrowserUrlInput,
+  storeBrowserScreenshot,
+  updateBrowserBounds,
+} from "../features/browser/browser-model";
+import {
+  validateBrowserUrl,
+  captureBrowserPreview,
+} from "../features/browser/browser-api";
 import {
   createLoadedFileKey,
   isLoadedEditorForActiveFile,
@@ -295,6 +316,7 @@ export type AgentAvailableContextSource = {
   docsPreviews: Array<
     Pick<DocPreview, "path" | "title" | "content">
   >;
+  browserScreenshots: BrowserScreenshot[];
   selectedDiff:
     | {
         path: string;
@@ -379,6 +401,13 @@ export function collectAgentAvailableContext(
         output: source.terminalOutput,
       }),
     );
+  }
+
+  for (const screenshot of source.browserScreenshots) {
+    if (screenshot.workspace_root !== source.workspaceRoot) {
+      continue;
+    }
+    context.push(browserScreenshotToContext(screenshot));
   }
 
   return context;
@@ -585,6 +614,16 @@ export function PanelBody({
   onLanguageOpenDiagnostic,
   onLanguageRefresh,
   onLanguageRestartServer,
+  browserState,
+  browserTargets,
+  browserCanCapture,
+  onBrowserUrlInputChange,
+  onBrowserOpenUrl,
+  onBrowserOpenTarget,
+  onBrowserReload,
+  onBrowserHardReload,
+  onBrowserCapture,
+  onBrowserSelectScreenshot,
   languageState,
 }: {
   active: ActivityId;
@@ -655,6 +694,16 @@ export function PanelBody({
   onLanguageOpenDiagnostic: (diagnostic: LspDiagnostic & { path: string }) => void;
   onLanguageRefresh: () => void;
   onLanguageRestartServer: (server: LanguageServerStatus) => void;
+  browserState: BrowserViewState;
+  browserTargets: DevServerTarget[];
+  browserCanCapture: boolean;
+  onBrowserUrlInputChange: (value: string) => void;
+  onBrowserOpenUrl: (value: string) => void;
+  onBrowserOpenTarget: (url: string) => void;
+  onBrowserReload: () => void;
+  onBrowserHardReload: () => void;
+  onBrowserCapture: () => void;
+  onBrowserSelectScreenshot: (id: string) => void;
   languageState: LanguageViewState;
 }) {
   if (active === "git") {
@@ -764,6 +813,23 @@ export function PanelBody({
         onApprove={onAgentApprove}
         onReject={onAgentReject}
         onExport={onAgentExport}
+      />
+    );
+  }
+
+  if (active === "browser") {
+    return (
+      <BrowserPanel
+        state={browserState}
+        devServerTargets={browserTargets}
+        canCapture={browserCanCapture}
+        onUrlInputChange={onBrowserUrlInputChange}
+        onOpenUrl={onBrowserOpenUrl}
+        onOpenTarget={onBrowserOpenTarget}
+        onReload={onBrowserReload}
+        onHardReload={onBrowserHardReload}
+        onCapture={onBrowserCapture}
+        onSelectScreenshot={onBrowserSelectScreenshot}
       />
     );
   }
@@ -883,6 +949,7 @@ export function AppShell() {
   const updateDocs = useWorkspaceViewStore((state) => state.updateDocs);
   const updateLanguage = useWorkspaceViewStore((state) => state.updateLanguage);
   const updateAgent = useWorkspaceViewStore((state) => state.updateAgent);
+  const updateBrowser = useWorkspaceViewStore((state) => state.updateBrowser);
 
   const activeWorkspace = useMemo(
     () =>
@@ -895,6 +962,16 @@ export function AppShell() {
     loadedFile,
     activeWorkspaceId,
   );
+  const browserTargets = useMemo(
+    () =>
+      detectDevServerTargets({
+        detectedTasks: view.task.detectedTasks,
+        runs: view.task.runs,
+        outputByRunId: view.task.outputByRunId,
+      }),
+    [view.task.detectedTasks, view.task.outputByRunId, view.task.runs],
+  );
+  const browserCanCapture = Boolean(activeWorkspace);
   const activeLspDocumentPath =
     activeWorkspace && activeLoadedFile
       ? lspDocumentPathForWorkspace(activeWorkspace.path, activeLoadedFile.path)
@@ -909,6 +986,12 @@ export function AppShell() {
     ? parentNameFromPath(activeEditorTab.path)
     : "";
   const showEditor = surface === "editor";
+  const splitBrowserSurface =
+    surface === "browser-preview" &&
+    activeEditorTab !== null &&
+    activeWorkspaceId !== null &&
+    loadedFile?.workspaceId === activeWorkspaceId &&
+    loadedFile.path === activeEditorTab.path;
   const showLoadedEditor = isLoadedEditorForActiveFile({
     surface,
     activeWorkspaceId,
@@ -943,6 +1026,7 @@ export function AppShell() {
         activeWorkspaceId: activeWorkspace?.id ?? null,
         loadedFile: activeLoadedFile,
         docsPreviews,
+        browserScreenshots: view.browser.screenshots,
         selectedDiff: selectedGitDiff,
         activeFileDiagnostics,
         terminalSession: activeTerminal,
@@ -953,6 +1037,7 @@ export function AppShell() {
       activeWorkspace?.id,
       loadedFile,
       docsPreviews,
+      view.browser.screenshots,
       selectedGitDiff,
       activeFileDiagnostics,
       activeTerminal,
@@ -2888,6 +2973,116 @@ export function AppShell() {
     setPanelOpen(true);
   }
 
+  function openBrowserPreview(value: string) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      openBrowserPanel();
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const trimmed = value.trim();
+    if (!trimmed) {
+      openBrowserPanel();
+      setSurface("browser-preview");
+      return;
+    }
+
+    void validateBrowserUrl(trimmed)
+      .then((parsedUrl) => {
+        updateBrowser(workspaceId, (browser) => openBrowserUrl(browser, parsedUrl));
+        setSurface("browser-preview");
+      })
+      .catch((error) => {
+        updateBrowser(
+          workspaceId,
+          (browser) => setBrowserError(browser, terminalErrorMessage(error)),
+        );
+      });
+
+    setSurface("browser-preview");
+    openBrowserPanel();
+  }
+
+  function updateBrowserUrlInput(value: string) {
+    if (!activeWorkspaceId) {
+      return;
+    }
+
+    updateBrowser(activeWorkspaceId, (browser) =>
+      setBrowserUrlInput(browser, value),
+    );
+  }
+
+  function reloadBrowserPreview() {
+    if (!activeWorkspaceId) {
+      return;
+    }
+
+    updateBrowser(activeWorkspaceId, (browser) => reloadBrowser(browser));
+  }
+
+  function hardReloadBrowserPreview() {
+    if (!activeWorkspaceId) {
+      return;
+    }
+
+    updateBrowser(activeWorkspaceId, (browser) => hardReloadBrowser(browser));
+  }
+
+  function captureBrowserScreenshot() {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const state = workspaceViewStore.getState().viewFor(workspaceId).browser;
+
+    if (!state.activeUrl || !state.bounds) {
+      updateBrowser(
+        workspaceId,
+        (browser) =>
+          setBrowserError(
+            browser,
+            state.bounds ? "No active browser URL" : "Browser preview bounds are not ready",
+          ),
+      );
+      return;
+    }
+
+    void captureBrowserPreview({
+      workspaceRoot: activeWorkspace.path,
+      request: {
+        url: state.activeUrl,
+        title: state.activeTitle ?? state.activeUrl,
+        bounds: state.bounds,
+      },
+    })
+      .then((screenshot) => {
+        updateBrowser(
+          workspaceId,
+          (browser) => storeBrowserScreenshot(browser, screenshot),
+        );
+      })
+      .catch((error) => {
+        updateBrowser(
+          workspaceId,
+          (browser) =>
+            setBrowserError(browser, `Capture failed: ${terminalErrorMessage(error)}`),
+        );
+      });
+  }
+
+  function selectBrowserScreenshot(id: string) {
+    if (!activeWorkspaceId) {
+      return;
+    }
+
+    updateBrowser(activeWorkspaceId, (browser) => ({
+      ...browser,
+      selectedScreenshotId: id,
+    }));
+  }
+
   function openAgentsPanel() {
     setActiveActivity("agents");
     setPanelOpen(true);
@@ -3535,7 +3730,16 @@ export function AppShell() {
         openAgentsPanel();
         break;
       case "open-browser-preview":
-        openBrowserPanel();
+        openBrowserPreview(view.browser.urlInput);
+        break;
+      case "browser-reload":
+        reloadBrowserPreview();
+        break;
+      case "browser-hard-reload":
+        hardReloadBrowserPreview();
+        break;
+      case "browser-capture-screenshot":
+        captureBrowserScreenshot();
         break;
       case "agent-start-session": {
         if (!activeWorkspaceId) {
@@ -3744,6 +3948,16 @@ export function AppShell() {
               onLanguageOpenDiagnostic={openLanguageDiagnostic}
               onLanguageRefresh={() => void refreshLanguageData()}
               onLanguageRestartServer={restartLanguageServer}
+              browserState={view.browser}
+              browserTargets={browserTargets}
+              browserCanCapture={browserCanCapture}
+              onBrowserUrlInputChange={(value) => updateBrowserUrlInput(value)}
+              onBrowserOpenUrl={(value) => openBrowserPreview(value)}
+              onBrowserOpenTarget={(url) => openBrowserPreview(url)}
+              onBrowserReload={() => reloadBrowserPreview()}
+              onBrowserHardReload={() => hardReloadBrowserPreview()}
+              onBrowserCapture={() => captureBrowserScreenshot()}
+              onBrowserSelectScreenshot={(id) => selectBrowserScreenshot(id)}
               languageState={view.language}
             />
           </aside>
@@ -3858,6 +4072,26 @@ export function AppShell() {
                   </button>
                 </div>
               ) : null}
+              {surface === "browser-preview" ? (
+                <div
+                  className="tab active"
+                  title={view.browser.activeUrl ?? "Browser"}
+                >
+                  <Globe className="ftype" aria-hidden="true" />
+                  <span className="tlabel mono">
+                    {view.browser.activeTitle ?? "Browser"}
+                  </span>
+                  <button
+                    type="button"
+                    className="close"
+                    title="Close browser preview"
+                    aria-label="Close browser preview"
+                    onClick={() => setSurface("empty")}
+                  >
+                    <X aria-hidden="true" />
+                  </button>
+                </div>
+              ) : null}
               <div className="tabstrip-tail">
                 <button
                   type="button"
@@ -3883,47 +4117,52 @@ export function AppShell() {
               </div>
             </div>
 
-            <div className="breadcrumb">
-              <span className="crumb">
-                {activeWorkspace?.name ?? "workspace"}
-              </span>
-              <ChevronDown aria-hidden="true" />
-              <span className="crumb">
-                {activeEditorTab
-                  ? activeEditorParent
-                  : surface === "terminal"
-                    ? "terminal"
-                    : surface === "docs-preview"
-                      ? "docs"
-                    : surface === "editor"
-                      ? "editor"
-                      : "workspace"}
-              </span>
-              <ChevronDown aria-hidden="true" />
-              <span className="crumb">
-                {activeEditorTab
-                  ? activeEditorName
-                  : surface === "terminal"
-                    ? activeTerminalName
-                    : surface === "docs-preview"
-                      ? docsPreviewPathLabel(view.docs, "Preview")
-                    : surface === "editor"
-                      ? "No file open"
-                      : "Start"}
-              </span>
-            </div>
+              <div className="breadcrumb">
+                <span className="crumb">
+                  {activeWorkspace?.name ?? "workspace"}
+                </span>
+                <ChevronDown aria-hidden="true" />
+                <span className="crumb">
+                  {activeEditorTab
+                    ? activeEditorParent
+                    : surface === "terminal"
+                      ? "terminal"
+                      : surface === "browser-preview"
+                        ? "browser"
+                        : surface === "docs-preview"
+                          ? "docs"
+                          : surface === "editor"
+                            ? "editor"
+                            : "workspace"}
+                </span>
+                <ChevronDown aria-hidden="true" />
+                <span className="crumb">
+                  {activeEditorTab
+                    ? activeEditorName
+                    : surface === "terminal"
+                      ? activeTerminalName
+                      : surface === "browser-preview"
+                        ? (view.browser.activeTitle ?? "Start")
+                        : surface === "docs-preview"
+                          ? docsPreviewPathLabel(view.docs, "Preview")
+                          : surface === "editor"
+                            ? "No file open"
+                            : "Start"}
+                </span>
+              </div>
 
-            <div
-              className={`group-content${
-                showEditor ||
-                surface === "terminal" ||
-                surface === "git-diff" ||
-                surface === "git-graph" ||
-                surface === "docs-preview"
-                  ? " editor-content"
-                  : ""
-              }`}
-            >
+              <div
+                className={`group-content${
+                  showEditor ||
+                  surface === "terminal" ||
+                  surface === "git-diff" ||
+                  surface === "git-graph" ||
+                  surface === "docs-preview" ||
+                  surface === "browser-preview"
+                    ? " editor-content"
+                    : ""
+                }`}
+              >
               {showEditor ? (
                 <>
                   <div className="editor-toolbar">
@@ -4099,6 +4338,60 @@ export function AppShell() {
                     }
                   }}
                 />
+              ) : surface === "browser-preview" ? (
+                <div
+                  className={`browser-split${
+                    splitBrowserSurface ? " has-editor" : ""
+                  }`}
+                >
+                  {activeEditorTab && showLoadedEditor ? (
+                    <div className="browser-split-editor">
+                      <Suspense
+                        fallback={
+                          <div className="editor-loading">Loading editor</div>
+                        }
+                      >
+                        <EditorTab
+                          workspaceId={activeWorkspaceId ?? ""}
+                          filePath={loadedFile!.path}
+                          content={loadedFile!.content}
+                          language={loadedFile!.language}
+                          readOnly={loadedFile!.readOnly}
+                          diagnostics={activeFileDiagnostics}
+                          findOpen={findOpen}
+                          findFocusRequest={findFocusRequest}
+                          findQuery={findQuery}
+                          onFindQueryChange={setFindQuery}
+                          onContentChange={handleEditorContentChange}
+                          onHover={onLanguageHover}
+                          onGoToDefinition={onLanguageGoToDefinition}
+                          onReferences={onLanguageReferences}
+                          onCompletion={onLanguageCompletion}
+                          onCodeActions={onLanguageCodeActions}
+                          onRename={onLanguageRename}
+                          onDirtyChange={() => undefined}
+                        />
+                      </Suspense>
+                    </div>
+                  ) : null}
+                  <BrowserPreviewSurface
+                    workspaceId={activeWorkspaceId}
+                    url={view.browser.activeUrl}
+                    title={view.browser.activeTitle}
+                    reloadVersion={view.browser.reloadVersion}
+                    hardReloadVersion={view.browser.hardReloadVersion}
+                    onBoundsChange={(bounds) =>
+                      updateBrowser(activeWorkspaceId, (browser) =>
+                        updateBrowserBounds(browser, bounds),
+                      )
+                    }
+                    onError={(message) =>
+                      updateBrowser(activeWorkspaceId, (browser) =>
+                        setBrowserError(browser, message),
+                      )
+                    }
+                  />
+                </div>
               ) : (
                 <>
                   <div className="workspace-hero">

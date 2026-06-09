@@ -14,6 +14,10 @@ import {
   type LanguageViewState,
 } from "../features/language/language-model";
 import {
+  createBrowserState,
+  type BrowserViewState,
+} from "../features/browser/browser-model";
+import {
   createGitState,
   type GitViewState,
 } from "../features/git/git-model";
@@ -33,7 +37,8 @@ export type Surface =
   | "terminal"
   | "git-diff"
   | "git-graph"
-  | "docs-preview";
+  | "docs-preview"
+  | "browser-preview";
 
 export type WorkspaceViewState = {
   activeActivity: ActivityId;
@@ -46,6 +51,7 @@ export type WorkspaceViewState = {
   git: GitViewState;
   docs: DocsViewState;
   language: LanguageViewState;
+  browser: BrowserViewState;
 };
 
 type WorkspaceViewStore = {
@@ -83,6 +89,10 @@ type WorkspaceViewStore = {
     workspaceId: string | null,
     update: (agent: AgentViewState) => AgentViewState,
   ) => void;
+  updateBrowser: (
+    workspaceId: string | null,
+    update: (browser: BrowserViewState) => BrowserViewState,
+  ) => void;
 };
 
 function defaultWorkspaceView(): WorkspaceViewState {
@@ -97,6 +107,7 @@ function defaultWorkspaceView(): WorkspaceViewState {
     git: createGitState(),
     docs: createDocsState(),
     language: createLanguageState(),
+    browser: createBrowserState(),
   };
 }
 
@@ -160,6 +171,18 @@ function freezeWorkspaceView(view: WorkspaceViewState): WorkspaceViewState {
   }
   Object.freeze(view.language.serverLogs);
   Object.freeze(view.language);
+  if (view.browser.bounds) {
+    Object.freeze(view.browser.bounds);
+  }
+  for (const screenshot of view.browser.screenshots) {
+    Object.freeze(screenshot);
+  }
+  for (const error of view.browser.consoleErrors) {
+    Object.freeze(error);
+  }
+  Object.freeze(view.browser.screenshots);
+  Object.freeze(view.browser.consoleErrors);
+  Object.freeze(view.browser);
   Object.freeze(view.agent.selectedContextIds);
   for (const session of view.agent.sessions) {
     Object.freeze(session.context_items);
@@ -280,6 +303,18 @@ export function createWorkspaceViewStore() {
           views: {
             ...state.views,
             [key]: { ...current, agent: update(current.agent) },
+          },
+        };
+      }),
+    updateBrowser: (workspaceId, update) =>
+      set((state) => {
+        const key = workspaceId ?? shellKey;
+        const current = state.views[key] ?? defaultView;
+
+        return {
+          views: {
+            ...state.views,
+            [key]: { ...current, browser: update(current.browser) },
           },
         };
       }),
