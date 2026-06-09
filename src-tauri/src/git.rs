@@ -94,6 +94,7 @@ pub fn diff_file(workspace_root: &Path, path: &str, staged: bool) -> Result<GitD
         .ok_or_else(|| "git diff path is required".to_string())?;
 
     let mut command = Command::new("git");
+    command.env("GIT_LITERAL_PATHSPECS", "1");
     command.arg("-C").arg(&repository_root).arg("diff");
     if staged {
         command.arg("--cached");
@@ -141,7 +142,6 @@ pub(crate) fn parse_status_output(
         index = 1;
     }
 
-    let repository_root_path = Path::new(repository_root);
     while index < entries.len() {
         let entry = &entries[index];
         let Some((index_status, worktree_status, path)) = split_status_entry(entry) else {
@@ -149,17 +149,14 @@ pub(crate) fn parse_status_output(
         };
         let kind = change_kind(index_status, worktree_status);
         let mut original_path = None;
-        let mut current_path = path.to_string();
+        let current_path = path.to_string();
 
         if matches!(kind, GitChangeKind::Renamed | GitChangeKind::Copied) {
             index += 1;
             let Some(next_path) = entries.get(index) else {
                 return Err(format!("missing original path for renamed file: {path}"));
             };
-            let (parsed_path, parsed_original_path) =
-                parse_rename_paths(repository_root_path, path, next_path);
-            current_path = parsed_path;
-            original_path = Some(parsed_original_path);
+            original_path = Some(next_path.to_string());
         }
 
         changes.push(GitFileStatus {
@@ -370,21 +367,6 @@ fn is_conflict_status(index_status: char, worktree_status: char) -> bool {
     )
 }
 
-fn parse_rename_paths(repository_root: &Path, first: &str, second: &str) -> (String, String) {
-    if !repository_root.exists() {
-        return (second.to_string(), first.to_string());
-    }
-
-    let first_exists = repository_root.join(first).exists();
-    let second_exists = repository_root.join(second).exists();
-
-    if !first_exists && second_exists {
-        (second.to_string(), first.to_string())
-    } else {
-        (first.to_string(), second.to_string())
-    }
-}
-
 fn is_binary_diff(raw: &str) -> bool {
     raw.contains("Binary files ") || raw.contains("GIT binary patch")
 }
@@ -402,10 +384,12 @@ fn path_to_git_string(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn parses_porcelain_status_with_staged_unstaged_untracked_and_renamed_paths() {
-        let raw = b"## main...origin/main [ahead 2, behind 1]\0M  src/lib.rs\0 M README.md\0?? notes/new.md\0R  old.rs\0new.rs\0";
+        let raw = b"## main...origin/main [ahead 2, behind 1]\0M  src/lib.rs\0 M README.md\0?? notes/new.md\0R  new.rs\0old.rs\0";
         let status = parse_status_output("/workspace", "/workspace", raw).expect("status parses");
 
         assert_eq!(status.branch.as_deref(), Some("main"));
@@ -417,7 +401,27 @@ mod tests {
         assert_eq!(status.changes[0].path, "src/lib.rs");
         assert_eq!(status.changes[0].kind, GitChangeKind::Modified);
         assert_eq!(status.changes[2].kind, GitChangeKind::Untracked);
+        assert_eq!(status.changes[3].path, "new.rs");
         assert_eq!(status.changes[3].original_path.as_deref(), Some("old.rs"));
+    }
+
+    #[test]
+    fn diffs_literal_wildcard_filename_without_expanding_pathspec() {
+        let repo = tempdir().expect("temp repo");
+        run_git_test_command(repo.path(), &["init"]);
+        run_git_test_command(repo.path(), &["config", "user.email", "test@example.com"]);
+        run_git_test_command(repo.path(), &["config", "user.name", "Test User"]);
+        fs::write(repo.path().join("*.txt"), "literal before\n").expect("literal file");
+        fs::write(repo.path().join("other.txt"), "other before\n").expect("other file");
+        run_git_test_command(repo.path(), &["add", "*.txt", "other.txt"]);
+        run_git_test_command(repo.path(), &["commit", "-m", "initial"]);
+        fs::write(repo.path().join("*.txt"), "literal after\n").expect("modify literal file");
+        fs::write(repo.path().join("other.txt"), "other after\n").expect("modify other file");
+
+        let diff = diff_file(repo.path(), "*.txt", false).expect("diff literal wildcard");
+
+        assert!(diff.raw.contains("*.txt"));
+        assert!(!diff.raw.contains("other.txt"), "{}", diff.raw);
     }
 
     #[test]
@@ -437,5 +441,20 @@ mod tests {
 
         assert!(diff.truncated);
         assert!(diff.raw.len() <= 240 * 1024 + "... diff truncated ...\n".len());
+    }
+
+    fn run_git_test_command(repo: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .expect("git command runs");
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
