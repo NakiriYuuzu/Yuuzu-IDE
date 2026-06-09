@@ -167,6 +167,10 @@ describe("createWorkspaceViewStore", () => {
       unknownView.terminal.pendingExitBySessionId["unknown:terminal-1"] = true;
     }).toThrow(TypeError);
 
+    expect(() => {
+      unknownView.terminal.ignoredSessionIds["unknown:terminal-1"] = true;
+    }).toThrow(TypeError);
+
     expect(store.getState().viewFor("other-unknown")).toMatchObject({
       surface: "empty",
       activeActivity: "explorer",
@@ -178,6 +182,7 @@ describe("createWorkspaceViewStore", () => {
         outputBySessionId: {},
         pendingOutputBySessionId: {},
         pendingExitBySessionId: {},
+        ignoredSessionIds: {},
         cwdInput: "",
       },
     });

@@ -195,6 +195,12 @@ function knownWorkspaceIdForTerminal(sessionId: string): string | null {
   return match?.[0] ?? workspaceIdFromTerminalSessionId(sessionId);
 }
 
+function hasRegisteredWorkspace(workspaceId: string): boolean {
+  return workspaceStore
+    .getState()
+    .registry.workspaces.some((workspace) => workspace.id === workspaceId);
+}
+
 function terminalErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -383,7 +389,10 @@ export function AppShell() {
         return;
       }
 
-      if (derivedWorkspaceId !== workspaceId) {
+      if (
+        derivedWorkspaceId !== workspaceId ||
+        !hasRegisteredWorkspace(workspaceId)
+      ) {
         return;
       }
 
@@ -420,7 +429,10 @@ export function AppShell() {
         return;
       }
 
-      if (derivedWorkspaceId !== workspaceId) {
+      if (
+        derivedWorkspaceId !== workspaceId ||
+        !hasRegisteredWorkspace(workspaceId)
+      ) {
         return;
       }
 

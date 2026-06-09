@@ -158,4 +158,30 @@ describe("terminal model", () => {
     expect(state.sessions[0]?.running).toBe(false);
     expect(state.pendingExitBySessionId["w:terminal-1"]).toBeUndefined();
   });
+
+  test("output and exit after local close do not create pending terminal events", () => {
+    const closed = closeTerminal(
+      upsertTerminal(createTerminalState(), {
+        id: "w:terminal-1",
+        workspace_id: "w",
+        name: "zsh 1",
+        cwd: "/repo",
+        shell: "/bin/zsh",
+        running: true,
+      }),
+      "w:terminal-1",
+    );
+
+    const withLateOutput = bufferTerminalOutput(
+      closed,
+      "w:terminal-1",
+      "late\n",
+    );
+    const withLateExit = bufferTerminalExit(withLateOutput, "w:terminal-1");
+
+    expect(
+      withLateExit.pendingOutputBySessionId["w:terminal-1"],
+    ).toBeUndefined();
+    expect(withLateExit.pendingExitBySessionId["w:terminal-1"]).toBeUndefined();
+  });
 });

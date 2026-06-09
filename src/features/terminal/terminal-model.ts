@@ -13,6 +13,7 @@ export type TerminalViewState = {
   outputBySessionId: Record<string, string>;
   pendingOutputBySessionId: Record<string, string>;
   pendingExitBySessionId: Record<string, boolean>;
+  ignoredSessionIds: Record<string, boolean>;
   cwdInput: string;
 };
 
@@ -30,6 +31,7 @@ export function createTerminalState(): TerminalViewState {
     outputBySessionId: {},
     pendingOutputBySessionId: {},
     pendingExitBySessionId: {},
+    ignoredSessionIds: {},
     cwdInput: "",
   };
 }
@@ -49,8 +51,10 @@ export function upsertTerminal(
   const pendingOutput = state.pendingOutputBySessionId[session.id] ?? "";
   const pendingOutputBySessionId = { ...state.pendingOutputBySessionId };
   const pendingExitBySessionId = { ...state.pendingExitBySessionId };
+  const ignoredSessionIds = { ...state.ignoredSessionIds };
   delete pendingOutputBySessionId[session.id];
   delete pendingExitBySessionId[session.id];
+  delete ignoredSessionIds[session.id];
 
   return {
     ...state,
@@ -65,6 +69,7 @@ export function upsertTerminal(
     },
     pendingOutputBySessionId,
     pendingExitBySessionId,
+    ignoredSessionIds,
   };
 }
 
@@ -85,6 +90,7 @@ export function closeTerminal(
   const outputBySessionId = { ...state.outputBySessionId };
   const pendingOutputBySessionId = { ...state.pendingOutputBySessionId };
   const pendingExitBySessionId = { ...state.pendingExitBySessionId };
+  const ignoredSessionIds = { ...state.ignoredSessionIds, [sessionId]: true };
   delete outputBySessionId[sessionId];
   delete pendingOutputBySessionId[sessionId];
   delete pendingExitBySessionId[sessionId];
@@ -101,6 +107,7 @@ export function closeTerminal(
     outputBySessionId,
     pendingOutputBySessionId,
     pendingExitBySessionId,
+    ignoredSessionIds,
   };
 }
 
@@ -130,6 +137,10 @@ export function bufferTerminalOutput(
   sessionId: string,
   chunk: string,
 ): TerminalViewState {
+  if (state.ignoredSessionIds[sessionId]) {
+    return state;
+  }
+
   return {
     ...state,
     pendingOutputBySessionId: {
@@ -162,6 +173,10 @@ export function bufferTerminalExit(
   state: TerminalViewState,
   sessionId: string,
 ): TerminalViewState {
+  if (state.ignoredSessionIds[sessionId]) {
+    return state;
+  }
+
   return {
     ...state,
     pendingExitBySessionId: {
