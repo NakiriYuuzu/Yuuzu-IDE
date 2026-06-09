@@ -2,7 +2,7 @@ use std::{fs, process::Command, time::SystemTime};
 
 use base64::{engine::general_purpose, Engine as _};
 
-const MAX_SCREENSHOT_PIXELS: i64 = 8_294_400;
+const MAX_SCREENSHOT_PIXELS: u64 = 8_294_400;
 const MAX_SCREENSHOT_TITLE_CHARS: usize = 160;
 const PNG_MAGIC: &[u8] = &[137, 80, 78, 71, 13, 10, 26, 10];
 
@@ -97,10 +97,38 @@ mod tests {
 
         assert_eq!(screenshot.id, "shot-1");
         assert_eq!(screenshot.workspace_root, "/workspace");
-        assert_eq!(screenshot.width, 320);
-        assert_eq!(screenshot.height, 180);
+        let width: u32 = screenshot.width;
+        let height: u32 = screenshot.height;
+        assert_eq!(width, 320);
+        assert_eq!(height, 180);
+        assert_eq!(screenshot.url, "http://localhost:5173/");
         assert!(screenshot.data_url.starts_with("data:image/png;base64,"));
         assert_eq!(screenshot.captured_ms, 42);
+    }
+
+    #[test]
+    fn capture_region_stores_normalized_url() {
+        let request = BrowserCaptureRequest {
+            url: "localhost:5173/dashboard".to_string(),
+            title: "localhost:5173/dashboard".to_string(),
+            bounds: BrowserCaptureBounds {
+                x: 10,
+                y: 20,
+                width: 320,
+                height: 180,
+            },
+        };
+
+        let screenshot = capture_preview_with(
+            "/workspace",
+            request,
+            |_bounds| Ok(vec![137, 80, 78, 71, 13, 10, 26, 10]),
+            || Ok(42),
+            || "shot-2".to_string(),
+        )
+        .expect("screenshot");
+
+        assert_eq!(screenshot.url, "http://localhost:5173/dashboard");
     }
 }
 
@@ -115,8 +143,8 @@ pub struct BrowserUrl {
 pub struct BrowserCaptureBounds {
     pub x: i32,
     pub y: i32,
-    pub width: i32,
-    pub height: i32,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -130,9 +158,10 @@ pub struct BrowserCaptureRequest {
 pub struct BrowserScreenshot {
     pub id: String,
     pub workspace_root: String,
+    pub url: String,
     pub title: String,
-    pub width: i32,
-    pub height: i32,
+    pub width: u32,
+    pub height: u32,
     pub captured_ms: u64,
     pub data_url: String,
 }
@@ -271,14 +300,14 @@ fn parse_port(raw_port: &str) -> Result<u16, String> {
 }
 
 pub fn validate_capture_bounds(bounds: &BrowserCaptureBounds) -> Result<(), String> {
-    if bounds.width <= 0 || bounds.height <= 0 {
+    if bounds.width == 0 || bounds.height == 0 {
         return Err("capture region must have positive width and height".to_string());
     }
     if bounds.x < 0 || bounds.y < 0 {
         return Err("capture region origin must not be negative".to_string());
     }
 
-    let area = i64::from(bounds.width) * i64::from(bounds.height);
+    let area = u64::from(bounds.width) * u64::from(bounds.height);
     if area > MAX_SCREENSHOT_PIXELS {
         return Err("capture region exceeds maximum area".to_string());
     }
@@ -308,7 +337,7 @@ pub fn capture_preview_with(
     current_time_ms: impl Fn() -> Result<u64, String>,
     generate_id: impl Fn() -> String,
 ) -> Result<BrowserScreenshot, String> {
-    let _ = normalize_browser_url(&request.url)?;
+    let normalized_url = normalize_browser_url(&request.url)?;
     validate_capture_bounds(&request.bounds)?;
     let bytes = capture_png(&request.bounds)?;
     validate_png_signature(&bytes)?;
@@ -317,6 +346,7 @@ pub fn capture_preview_with(
     Ok(BrowserScreenshot {
         id: generate_id(),
         workspace_root: workspace_root.as_ref().to_string(),
+        url: normalized_url.url,
         title: bound_title(request.title),
         width: request.bounds.width,
         height: request.bounds.height,

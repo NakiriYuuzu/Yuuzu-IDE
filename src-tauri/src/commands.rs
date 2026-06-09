@@ -808,9 +808,9 @@ pub fn export_agent_prompt(
 #[tauri::command]
 pub fn browser_validate_url(
     state: State<'_, AppState>,
-    value: String,
+    url: String,
 ) -> Result<crate::browser_preview::BrowserUrl, String> {
-    state.validate_browser_url(&value)
+    state.validate_browser_url(&url)
 }
 
 #[tauri::command]
