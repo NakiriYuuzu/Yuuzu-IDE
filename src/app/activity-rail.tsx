@@ -5,6 +5,7 @@ import {
   Files,
   GitBranch,
   Languages,
+  Bot,
   Search,
   Settings,
   SquareTerminal,
@@ -19,6 +20,7 @@ export type ActivityId =
   | "tasks"
   | "docs"
   | "language"
+  | "agents"
   | "database"
   | "settings";
 
@@ -36,6 +38,7 @@ const activities: ActivityItem[] = [
   { id: "tasks", label: "Tasks", icon: ClipboardList },
   { id: "docs", label: "Docs", icon: BookOpenText },
   { id: "language", label: "Language", icon: Languages },
+  { id: "agents", label: "Agents", icon: Bot },
   { id: "database", label: "Database", icon: Database },
   { id: "settings", label: "Settings", icon: Settings },
 ];

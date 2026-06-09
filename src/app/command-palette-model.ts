@@ -48,10 +48,29 @@ export const node6Commands: CommandItem[] = [
   },
 ];
 
+export const node7Commands: CommandItem[] = [
+  {
+    id: "open-agents",
+    label: "Agents: Open workbench",
+    group: "Agents",
+  },
+  {
+    id: "agent-start-session",
+    label: "Agents: Start session",
+    group: "Agents",
+  },
+  {
+    id: "agent-export-prompt",
+    label: "Agents: Export prompt",
+    group: "Agents",
+  },
+];
+
 export const allCommands: CommandItem[] = [
   ...node1Commands,
   ...node5Commands,
   ...node6Commands,
+  ...node7Commands,
 ];
 
 export function filterCommands(

@@ -8,6 +8,7 @@ import {
   allCommands,
   node5Commands,
   node6Commands,
+  node7Commands,
 } from "./command-palette-model";
 
 describe("filterCommands", () => {
@@ -50,6 +51,50 @@ describe("filterCommands", () => {
         group: "Docs",
       },
     ]);
+  });
+
+  test("includes node 7 agent commands", () => {
+    expect(node7Commands).toEqual([
+      {
+        id: "open-agents",
+        label: "Agents: Open workbench",
+        group: "Agents",
+      },
+      {
+        id: "agent-start-session",
+        label: "Agents: Start session",
+        group: "Agents",
+      },
+      {
+        id: "agent-export-prompt",
+        label: "Agents: Export prompt",
+        group: "Agents",
+      },
+    ]);
+    expect(allCommands).toContainEqual({
+      id: "open-agents",
+      label: "Agents: Open workbench",
+      group: "Agents",
+    });
+    expect(allCommands).toContainEqual({
+      id: "agent-start-session",
+      label: "Agents: Start session",
+      group: "Agents",
+    });
+    expect(allCommands).toContainEqual({
+      id: "agent-export-prompt",
+      label: "Agents: Export prompt",
+      group: "Agents",
+    });
+  });
+
+  test("filters agent commands", () => {
+    const filtered = filterCommands(allCommands, "agent");
+    const ids = filtered.map((command) => command.id);
+
+    expect(ids).toContain("open-agents");
+    expect(ids).toContain("agent-start-session");
+    expect(ids).toContain("agent-export-prompt");
   });
 
   test("includes language commands in palette", () => {

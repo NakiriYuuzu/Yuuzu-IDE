@@ -51,6 +51,32 @@ import {
   type DocsViewState,
 } from "../features/docs/docs-model";
 import {
+  exportAgentPrompt,
+  listAgentSessions,
+  startAgentSession,
+  updateAgentApproval,
+} from "../features/agents/agent-api";
+import {
+  activeAgentSession,
+  agentBadgeCount,
+  agentContextFromDiagnostic,
+  agentContextFromDoc,
+  agentContextFromDiff,
+  agentContextFromFile,
+  agentContextFromTerminal,
+  replaceAgentSessions,
+  selectAgentSession,
+  selectedContextItems,
+  setAgentMode,
+  setAgentPromptDraft,
+  storeAgentSession,
+  toggleAgentContext,
+  type AgentContextItem,
+  type AgentMode,
+  type AgentViewState,
+} from "../features/agents/agent-model";
+import { AgentPanel } from "../features/agents/AgentPanel";
+import {
   closeLanguageDocument,
   getLanguageServerStatus,
   getLanguageServerLogs,
@@ -255,9 +281,92 @@ const panelTitles: Record<ActivityId, string> = {
   tasks: "Tasks",
   docs: "Docs",
   language: "Language",
+  agents: "Agents",
   database: "Database",
   settings: "Settings",
 };
+
+export type AgentAvailableContextSource = {
+  workspaceRoot: string;
+  loadedFile: LoadedFile | null;
+  docsPreview: {
+    path: string;
+    title: string;
+    content: string;
+  } | null;
+  selectedDiff:
+    | {
+        path: string;
+        original_path: string | null;
+        staged: boolean;
+        binary: boolean;
+        truncated: boolean;
+        raw: string;
+      }
+    | null;
+  activeFileDiagnostics: LspDiagnostic[];
+  terminalSession: TerminalSessionInfo | null;
+  terminalOutput: string;
+};
+
+export function collectAgentAvailableContext(
+  source: AgentAvailableContextSource,
+): AgentContextItem[] {
+  const context: AgentContextItem[] = [];
+
+  if (source.loadedFile) {
+    context.push(
+      agentContextFromFile({
+        workspaceRoot: source.workspaceRoot,
+        path: source.loadedFile.path,
+        content: source.loadedFile.content,
+      }),
+    );
+  }
+
+  if (source.docsPreview) {
+    context.push(
+      agentContextFromDoc({
+        path: source.docsPreview.path,
+        title: source.docsPreview.title,
+        content: source.docsPreview.content,
+      }),
+    );
+  }
+
+  if (source.selectedDiff) {
+    context.push(
+      agentContextFromDiff({
+        path: source.selectedDiff.path,
+        staged: source.selectedDiff.staged,
+        raw: source.selectedDiff.raw,
+      }),
+    );
+  }
+
+  for (const diagnostic of source.activeFileDiagnostics) {
+    context.push(
+      agentContextFromDiagnostic({
+        path: diagnostic.path,
+        message: diagnostic.message,
+        severity: diagnostic.severity,
+        line: diagnostic.range.start_line + 1,
+      }),
+    );
+  }
+
+  if (source.terminalSession) {
+    context.push(
+      agentContextFromTerminal({
+        sessionId: source.terminalSession.id,
+        name: source.terminalSession.name,
+        output: source.terminalOutput,
+      }),
+    );
+  }
+
+  return context;
+}
 
 function languageForPath(path: string): string {
   const lower = path.toLowerCase();
@@ -394,7 +503,7 @@ function isMissingTerminalSessionError(error: unknown): boolean {
   return terminalErrorMessage(error).includes("missing terminal session");
 }
 
-function PanelBody({
+export function PanelBody({
   active,
   refreshKey,
   activeFilePath,
@@ -447,6 +556,16 @@ function PanelBody({
   onDocsDeletePack,
   onDocsUsePackForActiveTask,
   onDocsLinkPackToAgentSession,
+  agentState,
+  availableAgentContext,
+  onAgentModeChange,
+  onAgentPromptChange,
+  onAgentToggleContext,
+  onAgentStartSession,
+  onAgentSelectSession,
+  onAgentApprove,
+  onAgentReject,
+  onAgentExport,
   onLanguageOpenDiagnostic,
   onLanguageRefresh,
   onLanguageRestartServer,
@@ -507,6 +626,16 @@ function PanelBody({
     id: string,
     agentSessionId: string,
   ) => Promise<void>;
+  agentState: AgentViewState;
+  availableAgentContext: AgentContextItem[];
+  onAgentModeChange: (mode: AgentMode) => void;
+  onAgentPromptChange: (prompt: string) => void;
+  onAgentToggleContext: (id: string, selected: boolean) => void;
+  onAgentStartSession: (prompt: string) => void;
+  onAgentSelectSession: (sessionId: string) => void;
+  onAgentApprove: (approvalId: string) => void;
+  onAgentReject: (approvalId: string) => void;
+  onAgentExport: () => void;
   onLanguageOpenDiagnostic: (diagnostic: LspDiagnostic & { path: string }) => void;
   onLanguageRefresh: () => void;
   onLanguageRestartServer: (server: LanguageServerStatus) => void;
@@ -606,6 +735,23 @@ function PanelBody({
     );
   }
 
+  if (active === "agents") {
+    return (
+      <AgentPanel
+        state={agentState}
+        availableContext={availableAgentContext}
+        onModeChange={onAgentModeChange}
+        onPromptChange={onAgentPromptChange}
+        onToggleContext={onAgentToggleContext}
+        onStartSession={onAgentStartSession}
+        onSelectSession={onAgentSelectSession}
+        onApprove={onAgentApprove}
+        onReject={onAgentReject}
+        onExport={onAgentExport}
+      />
+    );
+  }
+
   if (active === "explorer") {
     return (
       <FileTreePanel
@@ -644,6 +790,7 @@ export function AppShell() {
   const savedContentByPathRef = useRef<Record<string, string>>({});
   const openRequestRef = useRef(0);
   const docsLoadRequestRef = useRef<DocsLoadRequestState>({});
+  const agentSessionsLoadRef = useRef<Record<string, number>>({});
   const languageRefreshRequestRef = useRef<LanguageRefreshRequestState>({});
   const docsSearchRequestRef = useRef<DocsRequestIdentity>({
     requestId: 0,
@@ -719,6 +866,7 @@ export function AppShell() {
   const updateGit = useWorkspaceViewStore((state) => state.updateGit);
   const updateDocs = useWorkspaceViewStore((state) => state.updateDocs);
   const updateLanguage = useWorkspaceViewStore((state) => state.updateLanguage);
+  const updateAgent = useWorkspaceViewStore((state) => state.updateAgent);
 
   const activeWorkspace = useMemo(
     () =>
@@ -766,6 +914,27 @@ export function AppShell() {
   const activeDocsPreviewPathLabel = docsPreviewPathLabel(
     view.docs,
     "Docs preview",
+  );
+  const availableAgentContext = useMemo(
+    () =>
+      collectAgentAvailableContext({
+        workspaceRoot: activeWorkspace?.path ?? "",
+        loadedFile,
+        docsPreview: activeDocsPreview,
+        selectedDiff: selectedGitDiff,
+        activeFileDiagnostics,
+        terminalSession: activeTerminal,
+        terminalOutput: activeTerminalOutput,
+      }),
+    [
+      activeWorkspace?.path,
+      loadedFile,
+      activeDocsPreview,
+      selectedGitDiff,
+      activeFileDiagnostics,
+      activeTerminal,
+      activeTerminalOutput,
+    ],
   );
 
   useEffect(() => {
@@ -1162,8 +1331,78 @@ export function AppShell() {
           loading: false,
           error: `Docs failed: ${terminalErrorMessage(error)}`,
         }));
-      });
+    });
   }, [activeWorkspaceId, activeWorkspace?.path, updateDocs]);
+
+  useEffect(() => {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    let disposed = false;
+    const requestId = (agentSessionsLoadRef.current[workspaceId] ?? 0) + 1;
+    agentSessionsLoadRef.current = {
+      ...agentSessionsLoadRef.current,
+      [workspaceId]: requestId,
+    };
+
+    void listAgentSessions(workspaceRoot)
+      .then((sessions) => {
+        if (disposed) {
+          return;
+        }
+
+        const currentWorkspace = workspaceStore
+          .getState()
+          .registry.workspaces.find((workspace) => workspace.id === workspaceId) ??
+          null;
+
+        if (
+          agentSessionsLoadRef.current[workspaceId] !== requestId ||
+          workspaceStore.getState().registry.active_workspace_id !== workspaceId ||
+          currentWorkspace?.path !== workspaceRoot
+        ) {
+          return;
+        }
+
+        updateAgent(workspaceId, (agent) =>
+          replaceAgentSessions(agent, sessions),
+        );
+      })
+      .catch((error) => {
+        if (disposed) {
+          return;
+        }
+
+        if (agentSessionsLoadRef.current[workspaceId] !== requestId) {
+          return;
+        }
+
+        if (!hasRegisteredWorkspace(workspaceId)) {
+          return;
+        }
+
+        const currentWorkspace = workspaceStore
+          .getState()
+          .registry.workspaces.find((workspace) => workspace.id === workspaceId) ??
+          null;
+        if (!currentWorkspace || currentWorkspace.path !== workspaceRoot) {
+          return;
+        }
+
+        updateAgent(workspaceId, (agent) => ({
+          ...agent,
+          loading: false,
+          error: `Load sessions failed: ${terminalErrorMessage(error)}`,
+        }));
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [activeWorkspaceId, activeWorkspace?.path, updateAgent]);
 
   useEffect(() => {
     if (!activeWorkspace || !activeWorkspaceId) {
@@ -2621,6 +2860,211 @@ export function AppShell() {
     setPanelOpen(true);
   }
 
+  function openAgentsPanel() {
+    setActiveActivity("agents");
+    setPanelOpen(true);
+  }
+
+  function selectedAgentContextItems(agentState: AgentViewState): AgentContextItem[] {
+    return selectedContextItems(agentState, availableAgentContext);
+  }
+
+  function selectedAgentDocPaths(contextItems: AgentContextItem[]): string[] {
+    const docPaths = new Set<string>();
+
+    for (const item of contextItems) {
+      if (item.kind === "doc" && item.path) {
+        docPaths.add(item.path);
+      }
+    }
+
+    return [...docPaths];
+  }
+
+  async function linkSelectedDocsForSession(
+    workspaceId: string,
+    sessionId: string,
+    selectedContext: AgentContextItem[],
+  ) {
+    const selectedDocPaths = selectedAgentDocPaths(selectedContext);
+    if (selectedDocPaths.length === 0) {
+      return;
+    }
+
+    const workspaceState = workspaceViewStore.getState().viewFor(workspaceId);
+    const matchingPacks = workspaceState.docs.contextPacks.filter((pack) =>
+      pack.doc_paths.some((path) => selectedDocPaths.includes(path)),
+    );
+
+    if (matchingPacks.length === 0) {
+      return;
+    }
+
+    for (const pack of matchingPacks) {
+      const linkedPack = await linkContextPack({
+        id: pack.id,
+        agentSessionId: sessionId,
+      });
+      updateDocs(workspaceId, (state) => storeContextPack(state, linkedPack));
+    }
+  }
+
+  async function handleAgentStartSessionFromCallback(
+    prompt: string,
+    options: { openPanel?: boolean } = {},
+  ) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const state = workspaceViewStore.getState().viewFor(workspaceId);
+    const currentPrompt = prompt.trim();
+    const selectedContext = selectedAgentContextItems(state.agent);
+
+    if (!currentPrompt || selectedContext.length === 0) {
+      openAgentsPanel();
+      return;
+    }
+
+    updateAgent(workspaceId, (agent) => ({ ...agent, loading: true, error: null }));
+
+    try {
+      const session = await startAgentSession({
+        workspaceRoot,
+        mode: state.agent.mode,
+        prompt: currentPrompt,
+        contextItems: selectedContext,
+      });
+
+      const currentWorkspace =
+        workspaceStore
+          .getState()
+          .registry.workspaces.find((item) => item.id === workspaceId) ??
+        null;
+      if (
+        !hasRegisteredWorkspace(workspaceId) ||
+        currentWorkspace?.path !== workspaceRoot ||
+        workspaceStore.getState().registry.active_workspace_id !== workspaceId
+      ) {
+        return;
+      }
+
+      updateAgent(workspaceId, (agent) => storeAgentSession(agent, session));
+      await linkSelectedDocsForSession(workspaceId, session.id, selectedContext);
+
+      if (options.openPanel) {
+        openAgentsPanel();
+      }
+    } catch (error) {
+      updateAgent(workspaceId, (agent) => ({
+        ...agent,
+        loading: false,
+        error: `Start session failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
+  function handleAgentModeChange(mode: AgentMode) {
+    if (!activeWorkspaceId) {
+      return;
+    }
+
+    updateAgent(activeWorkspaceId, (agent) => setAgentMode(agent, mode));
+  }
+
+  function handleAgentPromptChange(prompt: string) {
+    if (!activeWorkspaceId) {
+      return;
+    }
+
+    updateAgent(activeWorkspaceId, (agent) => setAgentPromptDraft(agent, prompt));
+  }
+
+  function handleAgentContextToggle(id: string, selected: boolean) {
+    if (!activeWorkspaceId) {
+      return;
+    }
+
+    updateAgent(activeWorkspaceId, (agent) => toggleAgentContext(agent, id, selected));
+  }
+
+  function handleAgentSelectSession(sessionId: string) {
+    if (!activeWorkspaceId) {
+      return;
+    }
+
+    updateAgent(activeWorkspaceId, (agent) =>
+      selectAgentSession(agent, sessionId),
+    );
+  }
+
+  async function handleAgentApproval(approvalId: string, status: "approved" | "rejected") {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const session = activeAgentSession(workspaceViewStore.getState().viewFor(activeWorkspaceId).agent);
+    if (!session) {
+      return;
+    }
+
+    try {
+      const updated = await updateAgentApproval({
+        sessionId: session.id,
+        approvalId,
+        status,
+      });
+      updateAgent(activeWorkspaceId, (agent) => storeAgentSession(agent, updated));
+    } catch (error) {
+      updateAgent(activeWorkspaceId, (agent) => ({
+        ...agent,
+        error: `Approval failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
+  async function handleAgentExport() {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const agentState = workspaceViewStore.getState().viewFor(activeWorkspaceId).agent;
+    const session = activeAgentSession(agentState);
+    if (!session) {
+      openAgentsPanel();
+      return;
+    }
+
+    try {
+      const result = await exportAgentPrompt(session.id);
+
+      if (typeof window === "undefined" || typeof document === "undefined") {
+        return;
+      }
+
+      if (typeof Blob === "undefined" || typeof URL === "undefined") {
+        return;
+      }
+
+      const blob = new Blob([result.content], {
+        type: "text/markdown;charset=utf-8",
+      });
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = result.filename;
+      link.click();
+      URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      updateAgent(activeWorkspaceId, (agent) => ({
+        ...agent,
+        error: `Export failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
   function openLanguageDiagnostic(diagnostic: LspDiagnostic & { path: string }) {
     setSurface("editor");
     void openFile(diagnostic.path);
@@ -3059,6 +3503,34 @@ export function AppShell() {
       case "language-restart":
         restartActiveLanguageServer();
         break;
+      case "open-agents":
+        openAgentsPanel();
+        break;
+      case "agent-start-session": {
+        if (!activeWorkspaceId) {
+          openAgentsPanel();
+          break;
+        }
+
+        const agentState = workspaceViewStore.getState().viewFor(activeWorkspaceId)
+          .agent;
+        const selectedContext = selectedContextItems(
+          agentState,
+          availableAgentContext,
+        );
+        if (!agentState.promptDraft.trim() || selectedContext.length === 0) {
+          openAgentsPanel();
+          break;
+        }
+
+        void handleAgentStartSessionFromCallback(agentState.promptDraft, {
+          openPanel: true,
+        });
+        break;
+      }
+      case "agent-export-prompt":
+        void handleAgentExport();
+        break;
       case "open-workspace":
       case "switch-workspace":
         break;
@@ -3117,6 +3589,7 @@ export function AppShell() {
           badges={{
             git: changeBadgeCount(view.git.status),
             docs: docsBadgeCount(view.docs),
+            agents: agentBadgeCount(view.agent),
             language: languageDiagnosticBadge,
           }}
           onSelect={setActiveActivity}
@@ -3221,6 +3694,22 @@ export function AppShell() {
                 void linkPackToActiveTask(id)
               }
               onDocsLinkPackToAgentSession={linkPackToAgentSession}
+              agentState={view.agent}
+              availableAgentContext={availableAgentContext}
+              onAgentModeChange={handleAgentModeChange}
+              onAgentPromptChange={handleAgentPromptChange}
+              onAgentToggleContext={handleAgentContextToggle}
+              onAgentStartSession={(prompt) =>
+                void handleAgentStartSessionFromCallback(prompt)
+              }
+              onAgentSelectSession={handleAgentSelectSession}
+              onAgentApprove={(approvalId) =>
+                void handleAgentApproval(approvalId, "approved")
+              }
+              onAgentReject={(approvalId) =>
+                void handleAgentApproval(approvalId, "rejected")
+              }
+              onAgentExport={() => void handleAgentExport()}
               onLanguageOpenDiagnostic={openLanguageDiagnostic}
               onLanguageRefresh={() => void refreshLanguageData()}
               onLanguageRestartServer={restartLanguageServer}
