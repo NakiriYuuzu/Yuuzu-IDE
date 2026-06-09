@@ -2098,6 +2098,10 @@ export function AppShell() {
     setPanelOpen(true);
   }
 
+  function invalidateDocsLoadRequests() {
+    docsLoadRequestRef.current += 1;
+  }
+
   async function refreshDocsIndex() {
     if (!activeWorkspace || !activeWorkspaceId) {
       return;
@@ -2133,6 +2137,12 @@ export function AppShell() {
         loading: false,
         error: null,
       }));
+      updateTask(workspaceId, (task) =>
+        hydrateTaskRunContextPacks(
+          task,
+          contextPackByLinkedTaskRunId(contextPacks),
+        ),
+      );
     } catch (error) {
       if (docsLoadRequestRef.current !== requestId) {
         return;
@@ -2281,6 +2291,7 @@ export function AppShell() {
         name,
         docPaths,
       });
+      invalidateDocsLoadRequests();
       updateDocs(workspaceId, (state) => storeContextPack(state, pack));
       openDocsPanel();
     } catch (error) {
@@ -2307,6 +2318,7 @@ export function AppShell() {
 
     try {
       await deleteContextPack(id);
+      invalidateDocsLoadRequests();
       updateDocs(workspaceId, (docs) => ({
         ...docs,
         contextPacks: docs.contextPacks.filter((pack) => pack.id !== id),
@@ -2343,6 +2355,7 @@ export function AppShell() {
         id: packId,
         taskRunId: run.id,
       });
+      invalidateDocsLoadRequests();
       updateDocs(workspaceId, (state) => storeContextPack(state, pack));
       updateTask(workspaceId, (state) =>
         linkTaskRunContextPack(state, run.id, pack.id),
@@ -2376,6 +2389,7 @@ export function AppShell() {
         id: packId,
         agentSessionId: trimmedAgentSessionId,
       });
+      invalidateDocsLoadRequests();
       updateDocs(workspaceId, (state) => storeContextPack(state, pack));
       openDocsPanel();
     } catch (error) {

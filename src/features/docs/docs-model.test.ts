@@ -131,6 +131,17 @@ describe("docs model", () => {
     ]);
   });
 
+  test("successful context pack updates clear previous docs errors", () => {
+    const state = {
+      ...createDocsState(),
+      error: "Link agent failed: boom",
+    };
+
+    const updated = storeContextPack(state, pack("pack-1", "Recovered"));
+
+    expect(updated.error).toBeNull();
+  });
+
   test("summarizes context pack docs, task links, and agent links", () => {
     expect(
       contextPackSummary({

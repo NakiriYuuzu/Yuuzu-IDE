@@ -242,6 +242,7 @@ export function storeContextPack(
     contextPacks,
     activePackId: pack.id,
     packDraftName: "",
+    error: null,
   };
 }
 
