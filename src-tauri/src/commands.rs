@@ -460,6 +460,9 @@ impl AppState {
         agent_session_id: Option<String>,
     ) -> Result<crate::docs::ContextPack, String> {
         self.ensure_context_pack_in_active_workspace(&id)?;
+        if let Some(agent_session_id) = agent_session_id.as_deref() {
+            self.ensure_agent_session_in_active_workspace(agent_session_id)?;
+        }
         self.docs_store
             .link_pack(&id, task_run_id.as_deref(), agent_session_id.as_deref())
     }
@@ -1994,6 +1997,87 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[test]
+    fn context_pack_agent_link_rejects_inactive_workspace_session() {
+        let config = tempdir().expect("config dir");
+        let workspace_a = config.path().join("workspace-a");
+        let workspace_b = config.path().join("workspace-b");
+        std::fs::create_dir_all(&workspace_a).expect("workspace a");
+        std::fs::create_dir_all(&workspace_b).expect("workspace b");
+        std::fs::write(workspace_a.join("A.md"), "# Workspace A\n").expect("workspace a note");
+        std::fs::write(workspace_b.join("B.md"), "# Workspace B\n").expect("workspace b note");
+
+        let state = AppState::new(config.path()).expect("state");
+        state
+            .open_workspace_path(workspace_a.clone())
+            .expect("open workspace a");
+        state
+            .open_workspace_path(workspace_b.clone())
+            .expect("open workspace b");
+
+        let registry = state.registry_snapshot().expect("registry");
+        let workspace_b_id = registry
+            .workspaces
+            .into_iter()
+            .find(|workspace| workspace.path == workspace_b)
+            .map(|workspace| workspace.id)
+            .expect("workspace b id");
+
+        let workspace_a_root = workspace_a
+            .canonicalize()
+            .expect("canonical workspace a")
+            .to_string_lossy()
+            .to_string();
+        let workspace_b_root = workspace_b
+            .canonicalize()
+            .expect("canonical workspace b")
+            .to_string_lossy()
+            .to_string();
+
+        let session_a = state
+            .start_agent_session(
+                &workspace_a_root,
+                crate::agent::AgentMode::Edit,
+                "Session in workspace A".to_string(),
+                Vec::new(),
+            )
+            .expect("start session A");
+
+        state
+            .mutate_registry(|registry| {
+                if registry.switch_workspace(&workspace_b_id) {
+                    Ok(())
+                } else {
+                    Err(format!("workspace not found: {workspace_b_id}"))
+                }
+            })
+            .expect("switch workspace");
+
+        let pack_b = state
+            .create_context_pack(
+                workspace_b_root.as_str(),
+                "Workspace B Pack".to_string(),
+                vec!["B.md".to_string()],
+            )
+            .expect("create pack in workspace b");
+
+        let reject = state.link_context_pack(pack_b.id.clone(), None, Some(session_a.id.clone()));
+        assert!(reject
+            .unwrap_err()
+            .contains("agent session does not belong to active workspace"));
+
+        let session_b = state
+            .start_agent_session(
+                &workspace_b_root,
+                crate::agent::AgentMode::Edit,
+                "Session in workspace B".to_string(),
+                Vec::new(),
+            )
+            .expect("start session B");
+        let link_ok = state.link_context_pack(pack_b.id.clone(), None, Some(session_b.id.clone()));
+        assert!(link_ok.is_ok());
     }
 
     #[cfg(unix)]
