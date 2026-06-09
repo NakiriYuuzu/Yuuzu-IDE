@@ -573,13 +573,19 @@ fn has_dsn_key_value_connection_string(value: &str) -> bool {
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
 
-    const RAW_DSN_KEYS: [&str; 6] = [
+    const RAW_DSN_KEYS: [&str; 12] = [
         "host=",
         "server=",
         "database=",
         "dbname=",
         "user=",
         "username=",
+        "datasource=",
+        "initialcatalog=",
+        "userid=",
+        "uid=",
+        "password=",
+        "pwd=",
     ];
 
     RAW_DSN_KEYS.iter().any(|key| {
@@ -1283,6 +1289,12 @@ mod tests {
         assert!(has_raw_dsn_prefix("host=localhost dbname=app user=yuuzu"));
         assert!(has_raw_dsn_prefix("Server=localhost;Database=app"));
         assert!(has_raw_dsn_prefix("host = localhost password = pw"));
+        assert!(has_raw_dsn_prefix(
+            "Data Source=localhost;Initial Catalog=app;User ID=sa;Password=pw"
+        ));
+        assert!(has_raw_dsn_prefix(
+            "Data Source=localhost;UID=sa;PWD=pw;Database=app"
+        ));
         assert!(!has_raw_dsn_prefix("localhost"));
         assert!(!has_raw_dsn_prefix("user_only"));
     }
@@ -1427,6 +1439,14 @@ mod tests {
             (
                 DatabaseKind::PostgreSQL,
                 "jdbc:sqlserver://db:1433;password=pw".to_string(),
+            ),
+            (
+                DatabaseKind::MsSql,
+                "Data Source=localhost;Initial Catalog=app;User ID=sa;Password=pw".to_string(),
+            ),
+            (
+                DatabaseKind::MsSql,
+                "server=localhost;UID=sa;PWD=pw;Database=app".to_string(),
             ),
         ];
 
