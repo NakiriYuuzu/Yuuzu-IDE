@@ -177,16 +177,6 @@ impl AgentSessionStore {
         let _guard = self.lock.lock().map_err(|err| err.to_string())?;
         let mut sessions = self.load()?;
         let now = current_time_ms()?;
-        let max_updated_ms = sessions
-            .iter()
-            .map(|session| session.updated_ms)
-            .max()
-            .unwrap_or(now);
-        let session_updated_ms = if max_updated_ms < now {
-            now
-        } else {
-            max_updated_ms.saturating_add(1)
-        };
         let session_id = uuid::Uuid::new_v4().to_string();
         let mut session = AgentSession {
             id: session_id.clone(),
@@ -196,7 +186,7 @@ impl AgentSessionStore {
             context_items: bound_context_items(context_items),
             transcript: Vec::new(),
             created_ms: now,
-            updated_ms: session_updated_ms,
+            updated_ms: now,
         };
         session.transcript.push(AgentTranscriptEntry {
             id: uuid::Uuid::new_v4().to_string(),
@@ -211,7 +201,7 @@ impl AgentSessionStore {
         });
         sessions.push(session.clone());
         trim_session_transcript(&mut session.transcript, MAX_AGENT_TRANSCRIPT_ENTRIES);
-        trim_sessions(&mut sessions);
+        trim_sessions_preserve_newest(&mut sessions, &session.id);
         self.save(&sessions)?;
         sessions
             .into_iter()
@@ -433,9 +423,21 @@ fn trim_session_transcript(transcript: &mut Vec<AgentTranscriptEntry>, max_entri
     transcript.drain(0..drop_count);
 }
 
-fn trim_sessions(sessions: &mut Vec<AgentSession>) {
+fn trim_sessions_preserve_newest(sessions: &mut Vec<AgentSession>, preserved_session_id: &str) {
+    let Some(preserved_index) = sessions
+        .iter()
+        .position(|session| session.id == preserved_session_id)
+    else {
+        return;
+    };
+
+    let preserved_session = sessions.swap_remove(preserved_index);
     sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_ms));
-    sessions.truncate(MAX_AGENT_SESSIONS);
+    if sessions.len() >= MAX_AGENT_SESSIONS {
+        sessions.truncate(MAX_AGENT_SESSIONS - 1);
+    }
+    sessions.push(preserved_session);
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_ms));
 }
 
 fn session_mut<'a>(
@@ -822,6 +824,43 @@ mod tests {
         assert!(
             sessions.iter().any(|entry| entry.id == session.id),
             "newly created session should be persisted after trim"
+        );
+    }
+
+    #[test]
+    fn start_session_survives_trim_with_saturated_existing_timestamps() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = AgentSessionStore::new(temp.path().join("agent-sessions.json"));
+        let mut seeded_sessions = Vec::new();
+
+        for index in 0..MAX_AGENT_SESSIONS {
+            seeded_sessions.push(AgentSession {
+                id: format!("seed-session-{index}"),
+                workspace_root: "/workspace".to_string(),
+                mode: AgentMode::Plan,
+                prompt: "Seed session".to_string(),
+                context_items: Vec::new(),
+                transcript: Vec::new(),
+                created_ms: index as u64,
+                updated_ms: u64::MAX,
+            });
+        }
+        store.save(&seeded_sessions).expect("seed sessions");
+
+        let session = store
+            .start_session(
+                "/workspace",
+                AgentMode::Verify,
+                "Survive saturated trim",
+                Vec::new(),
+            )
+            .expect("start session");
+
+        let sessions = store.list_sessions("/workspace").expect("list sessions");
+        assert_eq!(sessions.len(), MAX_AGENT_SESSIONS);
+        assert!(
+            sessions.iter().any(|entry| entry.id == session.id),
+            "start_session must persist even when existing timestamps are saturated"
         );
     }
 }
