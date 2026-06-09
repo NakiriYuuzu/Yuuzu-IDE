@@ -78,6 +78,36 @@ impl AppState {
         Err(format!("workspace not registered: {workspace_root}"))
     }
 
+    fn active_workspace_root(&self) -> Result<PathBuf, String> {
+        let registry = self.registry.lock().map_err(|err| err.to_string())?;
+        let active_id = registry
+            .active_workspace_id
+            .as_deref()
+            .ok_or_else(|| "no active workspace selected".to_string())?;
+        let workspace = registry
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id == active_id)
+            .ok_or_else(|| format!("active workspace not found: {active_id}"))?;
+
+        workspace
+            .path
+            .canonicalize()
+            .map_err(|err| format!("active workspace unavailable: {err}"))
+    }
+
+    fn ensure_context_pack_in_active_workspace(&self, id: &str) -> Result<(), String> {
+        let active_workspace_root = self.active_workspace_root()?;
+        let pack_workspace_root = self.docs_store.pack_workspace_root(id)?;
+        if pack_workspace_root == active_workspace_root.to_string_lossy() {
+            return Ok(());
+        }
+
+        Err(format!(
+            "context pack does not belong to active workspace: {id}"
+        ))
+    }
+
     pub fn settings_snapshot(&self) -> Result<AppSettings, String> {
         let settings = self.settings.lock().map_err(|err| err.to_string())?;
         Ok(settings.clone())
@@ -128,6 +158,7 @@ impl AppState {
     }
 
     pub fn delete_context_pack(&self, id: String) -> Result<(), String> {
+        self.ensure_context_pack_in_active_workspace(&id)?;
         self.docs_store.delete_pack(&id)
     }
 
@@ -137,6 +168,7 @@ impl AppState {
         task_run_id: Option<String>,
         agent_session_id: Option<String>,
     ) -> Result<crate::docs::ContextPack, String> {
+        self.ensure_context_pack_in_active_workspace(&id)?;
         self.docs_store
             .link_pack(&id, task_run_id.as_deref(), agent_session_id.as_deref())
     }
@@ -882,6 +914,62 @@ mod tests {
             String,
             Vec<String>,
         ) -> Result<crate::docs::ContextPack, String> = create_context_pack;
+    }
+
+    #[test]
+    fn context_pack_delete_and_link_reject_inactive_workspace_pack() {
+        let config = tempdir().expect("config dir");
+        let active_workspace = config.path().join("active-workspace");
+        let inactive_workspace = config.path().join("inactive-workspace");
+        std::fs::create_dir_all(&active_workspace).expect("active workspace");
+        std::fs::create_dir_all(&inactive_workspace).expect("inactive workspace");
+        std::fs::write(inactive_workspace.join("README.md"), "# Inactive\n").expect("readme");
+        let state = AppState::new(config.path()).expect("state");
+        state
+            .open_workspace_path(active_workspace.clone())
+            .expect("open active");
+        state
+            .open_workspace_path(inactive_workspace.clone())
+            .expect("open inactive");
+        let inactive_root = inactive_workspace
+            .canonicalize()
+            .expect("inactive canonical");
+        let inactive_root = inactive_root.to_str().expect("inactive root");
+        let delete_pack = state
+            .create_context_pack(
+                inactive_root,
+                "Delete pack".to_string(),
+                vec!["README.md".into()],
+            )
+            .expect("create delete pack");
+        let link_pack = state
+            .create_context_pack(
+                inactive_root,
+                "Link pack".to_string(),
+                vec!["README.md".into()],
+            )
+            .expect("create link pack");
+
+        let delete_result = state.delete_context_pack(delete_pack.id.clone());
+        let link_result = state.link_context_pack(
+            link_pack.id.clone(),
+            Some("workspace:task-1".to_string()),
+            Some("agent-session-1".to_string()),
+        );
+
+        assert!(delete_result
+            .expect_err("delete should reject inactive workspace")
+            .contains("active workspace"));
+        assert!(link_result
+            .expect_err("link should reject inactive workspace")
+            .contains("active workspace"));
+        assert_eq!(
+            state
+                .list_context_packs(inactive_root)
+                .expect("inactive packs")
+                .len(),
+            2
+        );
     }
 
     #[cfg(unix)]

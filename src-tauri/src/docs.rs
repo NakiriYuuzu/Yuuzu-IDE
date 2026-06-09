@@ -1,9 +1,10 @@
 use std::{
-    ffi::{OsStr, OsString},
+    ffi::OsStr,
     fs,
     fs::OpenOptions,
     io::Write,
     path::{Component, Path, PathBuf},
+    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -70,14 +71,19 @@ pub struct ContextPack {
 #[derive(Clone, Debug)]
 pub struct ContextPackStore {
     path: PathBuf,
+    lock: Arc<Mutex<()>>,
 }
 
 impl ContextPackStore {
     pub fn new(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            lock: Arc::new(Mutex::new(())),
+        }
     }
 
     pub fn list_packs(&self, workspace_root: &str) -> Result<Vec<ContextPack>, String> {
+        let _guard = self.lock.lock().map_err(|err| err.to_string())?;
         Ok(self
             .load()?
             .into_iter()
@@ -91,6 +97,7 @@ impl ContextPackStore {
         name: &str,
         doc_paths: Vec<String>,
     ) -> Result<ContextPack, String> {
+        let _guard = self.lock.lock().map_err(|err| err.to_string())?;
         let mut packs = self.load()?;
         let now = current_time_ms()?;
         let pack = ContextPack {
@@ -110,6 +117,7 @@ impl ContextPackStore {
     }
 
     pub fn delete_pack(&self, id: &str) -> Result<(), String> {
+        let _guard = self.lock.lock().map_err(|err| err.to_string())?;
         let mut packs = self.load()?;
         let original_len = packs.len();
         packs.retain(|pack| pack.id != id);
@@ -126,6 +134,7 @@ impl ContextPackStore {
         task_run_id: Option<&str>,
         agent_session_id: Option<&str>,
     ) -> Result<ContextPack, String> {
+        let _guard = self.lock.lock().map_err(|err| err.to_string())?;
         let mut packs = self.load()?;
         let pack = packs
             .iter_mut()
@@ -144,6 +153,15 @@ impl ContextPackStore {
 
         self.save(&packs)?;
         Ok(updated)
+    }
+
+    pub fn pack_workspace_root(&self, id: &str) -> Result<String, String> {
+        let _guard = self.lock.lock().map_err(|err| err.to_string())?;
+        self.load()?
+            .into_iter()
+            .find(|pack| pack.id == id)
+            .map(|pack| pack.workspace_root)
+            .ok_or_else(|| format!("context pack not found: {id}"))
     }
 
     fn load(&self) -> Result<Vec<ContextPack>, String> {
@@ -174,9 +192,11 @@ impl ContextPackStore {
             .path
             .file_name()
             .unwrap_or_else(|| OsStr::new("context-packs.json"));
-        let mut temp_file_name = OsString::from(".");
-        temp_file_name.push(file_name);
-        temp_file_name.push(".tmp");
+        let temp_file_name = format!(
+            ".{}.{}.tmp",
+            file_name.to_string_lossy(),
+            uuid::Uuid::new_v4()
+        );
         let temp_path = parent.join(temp_file_name);
 
         let result = (|| {
@@ -902,5 +922,46 @@ mod tests {
 
         assert_eq!(updated.linked_task_run_ids, vec!["workspace:task-1"]);
         assert_eq!(updated.linked_agent_session_ids, vec!["agent-session-1"]);
+    }
+
+    #[test]
+    fn context_pack_store_preserves_concurrent_creates() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = ContextPackStore::new(temp.path().join("context-packs.json"));
+        let writer_count = 32;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(writer_count));
+
+        let handles = (0..writer_count)
+            .map(|index| {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store
+                        .create_pack(
+                            "/workspace",
+                            &format!("Pack {index}"),
+                            vec![format!("docs/{index}.md")],
+                        )
+                        .expect("create pack")
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for handle in handles {
+            handle.join().expect("writer thread");
+        }
+
+        let loaded = store.list_packs("/workspace").expect("list packs");
+        let names = loaded
+            .iter()
+            .map(|pack| pack.name.clone())
+            .collect::<std::collections::HashSet<_>>();
+        let expected_names = (0..writer_count)
+            .map(|index| format!("Pack {index}"))
+            .collect::<std::collections::HashSet<_>>();
+
+        assert_eq!(loaded.len(), writer_count);
+        assert_eq!(names, expected_names);
     }
 }
