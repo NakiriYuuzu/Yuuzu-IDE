@@ -289,6 +289,7 @@ const panelTitles: Record<ActivityId, string> = {
 
 export type AgentAvailableContextSource = {
   workspaceRoot: string;
+  activeWorkspaceId: string | null;
   loadedFile: LoadedFile | null;
   docsPreviews: Array<
     Pick<DocPreview, "path" | "title" | "content">
@@ -313,7 +314,11 @@ export function collectAgentAvailableContext(
 ): AgentContextItem[] {
   const context: AgentContextItem[] = [];
 
-  if (source.loadedFile) {
+  if (
+    source.activeWorkspaceId &&
+    source.loadedFile &&
+    source.loadedFile.workspaceId === source.activeWorkspaceId
+  ) {
     context.push(
       agentContextFromFile({
         workspaceRoot: source.workspaceRoot,
@@ -919,15 +924,17 @@ export function AppShell() {
     () =>
       collectAgentAvailableContext({
         workspaceRoot: activeWorkspace?.path ?? "",
+        activeWorkspaceId: activeWorkspace?.id ?? null,
         loadedFile,
         docsPreviews,
         selectedDiff: selectedGitDiff,
-        activeFileDiagnostics,
-        terminalSession: activeTerminal,
-        terminalOutput: activeTerminalOutput,
-      }),
+      activeFileDiagnostics,
+      terminalSession: activeTerminal,
+      terminalOutput: activeTerminalOutput,
+    }),
     [
       activeWorkspace?.path,
+      activeWorkspace?.id,
       loadedFile,
       docsPreviews,
       selectedGitDiff,

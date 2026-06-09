@@ -51,6 +51,7 @@ describe("AppShell AppShell helpers", () => {
   test("collects all bounded agent context pieces", () => {
     const source = {
       workspaceRoot: "/repo",
+      activeWorkspaceId: "w:1",
       loadedFile: {
         workspaceId: "w:1",
         path: "src/app/AppShell.tsx",
@@ -115,6 +116,47 @@ describe("AppShell AppShell helpers", () => {
     expect(labels).toContain("zsh");
     expect(contents).toContain("# Guide");
     expect(contents).toContain("# FAQ");
+  });
+
+  test("collects bounded context excluding stale loaded file from inactive workspace", () => {
+    const source = {
+      workspaceRoot: "/repo",
+      activeWorkspaceId: "w:1",
+      loadedFile: {
+        workspaceId: "w:old",
+        path: "src/legacy/AppShell.tsx",
+        content: "export const legacy = false;",
+        language: "typescript",
+        readOnly: false,
+      },
+      docsPreviews: [
+        {
+          path: "docs/guide.md",
+          title: "Guide",
+          content: "# Guide",
+        },
+      ],
+      selectedDiff: null,
+      activeFileDiagnostics: [],
+      terminalSession: {
+        id: "w:terminal-2",
+        workspace_id: "w:1",
+        name: "bash",
+        cwd: "/repo",
+        shell: "/bin/bash",
+        running: true,
+      },
+      terminalOutput: "$ bun test",
+    };
+
+    const contextItems = collectAgentAvailableContext(source);
+    const labels = contextItems.map((item) => item.label);
+    const contents = contextItems.map((item) => item.content);
+
+    expect(labels).not.toContain("src/legacy/AppShell.tsx");
+    expect(contents).not.toContain("export const legacy = false;");
+    expect(labels).toContain("Guide");
+    expect(labels).toContain("bash");
   });
 
   test("PanelBody renders AgentPanel and routes callbacks", () => {
