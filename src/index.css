@@ -3004,6 +3004,16 @@ button {
     display: inline-flex;
   }
 
+  .agent-panel .agent-modes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .agent-panel .agent-modes .btn.sm {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .agent-panel .agent-status,
   .agent-panel .agent-transcript-head .badge2 {
     display: inline-flex;

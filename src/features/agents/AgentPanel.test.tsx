@@ -562,11 +562,19 @@ describe("AgentPanel css contract", () => {
       mediaBlock,
       ".agent-panel .agent-transcript-head .badge2",
     );
+    const modeGridRule = extractRuleBody(mediaBlock, ".agent-panel .agent-modes");
+    const compactModeButtonRule = extractRuleBody(
+      mediaBlock,
+      ".agent-panel .agent-modes .btn.sm",
+    );
 
     expect(globalBadgeRule).toContain("display: none");
     expect(toolbarBadgeRule).toContain("display: inline-flex");
     expect(statusRule).toContain("display: inline-flex");
     expect(transcriptBadgeRule).toContain("display: inline-flex");
+    expect(modeGridRule).toContain("grid-template-columns");
+    expect(modeGridRule).not.toContain("repeat(5");
+    expect(compactModeButtonRule).toContain("overflow");
   });
 
   test("uses runtime-defined tokens for passed status", () => {
