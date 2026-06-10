@@ -892,7 +892,71 @@ Final verification outcomes:
   `bun test src/app/activity-rail.test.tsx src/features/docs/DocsPanel.test.tsx src/features/browser/BrowserPanel.test.tsx src/features/browser/BrowserPreviewSurface.test.tsx`
   passed afterward with 24 passed, 0 failed, 70 expect calls.
 
+### Node 9: Database Tools
+
+Status: completed and passed.
+
+Node 9 finished Tasks 1-6 and records the final results in
+`docs/architecture/node-9-database-tools-results.md`.
+
+Key deliverables:
+
+- Rust-owned database domain, schema inspection, query execution, bounded history,
+  and CSV export through keyring-backed secrets.
+- Database frontend model, commands, panel, virtualized result view, and confirmation
+  workflow.
+- Workspace-scoped database state in AppShell and view store.
+
+Important files:
+
+- `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`,
+  `src-tauri/src/database.rs`, `src-tauri/src/commands.rs`,
+  `src-tauri/src/lib.rs`, `src/features/database/database-model.ts`,
+  `src/features/database/database-api.ts`,
+  `src/features/database/DatabasePanel.tsx`,
+  `src/features/database/DatabaseResultView.tsx`,
+  `src/app/AppShell.tsx`, `src/app/workspace-view-state.ts`,
+  `src/app/AppShell.contract.test.tsx`,
+  `src/app/workspace-view-state.test.ts`.
+
+Key commit milestones:
+
+- `05a1559`, `260c91d`, `313f996`, `2258c2f`, `6237d69`, `922b467`,
+  `5338010`, `9c41620`, `70f836c`, `d3aa5b8`, `bc9762a`,
+  `daa54bb`, `577f745`, `f822554`, `70df3f6`, `5057986`, `7437a03`,
+  `c16563d`, `13d320c`, `6042dca`, `bdf09ca`, `7ebcf58`.
+
+Verification outcomes:
+
+- `bun test`: PASS with 269 passed, 0 failed, 758 expect calls across 34 files.
+- `bun run build`: PASS with `tsc && vite build`; Vite chunk-size warnings only.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml`:
+  PASS with 227 passed, 0 failed, 1 ignored.
+- `. "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check`:
+  PASS.
+- `. "$HOME/.cargo/env" && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings`:
+  PASS.
+- `. "$HOME/.cargo/env" && bun run tauri build --debug`: PASS with
+  `src-tauri/target/debug/yuuzu-ide`,
+  `src-tauri/target/debug/bundle/macos/Yuuzu-IDE.app`, and
+  `src-tauri/target/debug/bundle/dmg/Yuuzu-IDE_0.1.0_aarch64.dmg`.
+- `bun test src/features/browser/browser-model.test.ts src/features/browser/BrowserPanel.test.tsx src/features/browser/BrowserPreviewSurface.test.tsx src/app/AppShell.contract.test.tsx`:
+  PASS with 63 passed, 0 failed, 227 expect() calls.
+- `bun test src/features/database/database-model.test.ts src/features/database/DatabasePanel.test.tsx src/features/database/DatabaseResultView.test.tsx src/app/workspace-view-state.test.ts src/app/AppShell.contract.test.tsx`:
+  PASS with 66 passed, 0 failed, 245 expect() calls.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml database::tests`:
+  PASS with 36 passed, 0 failed, 0 ignored.
+
+Residual risks:
+
+- Live PostgreSQL/MS SQL verification depends on user-provided servers and
+  credentials.
+- OS keyring availability can vary across platforms; secret metadata stays on disk
+  only via opaque IDs.
+- SQL query classification is kept conservative and is covered by Rust/frontend unit
+  tests.
+
 Next decision:
 
-- Move from browser preview and local dev loop to Node 9 Database Tools, using the
-  browser/agent/docs/task context now available in the workbench.
+- Move from database tools to Node 10 Remote SSH And SFTP, using database, browser,
+  agent, and docs context now available in the workbench.

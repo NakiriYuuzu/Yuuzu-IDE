@@ -512,6 +512,9 @@ context.
 
 ### Node 9: Database Tools
 
+**Status:** completed and passed. Final results are recorded in
+`docs/architecture/node-9-database-tools-results.md`.
+
 **Goal:** bring common local and remote database inspection into the workbench.
 
 **Scope**
@@ -695,8 +698,8 @@ stable.
 
 ## Current Priority
 
-Node 0, Node 1, Node 2, Node 3, Node 4, Node 5, Node 6, Node 7, and Node 8 are
-complete. The next active priority is Node 9: Database Tools.
+Node 0, Node 1, Node 2, Node 3, Node 4, Node 5, Node 6, Node 7, Node 8, and
+Node 9 are complete. The next active priority is Node 10.
 
 - Node 0 measurements keep Tauri 2 as the main route; Rust-native fallback
   research remains deferred.
