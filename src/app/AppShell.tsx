@@ -44,6 +44,7 @@ import {
   type DatabaseQueryResult,
   type DatabaseSchema,
   type DatabaseQueryHistoryEntry,
+  type DatabaseProfile,
   type DatabaseTable,
   type QueryClassification,
   type QueryKind,
@@ -777,10 +778,35 @@ export function databaseTableSql(
 }
 
 function stripDatabaseSqlComments(sql: string): string {
-  return sql
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/--.*(?=[\n\r]|$)/g, " ")
-    .trim();
+  let cursor = 0;
+  let normalized = "";
+
+  while (cursor < sql.length) {
+    const char = sql[cursor];
+    if (char === "'" || char === '"') {
+      const end = char === "'" ? skipSingleQuote(sql, cursor) : skipDoubleQuote(sql, cursor);
+      normalized += sql.slice(cursor, end);
+      cursor = end;
+      continue;
+    }
+
+    if (char === "-" && sql[cursor + 1] === "-") {
+      cursor = skipLineComment(sql, cursor);
+      normalized += " ";
+      continue;
+    }
+
+    if (char === "/" && sql[cursor + 1] === "*") {
+      cursor = skipBlockComment(sql, cursor);
+      normalized += " ";
+      continue;
+    }
+
+    normalized += char;
+    cursor += 1;
+  }
+
+  return normalized;
 }
 
 type DatabaseQueryRunResultContext = {
@@ -973,13 +999,23 @@ export async function inspectDatabaseProfileRequest({
     }
 
     const currentDatabase = workspaceViewStore.getState().viewFor(workspaceId).database;
+    if (
+      !hasRegisteredWorkspace(workspaceId) ||
+      getWorkspaceRoot(workspaceId) !== workspaceRoot ||
+      currentDatabase.activeProfileId !== profileId
+    ) {
+      updateDatabase(workspaceId, (database) => ({
+        ...database,
+        loading: false,
+        error: null,
+      }));
+      return;
+    }
+
     updateDatabase(workspaceId, (database) => ({
       ...database,
       loading: false,
-      error:
-        currentDatabase.activeProfileId === profileId
-          ? `Inspect schema failed: ${terminalErrorMessage(error)}`
-          : null,
+      error: `Inspect schema failed: ${terminalErrorMessage(error)}`,
     }));
   }
 }
@@ -1002,6 +1038,78 @@ type ExportDatabaseResultRequestContext = {
     result: DatabaseQueryResult,
   ) => Promise<DatabaseExport>;
 };
+
+type RefreshDatabaseProfilesRunContext = {
+  workspaceId: string;
+  workspaceRoot: string;
+  requestId: number;
+  hasRegisteredWorkspace: (workspaceId: string) => boolean;
+  getWorkspaceRoot: (workspaceId: string) => string | null;
+  isLatestDatabaseProfilesRequest: (
+    workspaceId: string,
+    requestId: number,
+  ) => boolean;
+  isActiveWorkspace: (workspaceId: string) => boolean;
+  updateDatabase: (
+    workspaceId: string,
+    update: (database: DatabaseViewState) => DatabaseViewState,
+  ) => void;
+  listDatabaseProfiles: (workspaceRoot: string) => Promise<DatabaseProfile[]>;
+};
+
+export async function refreshDatabaseProfilesRequest({
+  workspaceId,
+  workspaceRoot,
+  requestId,
+  hasRegisteredWorkspace,
+  getWorkspaceRoot,
+  isLatestDatabaseProfilesRequest,
+  isActiveWorkspace,
+  updateDatabase,
+  listDatabaseProfiles: listProfiles,
+}: RefreshDatabaseProfilesRunContext): Promise<void> {
+  try {
+    const profiles = await listProfiles(workspaceRoot);
+
+    if (!isLatestDatabaseProfilesRequest(workspaceId, requestId)) {
+      return;
+    }
+
+    if (
+      !hasRegisteredWorkspace(workspaceId) ||
+      getWorkspaceRoot(workspaceId) !== workspaceRoot ||
+      !isActiveWorkspace(workspaceId)
+    ) {
+      return;
+    }
+
+    updateDatabase(workspaceId, (database) =>
+      replaceDatabaseProfiles(database, profiles),
+    );
+  } catch (error) {
+    if (!isLatestDatabaseProfilesRequest(workspaceId, requestId)) {
+      return;
+    }
+
+    if (
+      !hasRegisteredWorkspace(workspaceId) ||
+      getWorkspaceRoot(workspaceId) !== workspaceRoot ||
+      !isActiveWorkspace(workspaceId)
+    ) {
+      updateDatabase(workspaceId, (database) => ({
+        ...database,
+        loading: false,
+        error: null,
+      }));
+      return;
+    }
+
+    updateDatabase(workspaceId, (database) => ({
+      ...database,
+      error: `Load database profiles failed: ${terminalErrorMessage(error)}`,
+    }));
+  }
+}
 
 function databaseResultId(
   result: Pick<DatabaseQueryResult, "profile_id" | "history_id" | "executed_ms"> | null,
@@ -4765,39 +4873,18 @@ export function AppShell() {
       [workspaceId]: requestId,
     };
 
-    try {
-      const profiles = await listDatabaseProfiles(workspaceRoot);
-      const currentWorkspace = workspaceStore
-        .getState()
-        .registry.workspaces.find((workspace) => workspace.id === workspaceId);
-
-      if (
-        databaseProfilesLoadRef.current[workspaceId] !== requestId ||
-        !hasRegisteredWorkspace(workspaceId) ||
-        !currentWorkspace ||
-        currentWorkspace.path !== workspaceRoot ||
-        workspaceStore.getState().registry.active_workspace_id !== workspaceId
-      ) {
-        return;
-      }
-
-      updateDatabase(workspaceId, (database) =>
-        replaceDatabaseProfiles(database, profiles),
-      );
-    } catch (error) {
-      if (
-        databaseProfilesLoadRef.current[workspaceId] !== requestId ||
-        !hasRegisteredWorkspace(workspaceId) ||
-        workspaceStore.getState().registry.active_workspace_id !== workspaceId
-      ) {
-        return;
-      }
-
-      updateDatabase(workspaceId, (database) => ({
-        ...database,
-        error: `Load database profiles failed: ${terminalErrorMessage(error)}`,
-      }));
-    }
+    await refreshDatabaseProfilesRequest({
+      workspaceId,
+      workspaceRoot,
+      requestId,
+      hasRegisteredWorkspace,
+      getWorkspaceRoot,
+      isLatestDatabaseProfilesRequest,
+      isActiveWorkspace: (currentWorkspaceId) =>
+        workspaceStore.getState().registry.active_workspace_id === currentWorkspaceId,
+      updateDatabase,
+      listDatabaseProfiles,
+    });
   }
 
   function refreshDatabaseProfiles() {
@@ -4834,6 +4921,10 @@ export function AppShell() {
     return (
       databaseInspectProfileRequestRef.current[workspaceId] === requestId
     );
+  }
+
+  function isLatestDatabaseProfilesRequest(workspaceId: string, requestId: number) {
+    return databaseProfilesLoadRef.current[workspaceId] === requestId;
   }
 
   function isLatestDatabaseQueryRequest(workspaceId: string, requestId: number) {

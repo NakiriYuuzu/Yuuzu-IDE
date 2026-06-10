@@ -20,6 +20,7 @@ import {
   type DatabaseQueryResult,
   type DatabaseQueryRequest,
   type DatabaseQueryHistoryEntry,
+  type DatabaseProfile,
   type DatabaseViewState,
   type DatabaseSchema,
   type DatabaseTable,
@@ -40,6 +41,7 @@ import {
   classifyDatabaseSql,
   executeDatabaseQueryRequest,
   inspectDatabaseProfileRequest,
+  refreshDatabaseProfilesRequest,
   exportDatabaseQueryResultRequest,
   type BrowserCaptureRequestState,
   type BrowserValidationRequestState,
@@ -1624,6 +1626,154 @@ describe("AppShell AppShell helpers", () => {
     expect(database.schemaByProfileId[profileId]).toBeUndefined();
   });
 
+  test("inspectDatabaseProfileRequest clears stale errors on workspace path change when inspect fails", async () => {
+    const { workspaceId, workspaceRoot, profileId } = setupWorkspace();
+    const deferred = createDeferred<DatabaseSchema>();
+    const inspectDatabaseSchema = mock(async () => deferred.promise);
+    const updateDatabase = setDatabase;
+    const previousSchema: DatabaseSchema = {
+      profile_id: profileId,
+      refreshed_ms: 1,
+      tables: [
+        {
+          schema: "main",
+          name: "users",
+          row_count: 5,
+          columns: [],
+        },
+      ],
+    };
+    const hasRegisteredWorkspace = (currentWorkspaceId: string) =>
+      workspaceStore.getState().registry.workspaces.some(
+        (workspace) => workspace.id === currentWorkspaceId,
+      );
+    const getWorkspaceRoot = (currentWorkspaceId: string) =>
+      workspaceStore.getState().registry.workspaces.find(
+        (workspace) => workspace.id === currentWorkspaceId,
+      )?.path ?? null;
+
+    setDatabase(workspaceId, (database) => ({
+      ...database,
+      loading: true,
+      error: "stale inspect error",
+      schemaByProfileId: {
+        [profileId]: previousSchema,
+      },
+    }));
+
+    const request = inspectDatabaseProfileRequest({
+      workspaceId,
+      workspaceRoot,
+      profileId,
+      requestId: 1,
+      hasRegisteredWorkspace,
+      getWorkspaceRoot,
+      isLatestInspectProfileRequest: () => true,
+      updateDatabase,
+      inspectDatabaseSchema,
+    });
+
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: workspaceId,
+      workspaces: [
+        {
+          id: workspaceId,
+          path: `${workspaceRoot}-switched`,
+          name: workspaceId,
+          pinned: false,
+        },
+      ],
+    });
+
+    deferred.reject(new Error("database inspect failed"));
+
+    await request;
+
+    const database = workspaceViewStore.getState().viewFor(workspaceId).database;
+    expect(database.loading).toBe(false);
+    expect(database.error).toBeNull();
+    expect(database.schemaByProfileId[profileId]).toEqual(previousSchema);
+  });
+
+  test("refreshDatabaseProfilesRequest does not write stale load errors after workspace path change", async () => {
+    const { workspaceId, workspaceRoot, profileId } = setupWorkspace();
+    const deferred = createDeferred<DatabaseProfile[]>();
+    const listDatabaseProfiles = mock(async () => deferred.promise);
+    const hasRegisteredWorkspace = (currentWorkspaceId: string) =>
+      workspaceStore.getState().registry.workspaces.some(
+        (workspace) => workspace.id === currentWorkspaceId,
+      );
+    const getWorkspaceRoot = (currentWorkspaceId: string) =>
+      workspaceStore.getState().registry.workspaces.find(
+        (workspace) => workspace.id === currentWorkspaceId,
+      )?.path ?? null;
+
+    setDatabase(workspaceId, (database) => ({
+      ...database,
+      loading: true,
+      error: "previous profile load error",
+      profiles: [
+        {
+          id: profileId,
+          workspace_root: workspaceRoot,
+          name: "local.db",
+          kind: "SQLite",
+          source: { SQLite: { path: `${workspaceRoot}/${profileId}.db` } },
+          read_only: false,
+          production: false,
+          created_ms: 10,
+          updated_ms: 11,
+        },
+      ],
+    }));
+
+    const request = refreshDatabaseProfilesRequest({
+      workspaceId,
+      workspaceRoot,
+      requestId: 1,
+      hasRegisteredWorkspace,
+      getWorkspaceRoot,
+      isLatestDatabaseProfilesRequest: () => true,
+      isActiveWorkspace: (currentWorkspaceId) =>
+        workspaceStore.getState().registry.active_workspace_id === currentWorkspaceId,
+      updateDatabase: setDatabase,
+      listDatabaseProfiles,
+    });
+
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: workspaceId,
+      workspaces: [
+        {
+          id: workspaceId,
+          path: `${workspaceRoot}-switched`,
+          name: workspaceId,
+          pinned: false,
+        },
+      ],
+    });
+
+    deferred.reject(new Error("database profile list failed"));
+
+    await request;
+
+    const database = workspaceViewStore.getState().viewFor(workspaceId).database;
+    expect(database.loading).toBe(false);
+    expect(database.error).toBeNull();
+    expect(database.profiles).toEqual([
+      {
+        id: profileId,
+        workspace_root: workspaceRoot,
+        name: "local.db",
+        kind: "SQLite",
+        source: { SQLite: { path: `${workspaceRoot}/${profileId}.db` } },
+        read_only: false,
+        production: false,
+        created_ms: 10,
+        updated_ms: 11,
+      },
+    ]);
+  });
+
   test("exportDatabaseQueryResultRequest does not write export when active result changed", async () => {
     const { workspaceId, workspaceRoot, profileId } = setupWorkspace();
     const initialResult = {
@@ -1728,6 +1878,15 @@ describe("AppShell AppShell helpers", () => {
     ).toBe("Destructive");
     expect(
       classifyDatabaseSql("UNKNOWN COMMAND something").kind,
+    ).toBe("Destructive");
+    expect(
+      classifyDatabaseSql("SELECT '--'; DROP TABLE users").kind,
+    ).toBe("Destructive");
+    expect(
+      classifyDatabaseSql("SELECT 'x -- y'; DROP TABLE users").confirmation_text,
+    ).toBe("RUN DESTRUCTIVE SQL");
+    expect(
+      classifyDatabaseSql("SELECT '/*'; DROP TABLE users; SELECT '*/'").kind,
     ).toBe("Destructive");
     expect(classifyDatabaseSql("").requires_confirmation).toBe(true);
     expect(classifyDatabaseSql("").confirmation_text).toBe(
