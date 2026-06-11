@@ -14,6 +14,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 pub const DEBUG_LOG_LIMIT: usize = 120_000;
+pub const DAP_MESSAGE_BODY_LIMIT: usize = 120_000;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum DebugAdapterKind {
@@ -107,6 +108,11 @@ pub fn decode_dap_message(buffer: &mut Vec<u8>) -> Result<Option<Value>, String>
     let content_length = content_length_value
         .parse::<usize>()
         .map_err(|err| format!("invalid DAP Content-Length: {err}"))?;
+    if content_length > DAP_MESSAGE_BODY_LIMIT {
+        return Err(format!(
+            "DAP message body too large: {content_length} bytes exceeds {DAP_MESSAGE_BODY_LIMIT}"
+        ));
+    }
 
     let body_start = header_end + 4;
     let body_end = body_start
@@ -157,6 +163,15 @@ pub fn normalize_debug_source_path(
         }
         canonical
     } else {
+        let existing_parent = nearest_existing_parent(&normalized)?
+            .canonicalize()
+            .map_err(|err| err.to_string())?;
+        if !existing_parent.starts_with(&root) {
+            return Err(format!(
+                "source path outside workspace: {}",
+                candidate.display()
+            ));
+        }
         normalized
     };
 
@@ -406,6 +421,20 @@ fn normalize_path(path: &Path) -> Result<PathBuf, String> {
     Ok(normalized)
 }
 
+fn nearest_existing_parent(path: &Path) -> Result<PathBuf, String> {
+    let mut current = path
+        .parent()
+        .ok_or_else(|| "source path has no parent".to_string())?
+        .to_path_buf();
+    while !current.exists() {
+        current = current
+            .parent()
+            .ok_or_else(|| "source path has no existing parent".to_string())?
+            .to_path_buf();
+    }
+    Ok(current)
+}
+
 fn relative_path_string(path: &Path) -> Result<String, String> {
     let parts = path
         .components()
@@ -450,6 +479,16 @@ mod tests {
         assert!(decode_dap_message(&mut bad)
             .expect_err("missing length")
             .contains("Content-Length"));
+    }
+
+    #[test]
+    fn dap_framing_rejects_oversized_content_length() {
+        let mut buffer =
+            format!("Content-Length: {}\r\n\r\n", DAP_MESSAGE_BODY_LIMIT + 1).into_bytes();
+
+        assert!(decode_dap_message(&mut buffer)
+            .expect_err("oversized frame")
+            .contains("too large"));
     }
 
     #[test]
@@ -500,6 +539,17 @@ mod tests {
                 .expect_err("outside")
                 .contains("outside workspace")
         );
+    }
+
+    #[test]
+    fn normalize_debug_source_path_rejects_nonexistent_child_below_symlinked_parent() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("outside");
+        create_dir_symlink(outside.path(), &temp.path().join("link")).expect("symlink");
+
+        assert!(normalize_debug_source_path(temp.path(), "link/new.py")
+            .expect_err("symlink escape")
+            .contains("outside workspace"));
     }
 
     #[test]
@@ -569,6 +619,18 @@ mod tests {
             }],
             stop_on_entry: true,
             attach: None,
+        }
+    }
+
+    fn create_dir_symlink(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link)
+        }
+
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_dir(target, link)
         }
     }
 }
