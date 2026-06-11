@@ -63,7 +63,7 @@
 
 .remote-host-select {
   min-width: 0;
-  height: 34px;
+  min-height: 34px;
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) 8px;
   align-items: center;
@@ -107,6 +107,15 @@
 .remote-host-meta {
   color: var(--txt-faint);
   font-size: 10.5px;
+}
+
+.remote-health {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--danger);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .remote-connected {
@@ -285,4 +294,14 @@
 
 .remote-empty {
   min-height: 140px;
+}
+
+.remote-transfer {
+  min-width: 0;
+  overflow: hidden;
+  padding: 6px 10px;
+  color: var(--txt-dim);
+  border-top: 1px solid var(--line);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

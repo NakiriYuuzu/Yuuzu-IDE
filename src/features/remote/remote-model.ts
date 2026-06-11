@@ -360,6 +360,13 @@ export function setSftpEntries(
   };
 }
 
+export function recordRemoteTransfer(
+  state: RemoteViewState,
+  transfer: RemoteTransferResult,
+): RemoteViewState {
+  return { ...state, transfer, error: null };
+}
+
 export function appendRemoteCommandOutput(
   state: RemoteViewState,
   runId: string,

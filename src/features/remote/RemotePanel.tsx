@@ -141,6 +141,12 @@ export function RemotePanel({
             onRunCommand={onRunCommand}
           />
         ) : null}
+
+        {state.transfer ? (
+          <div className="remote-transfer mono">
+            {state.transfer.bytes} bytes · {state.transfer.remote_path}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -171,8 +177,8 @@ function RemoteHostList({
       </div>
       <div className="remote-host-list">
         {state.hosts.map((host) => {
-          const snapshot = state.connectionByHostId[host.id];
-          const status = snapshot?.status ?? "Disconnected";
+          const health = state.connectionByHostId[host.id];
+          const status = health?.status ?? "Disconnected";
           const active = host.id === state.activeHostId;
 
           return (
@@ -197,6 +203,11 @@ function RemoteHostList({
                   <span className="mono remote-host-meta">
                     {host.username}@{host.host}
                   </span>
+                  {health?.status === "Failed" && health.message ? (
+                    <span className="remote-health mono">
+                      {health.message}
+                    </span>
+                  ) : null}
                 </span>
                 <span
                   className={`remote-dot ${statusClassName(status)}`}

@@ -80,6 +80,43 @@ describe("RemotePanel", () => {
     expect(onOpenSsh).toHaveBeenCalledWith("edge");
   });
 
+  test("shows connection failure and lets user retry", () => {
+    const state = {
+      ...stateWithHost(),
+      connectionByHostId: {
+        edge: {
+          host_id: "edge",
+          status: "Failed" as const,
+          message: "edge.example.com refused connection",
+          checked_ms: 1,
+        },
+      },
+    };
+    const onConnectHost = mock<(hostId: string) => void>(() => {});
+
+    const result = render(
+      <RemotePanel
+        state={state}
+        onModeChange={() => {}}
+        onSelectHost={() => {}}
+        onRefresh={() => {}}
+        onCreateHost={() => {}}
+        onConnectHost={onConnectHost}
+        onOpenSsh={() => {}}
+        onOpenSftp={() => {}}
+        onRunCommand={() => {}}
+        onCommandDraftChange={() => {}}
+        onListSftpDirectory={() => {}}
+        onDownloadFile={() => {}}
+        onUploadFile={() => {}}
+      />,
+    );
+
+    expect(result.getByText("edge.example.com refused connection")).toBeTruthy();
+    fireEvent.click(result.getByLabelText("Connect edge-01"));
+    expect(onConnectHost).toHaveBeenCalledWith("edge");
+  });
+
   test("switches to SFTP and renders remote files", () => {
     const onModeChange = mock<(mode: RemoteViewState["mode"]) => void>(() => {});
     let state = stateWithHost();

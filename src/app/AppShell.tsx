@@ -41,13 +41,16 @@ import { SshTerminalSurface } from "../features/remote/SshTerminalSurface";
 import {
   closeSshTerminalSession,
   connectRemoteHost,
+  downloadSftpFile,
   listRemoteHosts,
   listSftpDirectory,
   listSshTerminalSessions,
   listenSshTerminalExit,
   listenSshTerminalOutput,
   runRemoteCommand,
+  saveRemoteHost,
   spawnSshTerminal,
+  uploadSftpFile,
   writeSshTerminal,
 } from "../features/remote/remote-api";
 import {
@@ -57,6 +60,7 @@ import {
   closeSshTerminal,
   markRemoteConnection,
   markSshTerminalExited,
+  recordRemoteTransfer,
   replaceRemoteHosts,
   selectRemoteHost,
   setRemoteCommandResult,
@@ -4650,6 +4654,55 @@ export function AppShell() {
     void refreshRemoteHostsForWorkspace(activeWorkspaceId, activeWorkspace.path);
   }
 
+  async function createRemoteHostFromPrompt() {
+    if (!activeWorkspace) {
+      return;
+    }
+
+    const target = window.prompt(
+      "SSH host as user@hostname[:port]",
+      "deploy@edge.example.com",
+    );
+    if (!target) {
+      return;
+    }
+
+    const match = target.match(/^([^@\s]+)@([^:\s]+)(?::([0-9]{1,5}))?$/);
+    if (!match) {
+      updateRemote(activeWorkspaceId, (remote) => ({
+        ...remote,
+        error: "Use user@hostname[:port]",
+      }));
+      return;
+    }
+
+    const [, username, host, portValue] = match;
+    try {
+      const profile = await saveRemoteHost({
+        workspace_root: activeWorkspace.path,
+        name: host,
+        host,
+        port: portValue ? Number(portValue) : 22,
+        username,
+        auth_kind: "Agent",
+        default_remote_path: ".",
+        keepalive_seconds: 30,
+        connect_timeout_seconds: 10,
+      });
+      updateRemote(activeWorkspaceId, (remote) =>
+        replaceRemoteHosts(remote, [
+          ...remote.hosts.filter((item) => item.id !== profile.id),
+          profile,
+        ]),
+      );
+    } catch (error) {
+      updateRemote(activeWorkspaceId, (remote) => ({
+        ...remote,
+        error: `Save host failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
   function selectRemoteHostById(hostId: string) {
     if (!activeWorkspaceId) {
       return;
@@ -4784,7 +4837,7 @@ export function AppShell() {
       panelOpen: true,
       surface: "sftp-browser",
     });
-    void listSftpDirectoryForHost(profileId, path);
+    void listRemoteDirectory(profileId, path);
   }
 
   function writeSshInput(sessionId: string, data: string) {
@@ -4865,7 +4918,7 @@ export function AppShell() {
       });
   }
 
-  function listSftpDirectoryForHost(hostId: string, path: string) {
+  async function listRemoteDirectory(hostId: string, path: string) {
     const workspaceId = activeWorkspaceId;
     if (!workspaceId) {
       return;
@@ -4877,25 +4930,94 @@ export function AppShell() {
       error: null,
     }));
 
-    void listSftpDirectory(hostId, path)
-      .then((entries) => {
-        updateRemote(workspaceId, (remote) => ({
-          ...setSftpEntries(remote, hostId, path, entries),
-          loading: false,
-          error: null,
-        }));
-      })
-      .catch((error) => {
-        updateRemote(workspaceId, (remote) => ({
-          ...remote,
-          loading: false,
-          error: `List SFTP failed: ${terminalErrorMessage(error)}`,
-        }));
-      });
+    try {
+      const entries = await listSftpDirectory(hostId, path);
+      updateRemote(workspaceId, (remote) => ({
+        ...setSftpEntries(remote, hostId, path, entries),
+        loading: false,
+        error: null,
+      }));
+    } catch (error) {
+      updateRemote(workspaceId, (remote) => ({
+        ...remote,
+        loading: false,
+        error: `SFTP list failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
   }
 
-  function noopRemoteTask6Action() {
-    openRemotePanel();
+  async function downloadRemoteFile(remotePath: string) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const remote = workspaceViewStore.getState().viewFor(workspaceId).remote;
+    if (!remote.activeHostId) {
+      return;
+    }
+
+    const localRelativePath = window.prompt(
+      "Download to workspace path",
+      `downloads/${remotePath.split("/").pop() ?? "remote-file"}`,
+    );
+    if (!localRelativePath) {
+      return;
+    }
+
+    try {
+      const transfer = await downloadSftpFile({
+        workspaceRoot,
+        profileId: remote.activeHostId,
+        remotePath,
+        localRelativePath,
+      });
+      updateRemote(workspaceId, (current) =>
+        recordRemoteTransfer(current, transfer),
+      );
+    } catch (error) {
+      updateRemote(workspaceId, (current) => ({
+        ...current,
+        error: `Download failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
+  async function uploadRemoteFile(remoteDirectory: string) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const remote = workspaceViewStore.getState().viewFor(workspaceId).remote;
+    if (!remote.activeHostId) {
+      return;
+    }
+
+    const localRelativePath = window.prompt("Upload workspace path", "dist/app.js");
+    if (!localRelativePath) {
+      return;
+    }
+
+    const fileName = localRelativePath.split("/").pop() ?? "upload.bin";
+    try {
+      const transfer = await uploadSftpFile({
+        workspaceRoot,
+        profileId: remote.activeHostId,
+        localRelativePath,
+        remotePath: `${remoteDirectory.replace(/\/$/, "")}/${fileName}`,
+      });
+      updateRemote(workspaceId, (current) =>
+        recordRemoteTransfer(current, transfer),
+      );
+    } catch (error) {
+      updateRemote(workspaceId, (current) => ({
+        ...current,
+        error: `Upload failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
   }
 
   function openAgentsPanel() {
@@ -6192,7 +6314,7 @@ export function AppShell() {
               onRemoteModeChange={setRemoteWorkbenchMode}
               onRemoteSelectHost={selectRemoteHostById}
               onRemoteRefresh={() => refreshRemoteHosts()}
-              onRemoteCreateHost={noopRemoteTask6Action}
+              onRemoteCreateHost={() => void createRemoteHostFromPrompt()}
               onRemoteConnectHost={(hostId) =>
                 void connectActiveRemoteHost(hostId)
               }
@@ -6201,10 +6323,10 @@ export function AppShell() {
               onRemoteRunCommand={() => runActiveRemoteCommand()}
               onRemoteCommandDraftChange={updateRemoteCommandDraft}
               onRemoteListSftpDirectory={(hostId, path) =>
-                listSftpDirectoryForHost(hostId, path)
+                void listRemoteDirectory(hostId, path)
               }
-              onRemoteDownloadFile={noopRemoteTask6Action}
-              onRemoteUploadFile={noopRemoteTask6Action}
+              onRemoteDownloadFile={(path) => void downloadRemoteFile(path)}
+              onRemoteUploadFile={(path) => void uploadRemoteFile(path)}
               languageState={view.language}
             />
           </aside>
@@ -6638,15 +6760,17 @@ export function AppShell() {
                     onModeChange={setRemoteWorkbenchMode}
                     onSelectHost={selectRemoteHostById}
                     onRefresh={refreshRemoteHosts}
-                    onCreateHost={noopRemoteTask6Action}
+                    onCreateHost={() => void createRemoteHostFromPrompt()}
                     onConnectHost={(hostId) => void connectActiveRemoteHost(hostId)}
                     onOpenSsh={(hostId) => void openSshForHost(hostId)}
                     onOpenSftp={(hostId) => openSftpForHost(hostId)}
                     onRunCommand={runActiveRemoteCommand}
                     onCommandDraftChange={updateRemoteCommandDraft}
-                    onListSftpDirectory={listSftpDirectoryForHost}
-                    onDownloadFile={noopRemoteTask6Action}
-                    onUploadFile={noopRemoteTask6Action}
+                    onListSftpDirectory={(hostId, path) =>
+                      void listRemoteDirectory(hostId, path)
+                    }
+                    onDownloadFile={(path) => void downloadRemoteFile(path)}
+                    onUploadFile={(path) => void uploadRemoteFile(path)}
                   />
                 </div>
               ) : surface === "git-diff" ? (

@@ -10,6 +10,7 @@ import {
   closeSshTerminal,
   createRemoteState,
   markRemoteConnection,
+  recordRemoteTransfer,
   replaceRemoteHosts,
   setRemoteCommandResult,
   setSftpEntries,
@@ -190,5 +191,19 @@ describe("remote model", () => {
     expect(retainedOutput.length).toBeLessThanOrEqual(120_000);
     expect(retainedOutput).toBe(state.commandOutputByRunId["run-big"]);
     expect(retainedOutput).toEndWith("stderr-tail\n");
+  });
+
+  test("records latest transfer result and clears stale errors", () => {
+    const state = recordRemoteTransfer(
+      { ...createRemoteState(), error: "old" },
+      {
+        remote_path: "/var/www/app.js",
+        local_path: "/repo/downloads/app.js",
+        bytes: 42,
+      },
+    );
+
+    expect(state.transfer?.bytes).toBe(42);
+    expect(state.error).toBeNull();
   });
 });
