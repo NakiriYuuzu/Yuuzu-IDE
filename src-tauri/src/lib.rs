@@ -9,6 +9,7 @@ pub mod git;
 pub mod lsp;
 mod metrics;
 mod pty;
+pub mod remote;
 mod search;
 mod settings;
 mod tasks;
@@ -30,6 +31,7 @@ pub fn run() {
             app.manage(tasks::TaskState::new());
             app.manage(terminal::TerminalState::new());
             app.manage(lsp::LspState::new());
+            app.manage(remote::RemoteState::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -56,6 +58,9 @@ pub fn run() {
             commands::create_context_pack,
             commands::delete_context_pack,
             commands::link_context_pack,
+            commands::list_remote_hosts,
+            commands::save_remote_host,
+            commands::delete_remote_host,
             commands::list_database_profiles,
             commands::save_database_profile,
             commands::delete_database_profile,

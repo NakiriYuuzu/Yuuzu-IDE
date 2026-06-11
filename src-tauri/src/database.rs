@@ -25,7 +25,7 @@ use keyring::use_native_store;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(not(test))]
-fn ensure_keyring_default_store() -> Result<(), String> {
+pub(crate) fn ensure_keyring_default_store() -> Result<(), String> {
     ensure_keyring_default_store_with(
         || get_default_store().is_some(),
         || use_native_store(false).map_err(|err| format!("failed to initialize OS keyring: {err}")),
@@ -65,7 +65,7 @@ where
 }
 
 #[cfg(test)]
-fn ensure_keyring_default_store() -> Result<(), String> {
+pub(crate) fn ensure_keyring_default_store() -> Result<(), String> {
     ensure_keyring_default_store_with(|| get_default_store().is_some(), || Ok(()))
 }
 

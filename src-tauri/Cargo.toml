@@ -31,9 +31,12 @@ keyring-core = "1.0.0"
 sqlparser = "0.62.0"
 csv = "1.4.0"
 url = "2.5.8"
-tokio = { version = "1.52.3", features = ["rt", "time", "net", "macros"] }
+tokio = { version = "1.52.3", features = ["rt", "time", "net", "macros", "io-util", "sync"] }
 tokio-util = { version = "0.7.18", features = ["compat"] }
 tiberius = { version = "0.12.3", default-features = false, features = ["tds73", "tokio", "tokio-util", "rustls"] }
+russh = "0.61.2"
+russh-sftp = "2.3.0"
+async-trait = "0.1.89"
 
 [dev-dependencies]
 tempfile = "3.27.0"

@@ -28,6 +28,8 @@ pub struct AppState {
     database_profiles: crate::database::DatabaseProfileStore,
     database_secrets: crate::database::KeyringDatabaseSecretStore,
     database_query_history: crate::database::DatabaseQueryHistoryStore,
+    remote_profiles: crate::remote::RemoteHostProfileStore,
+    remote_secrets: crate::remote::KeyringRemoteSecretStore,
 }
 
 impl AppState {
@@ -47,6 +49,10 @@ impl AppState {
         let database_secrets =
             crate::database::KeyringDatabaseSecretStore::new("yuuzu-ide.database");
         let database_query_history = crate::database::DatabaseQueryHistoryStore::new();
+        let remote_profiles = crate::remote::RemoteHostProfileStore::new(
+            config_dir.as_ref().join("remote-hosts.json"),
+        );
+        let remote_secrets = crate::remote::KeyringRemoteSecretStore::new("yuuzu-ide.remote");
 
         Ok(Self {
             registry: Mutex::new(registry),
@@ -58,6 +64,8 @@ impl AppState {
             database_profiles,
             database_secrets,
             database_query_history,
+            remote_profiles,
+            remote_secrets,
         })
     }
 
@@ -546,6 +554,63 @@ impl AppState {
             .delete_profile(profile_id, &self.database_secrets)
     }
 
+    pub fn list_remote_hosts(
+        &self,
+        workspace_root: &str,
+    ) -> Result<Vec<crate::remote::RemoteHostProfile>, String> {
+        let workspace_root = self.trusted_workspace_root(workspace_root)?;
+        self.remote_profiles
+            .list_profiles(&workspace_root.to_string_lossy())
+    }
+
+    pub fn save_remote_host(
+        &self,
+        input: crate::remote::RemoteHostProfileInput,
+    ) -> Result<crate::remote::RemoteHostProfile, String> {
+        let workspace_root = self.trusted_workspace_root(&input.workspace_root)?;
+        if let Some(profile_id) = input.id.as_deref() {
+            if let Ok(profile) = self.remote_profiles.get_profile(profile_id) {
+                if profile.workspace_root != workspace_root.to_string_lossy() {
+                    return Err("remote host profile does not belong to workspace".to_string());
+                }
+            }
+        }
+
+        self.remote_profiles.save_profile(
+            crate::remote::RemoteHostProfileInput {
+                workspace_root: workspace_root.to_string_lossy().to_string(),
+                ..input
+            },
+            &self.remote_secrets,
+            || Ok(crate::remote::remote_now_ms()),
+            crate::remote::new_remote_host_id,
+        )
+    }
+
+    pub fn delete_remote_host(&self, workspace_root: &str, profile_id: &str) -> Result<(), String> {
+        let workspace_root = self.trusted_workspace_root(workspace_root)?;
+        let profile = self.remote_profiles.get_profile(profile_id)?;
+        if profile.workspace_root != workspace_root.to_string_lossy() {
+            return Err("remote host profile does not belong to workspace".to_string());
+        }
+        self.remote_profiles
+            .delete_profile(profile_id, &self.remote_secrets)
+    }
+
+    pub fn remote_host_in_active_workspace(
+        &self,
+        profile_id: &str,
+    ) -> Result<crate::remote::RemoteHostProfile, String> {
+        let profile = self.remote_profiles.get_profile(profile_id)?;
+        let active_workspace_root = self.active_workspace_root()?;
+
+        if profile.workspace_root == active_workspace_root.to_string_lossy() {
+            Ok(profile)
+        } else {
+            Err("remote host profile does not belong to active workspace".to_string())
+        }
+    }
+
     pub fn save_database_profile(
         &self,
         input: crate::database::DatabaseProfileInput,
@@ -921,6 +986,31 @@ pub fn delete_database_profile(
     profile_id: String,
 ) -> Result<(), String> {
     state.delete_database_profile(&workspace_root, &profile_id)
+}
+
+#[tauri::command]
+pub fn list_remote_hosts(
+    state: State<'_, AppState>,
+    workspace_root: String,
+) -> Result<Vec<crate::remote::RemoteHostProfile>, String> {
+    state.list_remote_hosts(&workspace_root)
+}
+
+#[tauri::command]
+pub fn save_remote_host(
+    state: State<'_, AppState>,
+    input: crate::remote::RemoteHostProfileInput,
+) -> Result<crate::remote::RemoteHostProfile, String> {
+    state.save_remote_host(input)
+}
+
+#[tauri::command]
+pub fn delete_remote_host(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    profile_id: String,
+) -> Result<(), String> {
+    state.delete_remote_host(&workspace_root, &profile_id)
 }
 
 #[tauri::command]
@@ -1916,6 +2006,110 @@ mod tests {
         fn assert_flat_signature(_command: FlatDeleteDatabaseProfileCommand) {}
 
         assert_flat_signature(super::delete_database_profile);
+    }
+
+    #[test]
+    fn list_remote_hosts_preserves_flat_command_signature() {
+        type FlatListRemoteHostsCommand =
+            fn(
+                State<'_, AppState>,
+                String,
+            ) -> Result<Vec<crate::remote::RemoteHostProfile>, String>;
+
+        fn assert_flat_signature(_command: FlatListRemoteHostsCommand) {}
+
+        assert_flat_signature(super::list_remote_hosts);
+    }
+
+    #[test]
+    fn save_remote_host_preserves_flat_command_signature() {
+        type FlatSaveRemoteHostCommand = fn(
+            State<'_, AppState>,
+            crate::remote::RemoteHostProfileInput,
+        )
+            -> Result<crate::remote::RemoteHostProfile, String>;
+
+        fn assert_flat_signature(_command: FlatSaveRemoteHostCommand) {}
+
+        assert_flat_signature(super::save_remote_host);
+    }
+
+    #[test]
+    fn delete_remote_host_preserves_flat_command_signature() {
+        type FlatDeleteRemoteHostCommand =
+            fn(State<'_, AppState>, String, String) -> Result<(), String>;
+
+        fn assert_flat_signature(_command: FlatDeleteRemoteHostCommand) {}
+
+        assert_flat_signature(super::delete_remote_host);
+    }
+
+    #[test]
+    fn delete_remote_host_rejects_unregistered_workspace_root() {
+        let config = tempfile::tempdir().expect("config");
+        let state = AppState::new(config.path()).expect("state");
+
+        let result = state.delete_remote_host("/not/registered", "missing");
+
+        assert!(result
+            .expect_err("reject")
+            .contains("workspace not registered"));
+    }
+
+    #[test]
+    fn delete_remote_host_rejects_profile_outside_workspace_root() {
+        let config = tempfile::tempdir().expect("config");
+        let workspace_a = tempfile::tempdir().expect("workspace-a");
+        let workspace_b = tempfile::tempdir().expect("workspace-b");
+        let state = AppState::new(config.path()).expect("state");
+        state
+            .mutate_registry(|registry| {
+                registry.workspaces.push(crate::workspace::Workspace {
+                    id: "a".to_string(),
+                    name: "A".to_string(),
+                    path: workspace_a.path().to_path_buf(),
+                    pinned: false,
+                });
+                registry.workspaces.push(crate::workspace::Workspace {
+                    id: "b".to_string(),
+                    name: "B".to_string(),
+                    path: workspace_b.path().to_path_buf(),
+                    pinned: false,
+                });
+                Ok(())
+            })
+            .expect("registry");
+
+        let profile = state
+            .remote_profiles
+            .save_profile(
+                crate::remote::RemoteHostProfileInput {
+                    id: Some("host-a".to_string()),
+                    workspace_root: workspace_a.path().to_string_lossy().to_string(),
+                    name: "edge".to_string(),
+                    host: "edge.example.com".to_string(),
+                    port: 22,
+                    username: "deploy".to_string(),
+                    auth_kind: crate::remote::RemoteAuthKind::Agent,
+                    password: None,
+                    key_path: None,
+                    key_passphrase: None,
+                    default_remote_path: "/var/www".to_string(),
+                    keepalive_seconds: 30,
+                    connect_timeout_seconds: 10,
+                },
+                &state.remote_secrets,
+                || Ok(crate::remote::remote_now_ms()),
+                crate::remote::new_remote_host_id,
+            )
+            .expect("profile");
+
+        let result =
+            state.delete_remote_host(workspace_b.path().to_string_lossy().as_ref(), &profile.id);
+
+        assert!(result
+            .expect_err("reject")
+            .contains("remote host profile does not belong to workspace"));
     }
 
     #[test]
