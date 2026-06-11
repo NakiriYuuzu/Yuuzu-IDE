@@ -30,6 +30,7 @@ pub struct AppState {
     database_query_history: crate::database::DatabaseQueryHistoryStore,
     remote_profiles: crate::remote::RemoteHostProfileStore,
     remote_secrets: crate::remote::KeyringRemoteSecretStore,
+    debug_launch_configs: crate::debug::DebugLaunchConfigStore,
 }
 
 impl AppState {
@@ -53,6 +54,9 @@ impl AppState {
             config_dir.as_ref().join("remote-hosts.json"),
         );
         let remote_secrets = crate::remote::KeyringRemoteSecretStore::new("yuuzu-ide.remote");
+        let debug_launch_configs = crate::debug::DebugLaunchConfigStore::new(
+            config_dir.as_ref().join("debug-launch.json"),
+        );
 
         Ok(Self {
             registry: Mutex::new(registry),
@@ -66,6 +70,7 @@ impl AppState {
             database_query_history,
             remote_profiles,
             remote_secrets,
+            debug_launch_configs,
         })
     }
 
@@ -597,6 +602,256 @@ impl AppState {
             .delete_profile(profile_id, &self.remote_secrets)
     }
 
+    pub fn debug_list_launch_configs(
+        &self,
+        workspace_root: &str,
+    ) -> Result<Vec<crate::debug::DebugLaunchConfig>, String> {
+        let workspace_root = self.trusted_workspace_root(workspace_root)?;
+        self.debug_launch_configs
+            .list_configs(&workspace_root.to_string_lossy())
+    }
+
+    pub fn debug_save_launch_config(
+        &self,
+        input: crate::debug::DebugLaunchConfigInput,
+    ) -> Result<crate::debug::DebugLaunchConfig, String> {
+        let workspace_root = self.trusted_workspace_root(&input.workspace_root)?;
+        if let Some(config_id) = input.id.as_deref() {
+            if let Ok(config) = self.debug_launch_configs.get_config(config_id) {
+                if config.workspace_root != workspace_root.to_string_lossy() {
+                    return Err("debug launch config does not belong to workspace".to_string());
+                }
+            }
+        }
+
+        self.debug_launch_configs.save_config(
+            crate::debug::DebugLaunchConfigInput {
+                workspace_root: workspace_root.to_string_lossy().to_string(),
+                ..input
+            },
+            || Ok(crate::debug::debug_now_ms()),
+            crate::debug::new_debug_config_id,
+        )
+    }
+
+    #[allow(dead_code)]
+    pub fn save_debug_launch_config(
+        &self,
+        input: crate::debug::DebugLaunchConfigInput,
+    ) -> Result<crate::debug::DebugLaunchConfig, String> {
+        self.debug_save_launch_config(input)
+    }
+
+    pub fn debug_delete_launch_config(
+        &self,
+        workspace_root: &str,
+        config_id: &str,
+    ) -> Result<(), String> {
+        let workspace_root = self.trusted_workspace_root(workspace_root)?;
+        let config = self.debug_launch_configs.get_config(config_id)?;
+        if config.workspace_root != workspace_root.to_string_lossy() {
+            return Err("debug launch config does not belong to workspace".to_string());
+        }
+
+        self.debug_launch_configs.delete_config(config_id)
+    }
+
+    pub fn debug_list_sessions(
+        &self,
+        debug_state: &crate::debug::DebugState,
+        workspace_root: &str,
+        workspace_id: &str,
+    ) -> Result<Vec<crate::debug::DebugSessionInfo>, String> {
+        let (workspace_id, _, _) = self.debug_workspace_identity(workspace_root, workspace_id)?;
+        Ok(debug_state.list_sessions(&workspace_id))
+    }
+
+    pub fn debug_start_session(
+        &self,
+        debug_state: &crate::debug::DebugState,
+        workspace_root: &str,
+        workspace_id: &str,
+        config_id: &str,
+    ) -> Result<crate::debug::DebugSessionInfo, String> {
+        let (workspace_id, workspace_root, _) =
+            self.debug_workspace_identity(workspace_root, workspace_id)?;
+        let config = self.debug_launch_configs.get_config(config_id)?;
+        if config.workspace_root != workspace_root {
+            return Err("debug launch config does not belong to workspace".to_string());
+        }
+
+        debug_state.start_session(crate::debug::DebugStartSessionRequest {
+            workspace_id,
+            workspace_root,
+            config,
+        })
+    }
+
+    pub fn debug_set_breakpoints(
+        &self,
+        debug_state: &crate::debug::DebugState,
+        workspace_root: &str,
+        workspace_id: &str,
+        source_path: String,
+        breakpoints: Vec<crate::debug::DebugSourceBreakpointInput>,
+    ) -> Result<Vec<crate::debug::DebugSourceBreakpoint>, String> {
+        let (workspace_id, workspace_root, workspace_root_path) =
+            self.debug_workspace_identity(workspace_root, workspace_id)?;
+        let source_path =
+            crate::debug::normalize_debug_source_path(&workspace_root_path, &source_path)?;
+        debug_state.set_breakpoints(workspace_id, workspace_root, source_path, breakpoints)
+    }
+
+    pub fn debug_set_session_breakpoints(
+        &self,
+        debug_state: &crate::debug::DebugState,
+        workspace_root: &str,
+        workspace_id: &str,
+        session_id: &str,
+        source_path: String,
+        breakpoints: Vec<crate::debug::DebugSourceBreakpointInput>,
+    ) -> Result<Vec<crate::debug::DebugSourceBreakpoint>, String> {
+        let (_, _, workspace_root_path) = self.ensure_debug_session_workspace(
+            debug_state,
+            workspace_root,
+            workspace_id,
+            session_id,
+        )?;
+        let source_path =
+            crate::debug::normalize_debug_source_path(&workspace_root_path, &source_path)?;
+        debug_state.set_session_breakpoints(session_id, source_path, breakpoints)
+    }
+
+    pub fn debug_continue(
+        &self,
+        debug_state: &crate::debug::DebugState,
+        workspace_root: &str,
+        workspace_id: &str,
+        session_id: &str,
+    ) -> Result<crate::debug::DebugSessionInfo, String> {
+        self.ensure_debug_session_workspace(debug_state, workspace_root, workspace_id, session_id)?;
+        debug_state.continue_session(session_id)
+    }
+
+    pub fn debug_step_over(
+        &self,
+        debug_state: &crate::debug::DebugState,
+        workspace_root: &str,
+        workspace_id: &str,
+        session_id: &str,
+    ) -> Result<crate::debug::DebugSessionInfo, String> {
+        self.ensure_debug_session_workspace(debug_state, workspace_root, workspace_id, session_id)?;
+        debug_state.step_over(session_id)
+    }
+
+    pub fn debug_pause(
+        &self,
+        debug_state: &crate::debug::DebugState,
+        workspace_root: &str,
+        workspace_id: &str,
+        session_id: &str,
+    ) -> Result<crate::debug::DebugSessionInfo, String> {
+        self.ensure_debug_session_workspace(debug_state, workspace_root, workspace_id, session_id)?;
+        debug_state.pause(session_id)
+    }
+
+    pub fn debug_disconnect(
+        &self,
+        debug_state: &crate::debug::DebugState,
+        workspace_root: &str,
+        workspace_id: &str,
+        session_id: &str,
+    ) -> Result<crate::debug::DebugSessionInfo, String> {
+        self.ensure_debug_session_workspace(debug_state, workspace_root, workspace_id, session_id)?;
+        debug_state.disconnect_session(session_id)
+    }
+
+    pub fn debug_stack_trace(
+        &self,
+        debug_state: &crate::debug::DebugState,
+        workspace_root: &str,
+        workspace_id: &str,
+        session_id: &str,
+        thread_id: i64,
+    ) -> Result<Vec<crate::debug::DebugStackFrame>, String> {
+        self.ensure_debug_session_workspace(debug_state, workspace_root, workspace_id, session_id)?;
+        debug_state.stack_trace(session_id, thread_id)
+    }
+
+    pub fn debug_scopes(
+        &self,
+        debug_state: &crate::debug::DebugState,
+        workspace_root: &str,
+        workspace_id: &str,
+        session_id: &str,
+        frame_id: i64,
+    ) -> Result<Vec<crate::debug::DebugScope>, String> {
+        self.ensure_debug_session_workspace(debug_state, workspace_root, workspace_id, session_id)?;
+        debug_state.scopes(session_id, frame_id)
+    }
+
+    pub fn debug_variables(
+        &self,
+        debug_state: &crate::debug::DebugState,
+        workspace_root: &str,
+        workspace_id: &str,
+        session_id: &str,
+        variables_reference: i64,
+    ) -> Result<Vec<crate::debug::DebugVariable>, String> {
+        self.ensure_debug_session_workspace(debug_state, workspace_root, workspace_id, session_id)?;
+        debug_state.variables(session_id, variables_reference)
+    }
+
+    pub fn debug_evaluate(
+        &self,
+        debug_state: &crate::debug::DebugState,
+        workspace_root: &str,
+        workspace_id: &str,
+        session_id: &str,
+        expression: String,
+    ) -> Result<crate::debug::DebugVariable, String> {
+        self.ensure_debug_session_workspace(debug_state, workspace_root, workspace_id, session_id)?;
+        debug_state.evaluate(session_id, &expression)
+    }
+
+    pub fn debug_session_logs(
+        &self,
+        debug_state: &crate::debug::DebugState,
+        workspace_root: &str,
+        workspace_id: &str,
+    ) -> Result<Vec<String>, String> {
+        let (workspace_id, _, _) = self.debug_workspace_identity(workspace_root, workspace_id)?;
+        Ok(debug_state.session_logs(&workspace_id))
+    }
+
+    fn debug_workspace_identity(
+        &self,
+        workspace_root: &str,
+        workspace_id: &str,
+    ) -> Result<(String, String, PathBuf), String> {
+        let workspace_root = self.trusted_workspace_root(workspace_root)?;
+        let workspace_id =
+            self.ensure_workspace_id_matches_root_path(workspace_id, &workspace_root)?;
+        let workspace_root_string = workspace_root.to_string_lossy().to_string();
+        Ok((workspace_id, workspace_root_string, workspace_root))
+    }
+
+    fn ensure_debug_session_workspace(
+        &self,
+        debug_state: &crate::debug::DebugState,
+        workspace_root: &str,
+        workspace_id: &str,
+        session_id: &str,
+    ) -> Result<(String, String, PathBuf), String> {
+        let (workspace_id, workspace_root, workspace_root_path) =
+            self.debug_workspace_identity(workspace_root, workspace_id)?;
+        if debug_state.session_belongs_to(session_id, &workspace_id, &workspace_root)? {
+            Ok((workspace_id, workspace_root, workspace_root_path))
+        } else {
+            Err("debug session does not belong to workspace".to_string())
+        }
+    }
+
     #[allow(dead_code)] // Task 2 will consume this active-workspace guard for remote commands.
     pub fn remote_host_in_active_workspace(
         &self,
@@ -1012,6 +1267,216 @@ pub fn delete_remote_host(
     profile_id: String,
 ) -> Result<(), String> {
     state.delete_remote_host(&workspace_root, &profile_id)
+}
+
+#[tauri::command]
+pub fn debug_list_launch_configs(
+    state: State<'_, AppState>,
+    workspace_root: String,
+) -> Result<Vec<crate::debug::DebugLaunchConfig>, String> {
+    state.debug_list_launch_configs(&workspace_root)
+}
+
+#[tauri::command]
+pub fn debug_save_launch_config(
+    state: State<'_, AppState>,
+    input: crate::debug::DebugLaunchConfigInput,
+) -> Result<crate::debug::DebugLaunchConfig, String> {
+    state.debug_save_launch_config(input)
+}
+
+#[tauri::command]
+pub fn debug_delete_launch_config(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    config_id: String,
+) -> Result<(), String> {
+    state.debug_delete_launch_config(&workspace_root, &config_id)
+}
+
+#[tauri::command]
+pub fn debug_list_sessions(
+    state: State<'_, AppState>,
+    debug_state: State<'_, crate::debug::DebugState>,
+    workspace_root: String,
+    workspace_id: String,
+) -> Result<Vec<crate::debug::DebugSessionInfo>, String> {
+    state.debug_list_sessions(&debug_state, &workspace_root, &workspace_id)
+}
+
+#[tauri::command]
+pub fn debug_start_session(
+    state: State<'_, AppState>,
+    debug_state: State<'_, crate::debug::DebugState>,
+    workspace_root: String,
+    workspace_id: String,
+    config_id: String,
+) -> Result<crate::debug::DebugSessionInfo, String> {
+    state.debug_start_session(&debug_state, &workspace_root, &workspace_id, &config_id)
+}
+
+#[tauri::command]
+pub fn debug_set_breakpoints(
+    state: State<'_, AppState>,
+    debug_state: State<'_, crate::debug::DebugState>,
+    workspace_root: String,
+    workspace_id: String,
+    source_path: String,
+    breakpoints: Vec<crate::debug::DebugSourceBreakpointInput>,
+) -> Result<Vec<crate::debug::DebugSourceBreakpoint>, String> {
+    state.debug_set_breakpoints(
+        &debug_state,
+        &workspace_root,
+        &workspace_id,
+        source_path,
+        breakpoints,
+    )
+}
+
+#[tauri::command]
+pub fn debug_set_session_breakpoints(
+    state: State<'_, AppState>,
+    debug_state: State<'_, crate::debug::DebugState>,
+    workspace_root: String,
+    workspace_id: String,
+    session_id: String,
+    source_path: String,
+    breakpoints: Vec<crate::debug::DebugSourceBreakpointInput>,
+) -> Result<Vec<crate::debug::DebugSourceBreakpoint>, String> {
+    state.debug_set_session_breakpoints(
+        &debug_state,
+        &workspace_root,
+        &workspace_id,
+        &session_id,
+        source_path,
+        breakpoints,
+    )
+}
+
+#[tauri::command]
+pub fn debug_continue(
+    state: State<'_, AppState>,
+    debug_state: State<'_, crate::debug::DebugState>,
+    workspace_root: String,
+    workspace_id: String,
+    session_id: String,
+) -> Result<crate::debug::DebugSessionInfo, String> {
+    state.debug_continue(&debug_state, &workspace_root, &workspace_id, &session_id)
+}
+
+#[tauri::command]
+pub fn debug_step_over(
+    state: State<'_, AppState>,
+    debug_state: State<'_, crate::debug::DebugState>,
+    workspace_root: String,
+    workspace_id: String,
+    session_id: String,
+) -> Result<crate::debug::DebugSessionInfo, String> {
+    state.debug_step_over(&debug_state, &workspace_root, &workspace_id, &session_id)
+}
+
+#[tauri::command]
+pub fn debug_pause(
+    state: State<'_, AppState>,
+    debug_state: State<'_, crate::debug::DebugState>,
+    workspace_root: String,
+    workspace_id: String,
+    session_id: String,
+) -> Result<crate::debug::DebugSessionInfo, String> {
+    state.debug_pause(&debug_state, &workspace_root, &workspace_id, &session_id)
+}
+
+#[tauri::command]
+pub fn debug_disconnect(
+    state: State<'_, AppState>,
+    debug_state: State<'_, crate::debug::DebugState>,
+    workspace_root: String,
+    workspace_id: String,
+    session_id: String,
+) -> Result<crate::debug::DebugSessionInfo, String> {
+    state.debug_disconnect(&debug_state, &workspace_root, &workspace_id, &session_id)
+}
+
+#[tauri::command]
+pub fn debug_stack_trace(
+    state: State<'_, AppState>,
+    debug_state: State<'_, crate::debug::DebugState>,
+    workspace_root: String,
+    workspace_id: String,
+    session_id: String,
+    thread_id: i64,
+) -> Result<Vec<crate::debug::DebugStackFrame>, String> {
+    state.debug_stack_trace(
+        &debug_state,
+        &workspace_root,
+        &workspace_id,
+        &session_id,
+        thread_id,
+    )
+}
+
+#[tauri::command]
+pub fn debug_scopes(
+    state: State<'_, AppState>,
+    debug_state: State<'_, crate::debug::DebugState>,
+    workspace_root: String,
+    workspace_id: String,
+    session_id: String,
+    frame_id: i64,
+) -> Result<Vec<crate::debug::DebugScope>, String> {
+    state.debug_scopes(
+        &debug_state,
+        &workspace_root,
+        &workspace_id,
+        &session_id,
+        frame_id,
+    )
+}
+
+#[tauri::command]
+pub fn debug_variables(
+    state: State<'_, AppState>,
+    debug_state: State<'_, crate::debug::DebugState>,
+    workspace_root: String,
+    workspace_id: String,
+    session_id: String,
+    variables_reference: i64,
+) -> Result<Vec<crate::debug::DebugVariable>, String> {
+    state.debug_variables(
+        &debug_state,
+        &workspace_root,
+        &workspace_id,
+        &session_id,
+        variables_reference,
+    )
+}
+
+#[tauri::command]
+pub fn debug_evaluate(
+    state: State<'_, AppState>,
+    debug_state: State<'_, crate::debug::DebugState>,
+    workspace_root: String,
+    workspace_id: String,
+    session_id: String,
+    expression: String,
+) -> Result<crate::debug::DebugVariable, String> {
+    state.debug_evaluate(
+        &debug_state,
+        &workspace_root,
+        &workspace_id,
+        &session_id,
+        expression,
+    )
+}
+
+#[tauri::command]
+pub fn debug_session_logs(
+    state: State<'_, AppState>,
+    debug_state: State<'_, crate::debug::DebugState>,
+    workspace_root: String,
+    workspace_id: String,
+) -> Result<Vec<String>, String> {
+    state.debug_session_logs(&debug_state, &workspace_root, &workspace_id)
 }
 
 #[tauri::command]
@@ -1892,6 +2357,50 @@ mod tests {
         }
     }
 
+    fn app_state_with_two_workspaces() -> (
+        tempfile::TempDir,
+        AppState,
+        PathBuf,
+        PathBuf,
+        String,
+        String,
+    ) {
+        let config = tempfile::tempdir().expect("config dir");
+        let workspace_a = config.path().join("workspace-a");
+        let workspace_b = config.path().join("workspace-b");
+        std::fs::create_dir_all(&workspace_a).expect("workspace a");
+        std::fs::create_dir_all(&workspace_b).expect("workspace b");
+        let state = AppState::new(config.path()).expect("state");
+        state
+            .open_workspace_path(workspace_a.clone())
+            .expect("open workspace a");
+        state
+            .open_workspace_path(workspace_b.clone())
+            .expect("open workspace b");
+        let registry = state.registry_snapshot().expect("registry");
+        let workspace_a_id = registry
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.path == workspace_a)
+            .map(|workspace| workspace.id.clone())
+            .expect("workspace a id");
+        let workspace_b_id = registry
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.path == workspace_b)
+            .map(|workspace| workspace.id.clone())
+            .expect("workspace b id");
+
+        (
+            config,
+            state,
+            workspace_a.canonicalize().expect("workspace a canonical"),
+            workspace_b.canonicalize().expect("workspace b canonical"),
+            workspace_a_id,
+            workspace_b_id,
+        )
+    }
+
     #[test]
     fn app_state_loads_registry_from_store() {
         let temp = tempdir().expect("temp dir");
@@ -2200,6 +2709,235 @@ mod tests {
         fn assert_flat_signature(_command: FlatDeleteRemoteHostCommand) {}
 
         assert_flat_signature(super::delete_remote_host);
+    }
+
+    #[test]
+    fn debug_start_session_rejects_mismatched_workspace_identity() {
+        let (_config, state, workspace_a, workspace_b, workspace_a_id, _workspace_b_id) =
+            app_state_with_two_workspaces();
+        let debug_state = crate::debug::DebugState::new_for_tests();
+        debug_state.install_test_adapter(
+            crate::debug::DebugAdapterKind::Python,
+            crate::debug::ScriptedDebugAdapter::python_stopped_at_line(8),
+        );
+        let config = crate::debug::DebugLaunchConfigInput {
+            id: Some("cfg".to_string()),
+            workspace_root: workspace_a.to_string_lossy().to_string(),
+            name: "Python".to_string(),
+            adapter: crate::debug::DebugAdapterKind::Python,
+            request: crate::debug::DebugRequestKind::Launch,
+            program: "app.py".to_string(),
+            cwd: ".".to_string(),
+            args: Vec::new(),
+            env: Vec::new(),
+            stop_on_entry: true,
+            attach: None,
+        };
+        state.debug_save_launch_config(config).expect("save config");
+
+        let result = state.debug_start_session(
+            &debug_state,
+            workspace_b.to_string_lossy().as_ref(),
+            &workspace_a_id,
+            "cfg",
+        );
+
+        assert!(result
+            .expect_err("mismatch")
+            .contains("workspace id does not match workspace root"));
+    }
+
+    #[test]
+    fn debug_all_workspace_commands_reject_unregistered_workspaces() {
+        let config = tempfile::tempdir().expect("config dir");
+        let unregistered = tempfile::tempdir().expect("unregistered workspace");
+        let state = AppState::new(config.path()).expect("state");
+        let debug_state = crate::debug::DebugState::new_for_tests();
+        let workspace_root = unregistered.path().to_string_lossy().to_string();
+        let workspace_id = "workspace-a";
+        let input = crate::debug::DebugLaunchConfigInput {
+            id: Some("cfg".to_string()),
+            workspace_root: workspace_root.clone(),
+            name: "Python".to_string(),
+            adapter: crate::debug::DebugAdapterKind::Python,
+            request: crate::debug::DebugRequestKind::Launch,
+            program: "app.py".to_string(),
+            cwd: ".".to_string(),
+            args: Vec::new(),
+            env: Vec::new(),
+            stop_on_entry: true,
+            attach: None,
+        };
+
+        let results = [
+            (
+                "list launch configs",
+                state.debug_list_launch_configs(&workspace_root).map(|_| ()),
+            ),
+            (
+                "save launch config",
+                state.debug_save_launch_config(input).map(|_| ()),
+            ),
+            (
+                "delete launch config",
+                state
+                    .debug_delete_launch_config(&workspace_root, "cfg")
+                    .map(|_| ()),
+            ),
+            (
+                "list sessions",
+                state
+                    .debug_list_sessions(&debug_state, &workspace_root, workspace_id)
+                    .map(|_| ()),
+            ),
+            (
+                "start session",
+                state
+                    .debug_start_session(&debug_state, &workspace_root, workspace_id, "cfg")
+                    .map(|_| ()),
+            ),
+            (
+                "set breakpoints",
+                state
+                    .debug_set_breakpoints(
+                        &debug_state,
+                        &workspace_root,
+                        workspace_id,
+                        "app.py".to_string(),
+                        Vec::new(),
+                    )
+                    .map(|_| ()),
+            ),
+            (
+                "set session breakpoints",
+                state
+                    .debug_set_session_breakpoints(
+                        &debug_state,
+                        &workspace_root,
+                        workspace_id,
+                        "session",
+                        "app.py".to_string(),
+                        Vec::new(),
+                    )
+                    .map(|_| ()),
+            ),
+            (
+                "continue",
+                state
+                    .debug_continue(&debug_state, &workspace_root, workspace_id, "session")
+                    .map(|_| ()),
+            ),
+            (
+                "step over",
+                state
+                    .debug_step_over(&debug_state, &workspace_root, workspace_id, "session")
+                    .map(|_| ()),
+            ),
+            (
+                "pause",
+                state
+                    .debug_pause(&debug_state, &workspace_root, workspace_id, "session")
+                    .map(|_| ()),
+            ),
+            (
+                "disconnect",
+                state
+                    .debug_disconnect(&debug_state, &workspace_root, workspace_id, "session")
+                    .map(|_| ()),
+            ),
+            (
+                "stack trace",
+                state
+                    .debug_stack_trace(&debug_state, &workspace_root, workspace_id, "session", 1)
+                    .map(|_| ()),
+            ),
+            (
+                "scopes",
+                state
+                    .debug_scopes(&debug_state, &workspace_root, workspace_id, "session", 1)
+                    .map(|_| ()),
+            ),
+            (
+                "variables",
+                state
+                    .debug_variables(&debug_state, &workspace_root, workspace_id, "session", 1)
+                    .map(|_| ()),
+            ),
+            (
+                "evaluate",
+                state
+                    .debug_evaluate(
+                        &debug_state,
+                        &workspace_root,
+                        workspace_id,
+                        "session",
+                        "counter".to_string(),
+                    )
+                    .map(|_| ()),
+            ),
+            (
+                "session logs",
+                state
+                    .debug_session_logs(&debug_state, &workspace_root, workspace_id)
+                    .map(|_| ()),
+            ),
+        ];
+
+        for (name, result) in results {
+            assert!(
+                result.expect_err(name).contains("workspace not registered"),
+                "{name} should reject unregistered workspace"
+            );
+        }
+    }
+
+    #[test]
+    fn debug_start_session_preserves_flat_command_signature() {
+        type FlatDebugStartSessionCommand = fn(
+            State<'_, AppState>,
+            State<'_, crate::debug::DebugState>,
+            String,
+            String,
+            String,
+        )
+            -> Result<crate::debug::DebugSessionInfo, String>;
+
+        fn assert_flat_signature(_command: FlatDebugStartSessionCommand) {}
+
+        assert_flat_signature(super::debug_start_session);
+    }
+
+    #[test]
+    fn debug_set_breakpoints_preserves_flat_command_signature() {
+        type FlatDebugSetBreakpointsCommand =
+            fn(
+                State<'_, AppState>,
+                State<'_, crate::debug::DebugState>,
+                String,
+                String,
+                String,
+                Vec<crate::debug::DebugSourceBreakpointInput>,
+            ) -> Result<Vec<crate::debug::DebugSourceBreakpoint>, String>;
+
+        fn assert_flat_signature(_command: FlatDebugSetBreakpointsCommand) {}
+
+        assert_flat_signature(super::debug_set_breakpoints);
+    }
+
+    #[test]
+    fn debug_evaluate_preserves_flat_command_signature() {
+        type FlatDebugEvaluateCommand = fn(
+            State<'_, AppState>,
+            State<'_, crate::debug::DebugState>,
+            String,
+            String,
+            String,
+            String,
+        ) -> Result<crate::debug::DebugVariable, String>;
+
+        fn assert_flat_signature(_command: FlatDebugEvaluateCommand) {}
+
+        assert_flat_signature(super::debug_evaluate);
     }
 
     #[test]

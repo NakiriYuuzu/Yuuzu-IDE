@@ -86,6 +86,148 @@ pub struct DebugSourceBreakpoint {
     pub line: u32,
     pub condition: Option<String>,
     pub log_message: Option<String>,
+    pub verified: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DebugStartSessionRequest {
+    pub workspace_id: String,
+    pub workspace_root: String,
+    pub config: DebugLaunchConfig,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum DebugSessionStatus {
+    Starting,
+    Running,
+    Stopped,
+    Exited,
+    Disconnected,
+    Failed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DebugSessionInfo {
+    pub id: String,
+    pub workspace_id: String,
+    pub workspace_root: String,
+    pub config_id: String,
+    pub name: String,
+    pub adapter: DebugAdapterKind,
+    pub status: DebugSessionStatus,
+    pub active_thread_id: Option<i64>,
+    pub stopped_reason: Option<String>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DebugAdapterEvent {
+    pub session_id: String,
+    pub event: String,
+    pub body: Value,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DebugStackFrame {
+    pub id: i64,
+    pub name: String,
+    pub source_path: String,
+    pub line: u32,
+    pub column: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DebugScope {
+    pub name: String,
+    pub variables_reference: i64,
+    pub expensive: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DebugVariable {
+    pub name: String,
+    pub value: String,
+    #[serde(rename = "type")]
+    pub type_name: Option<String>,
+    pub variables_reference: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct ScriptedDebugAdapter {
+    stopped_line: u32,
+    logs: Vec<String>,
+}
+
+impl ScriptedDebugAdapter {
+    pub fn python_stopped_at_line(line: u32) -> Self {
+        Self {
+            stopped_line: line,
+            logs: vec![
+                "console: Python debug adapter launched".to_string(),
+                format!("stopped at breakpoint line {line}"),
+            ],
+        }
+    }
+
+    fn launch(&self, request: DebugStartSessionRequest, session_id: String) -> DebugSessionRecord {
+        let variables_reference = 1_000;
+        let frame_id = 1;
+        let thread_id = 1;
+        let counter = DebugVariable {
+            name: "counter".to_string(),
+            value: "8".to_string(),
+            type_name: Some("int".to_string()),
+            variables_reference: 0,
+        };
+        let frame = DebugStackFrame {
+            id: frame_id,
+            name: "main".to_string(),
+            source_path: request.config.program.clone(),
+            line: self.stopped_line,
+            column: 1,
+        };
+        let scope = DebugScope {
+            name: "Locals".to_string(),
+            variables_reference,
+            expensive: false,
+        };
+        let info = DebugSessionInfo {
+            id: session_id,
+            workspace_id: request.workspace_id,
+            workspace_root: request.workspace_root,
+            config_id: request.config.id,
+            name: request.config.name,
+            adapter: request.config.adapter,
+            status: DebugSessionStatus::Stopped,
+            active_thread_id: Some(thread_id),
+            stopped_reason: Some("breakpoint".to_string()),
+            last_error: None,
+        };
+
+        DebugSessionRecord {
+            info,
+            stack_by_thread: HashMap::from([(thread_id, vec![frame])]),
+            scopes_by_frame: HashMap::from([(frame_id, vec![scope])]),
+            variables_by_reference: HashMap::from([(variables_reference, vec![counter.clone()])]),
+            evaluate_results: HashMap::from([("counter".to_string(), counter)]),
+            breakpoints_by_source: HashMap::new(),
+        }
+    }
+
+    fn verify_breakpoints(
+        &self,
+        breakpoints: Vec<DebugSourceBreakpointInput>,
+    ) -> Vec<DebugSourceBreakpoint> {
+        breakpoints
+            .into_iter()
+            .map(|breakpoint| DebugSourceBreakpoint {
+                line: breakpoint.line,
+                condition: breakpoint.condition,
+                log_message: breakpoint.log_message,
+                verified: breakpoint.line == self.stopped_line,
+            })
+            .collect()
+    }
 }
 
 pub fn encode_dap_message(value: &Value) -> Result<Vec<u8>, String> {
@@ -343,14 +485,141 @@ impl DebugLaunchConfigStore {
     }
 }
 
+#[derive(Clone, Debug)]
+struct DebugSessionRecord {
+    info: DebugSessionInfo,
+    stack_by_thread: HashMap<i64, Vec<DebugStackFrame>>,
+    scopes_by_frame: HashMap<i64, Vec<DebugScope>>,
+    variables_by_reference: HashMap<i64, Vec<DebugVariable>>,
+    evaluate_results: HashMap<String, DebugVariable>,
+    breakpoints_by_source: HashMap<String, Vec<DebugSourceBreakpoint>>,
+}
+
+#[derive(Default)]
+struct DebugRuntimeState {
+    next_by_workspace: HashMap<String, usize>,
+    test_adapters: HashMap<DebugAdapterKind, ScriptedDebugAdapter>,
+    sessions: HashMap<String, DebugSessionRecord>,
+    logs_by_workspace: HashMap<String, Vec<String>>,
+}
+
 #[derive(Default)]
 pub struct DebugState {
     breakpoints: Arc<Mutex<HashMap<DebugBreakpointKey, Vec<DebugSourceBreakpoint>>>>,
+    runtime: Arc<Mutex<DebugRuntimeState>>,
 }
 
 impl DebugState {
-    pub fn new_for_tests() -> Self {
+    pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn new_for_tests() -> Self {
+        Self::new()
+    }
+
+    pub fn install_test_adapter(&self, adapter: DebugAdapterKind, scripted: ScriptedDebugAdapter) {
+        if let Ok(mut runtime) = self.runtime.lock() {
+            runtime.test_adapters.insert(adapter, scripted);
+        }
+    }
+
+    pub fn start_session(
+        &self,
+        request: DebugStartSessionRequest,
+    ) -> Result<DebugSessionInfo, String> {
+        if request.config.workspace_root != request.workspace_root {
+            return Err("debug launch config does not belong to workspace".to_string());
+        }
+
+        let mut runtime = self.runtime.lock().map_err(|err| err.to_string())?;
+        let adapter = runtime
+            .test_adapters
+            .get(&request.config.adapter)
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "debug adapter is not available for {:?}",
+                    request.config.adapter
+                )
+            })?;
+        let next = runtime
+            .next_by_workspace
+            .entry(request.workspace_id.clone())
+            .or_insert(1);
+        let session_id = format!("{}:debug-{next}", request.workspace_id);
+        *next += 1;
+
+        let workspace_id = request.workspace_id.clone();
+        let logs = adapter.logs.clone();
+        let record = adapter.launch(request, session_id);
+        let info = record.info.clone();
+        runtime.sessions.insert(info.id.clone(), record);
+        push_workspace_log(
+            &mut runtime.logs_by_workspace,
+            &workspace_id,
+            format!("started debug session {}", info.id),
+        );
+        for log in logs {
+            push_workspace_log(&mut runtime.logs_by_workspace, &workspace_id, log);
+        }
+        Ok(info)
+    }
+
+    pub fn start_test_python_session(
+        &self,
+        workspace_id: &str,
+        workspace_root: &str,
+    ) -> Result<DebugSessionInfo, String> {
+        self.start_session(DebugStartSessionRequest {
+            workspace_id: workspace_id.to_string(),
+            workspace_root: workspace_root.to_string(),
+            config: DebugLaunchConfig {
+                id: "cfg-test-python".to_string(),
+                workspace_root: workspace_root.to_string(),
+                name: "Python file".to_string(),
+                adapter: DebugAdapterKind::Python,
+                request: DebugRequestKind::Launch,
+                program: "app.py".to_string(),
+                cwd: ".".to_string(),
+                args: Vec::new(),
+                env: Vec::new(),
+                stop_on_entry: true,
+                attach: None,
+                created_ms: 1,
+                updated_ms: 1,
+            },
+        })
+    }
+
+    pub fn list_sessions(&self, workspace_id: &str) -> Vec<DebugSessionInfo> {
+        let Ok(runtime) = self.runtime.lock() else {
+            return Vec::new();
+        };
+        let mut sessions = runtime
+            .sessions
+            .values()
+            .filter(|record| record.info.workspace_id == workspace_id)
+            .map(|record| record.info.clone())
+            .collect::<Vec<_>>();
+        sessions.sort_by(|left, right| left.id.cmp(&right.id));
+        sessions
+    }
+
+    pub fn session_belongs_to(
+        &self,
+        session_id: &str,
+        workspace_id: &str,
+        workspace_root: &str,
+    ) -> Result<bool, String> {
+        let runtime = self.runtime.lock().map_err(|err| err.to_string())?;
+        let Some(record) = runtime.sessions.get(session_id) else {
+            return Err(format!("debug session not found: {session_id}"));
+        };
+        Ok(
+            record.info.workspace_id == workspace_id
+                && record.info.workspace_root == workspace_root,
+        )
     }
 
     pub fn set_breakpoints(
@@ -371,10 +640,57 @@ impl DebugState {
                 line: breakpoint.line,
                 condition: breakpoint.condition,
                 log_message: breakpoint.log_message,
+                verified: false,
             })
             .collect::<Vec<_>>();
         let mut state = self.breakpoints.lock().map_err(|err| err.to_string())?;
         state.insert(key, breakpoints.clone());
+        Ok(breakpoints)
+    }
+
+    pub fn set_session_breakpoints(
+        &self,
+        session_id: &str,
+        source_path: String,
+        breakpoints: Vec<DebugSourceBreakpointInput>,
+    ) -> Result<Vec<DebugSourceBreakpoint>, String> {
+        let mut runtime = self.runtime.lock().map_err(|err| err.to_string())?;
+        let adapter_kind = runtime
+            .sessions
+            .get(session_id)
+            .map(|record| record.info.adapter)
+            .ok_or_else(|| format!("debug session not found: {session_id}"))?;
+        let breakpoints = if let Some(adapter) = runtime.test_adapters.get(&adapter_kind) {
+            adapter.verify_breakpoints(breakpoints)
+        } else {
+            breakpoints
+                .into_iter()
+                .map(|breakpoint| DebugSourceBreakpoint {
+                    line: breakpoint.line,
+                    condition: breakpoint.condition,
+                    log_message: breakpoint.log_message,
+                    verified: false,
+                })
+                .collect()
+        };
+        let workspace_id = {
+            let record = runtime
+                .sessions
+                .get_mut(session_id)
+                .ok_or_else(|| format!("debug session not found: {session_id}"))?;
+            record
+                .breakpoints_by_source
+                .insert(source_path.clone(), breakpoints.clone());
+            record.info.workspace_id.clone()
+        };
+        push_workspace_log(
+            &mut runtime.logs_by_workspace,
+            &workspace_id,
+            format!(
+                "set {} breakpoints for session {session_id} in {source_path}",
+                breakpoints.len()
+            ),
+        );
         Ok(breakpoints)
     }
 
@@ -394,6 +710,195 @@ impl DebugState {
             .map(|state| state.get(&key).cloned().unwrap_or_default())
             .unwrap_or_default()
     }
+
+    pub fn continue_session(&self, session_id: &str) -> Result<DebugSessionInfo, String> {
+        let mut runtime = self.runtime.lock().map_err(|err| err.to_string())?;
+        let (workspace_id, info) = {
+            let record = runtime
+                .sessions
+                .get_mut(session_id)
+                .ok_or_else(|| format!("debug session not found: {session_id}"))?;
+            ensure_session_can_run(&record.info)?;
+            record.info.status = DebugSessionStatus::Running;
+            record.info.stopped_reason = None;
+            (record.info.workspace_id.clone(), record.info.clone())
+        };
+        push_workspace_log(
+            &mut runtime.logs_by_workspace,
+            &workspace_id,
+            format!("continued debug session {session_id}"),
+        );
+        Ok(info)
+    }
+
+    pub fn step_over(&self, session_id: &str) -> Result<DebugSessionInfo, String> {
+        let mut runtime = self.runtime.lock().map_err(|err| err.to_string())?;
+        let (workspace_id, info) = {
+            let record = runtime
+                .sessions
+                .get_mut(session_id)
+                .ok_or_else(|| format!("debug session not found: {session_id}"))?;
+            ensure_session_can_run(&record.info)?;
+            if let Some(thread_id) = record.info.active_thread_id {
+                if let Some(frames) = record.stack_by_thread.get_mut(&thread_id) {
+                    if let Some(frame) = frames.first_mut() {
+                        frame.line = frame.line.saturating_add(1);
+                    }
+                }
+            }
+            record.info.status = DebugSessionStatus::Stopped;
+            record.info.stopped_reason = Some("step".to_string());
+            (record.info.workspace_id.clone(), record.info.clone())
+        };
+        push_workspace_log(
+            &mut runtime.logs_by_workspace,
+            &workspace_id,
+            format!("stepped over debug session {session_id}"),
+        );
+        Ok(info)
+    }
+
+    pub fn pause(&self, session_id: &str) -> Result<DebugSessionInfo, String> {
+        let mut runtime = self.runtime.lock().map_err(|err| err.to_string())?;
+        let (workspace_id, info) = {
+            let record = runtime
+                .sessions
+                .get_mut(session_id)
+                .ok_or_else(|| format!("debug session not found: {session_id}"))?;
+            ensure_session_can_run(&record.info)?;
+            record.info.status = DebugSessionStatus::Stopped;
+            record.info.stopped_reason = Some("pause".to_string());
+            record.info.active_thread_id = record.info.active_thread_id.or(Some(1));
+            (record.info.workspace_id.clone(), record.info.clone())
+        };
+        push_workspace_log(
+            &mut runtime.logs_by_workspace,
+            &workspace_id,
+            format!("paused debug session {session_id}"),
+        );
+        Ok(info)
+    }
+
+    pub fn disconnect_session(&self, session_id: &str) -> Result<DebugSessionInfo, String> {
+        let mut runtime = self.runtime.lock().map_err(|err| err.to_string())?;
+        let (workspace_id, info) = {
+            let record = runtime
+                .sessions
+                .get_mut(session_id)
+                .ok_or_else(|| format!("debug session not found: {session_id}"))?;
+            record.info.status = DebugSessionStatus::Disconnected;
+            record.info.stopped_reason = None;
+            (record.info.workspace_id.clone(), record.info.clone())
+        };
+        push_workspace_log(
+            &mut runtime.logs_by_workspace,
+            &workspace_id,
+            format!("disconnected debug session {session_id}"),
+        );
+        Ok(info)
+    }
+
+    pub fn stack_trace(
+        &self,
+        session_id: &str,
+        thread_id: i64,
+    ) -> Result<Vec<DebugStackFrame>, String> {
+        let runtime = self.runtime.lock().map_err(|err| err.to_string())?;
+        let record = runtime
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| format!("debug session not found: {session_id}"))?;
+        Ok(record
+            .stack_by_thread
+            .get(&thread_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    pub fn scopes(&self, session_id: &str, frame_id: i64) -> Result<Vec<DebugScope>, String> {
+        let runtime = self.runtime.lock().map_err(|err| err.to_string())?;
+        let record = runtime
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| format!("debug session not found: {session_id}"))?;
+        Ok(record
+            .scopes_by_frame
+            .get(&frame_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    pub fn variables(
+        &self,
+        session_id: &str,
+        variables_reference: i64,
+    ) -> Result<Vec<DebugVariable>, String> {
+        let runtime = self.runtime.lock().map_err(|err| err.to_string())?;
+        let record = runtime
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| format!("debug session not found: {session_id}"))?;
+        Ok(record
+            .variables_by_reference
+            .get(&variables_reference)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    pub fn evaluate(&self, session_id: &str, expression: &str) -> Result<DebugVariable, String> {
+        let runtime = self.runtime.lock().map_err(|err| err.to_string())?;
+        let record = runtime
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| format!("debug session not found: {session_id}"))?;
+        let expression = expression.trim();
+        Ok(record
+            .evaluate_results
+            .get(expression)
+            .cloned()
+            .unwrap_or_else(|| DebugVariable {
+                name: expression.to_string(),
+                value: "<unavailable>".to_string(),
+                type_name: None,
+                variables_reference: 0,
+            }))
+    }
+
+    pub fn session_logs(&self, workspace_id: &str) -> Vec<String> {
+        self.runtime
+            .lock()
+            .map(|runtime| {
+                runtime
+                    .logs_by_workspace
+                    .get(workspace_id)
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn handle_debug_event(&self, event: DebugAdapterEvent) -> Result<(), String> {
+        let mut runtime = self.runtime.lock().map_err(|err| err.to_string())?;
+        let Some(record) = runtime.sessions.get_mut(&event.session_id) else {
+            return Ok(());
+        };
+        let workspace_id = record.info.workspace_id.clone();
+        let log_message = if matches!(
+            record.info.status,
+            DebugSessionStatus::Disconnected
+                | DebugSessionStatus::Exited
+                | DebugSessionStatus::Failed
+        ) {
+            format!(
+                "ignored late event {} for session {}",
+                event.event, event.session_id
+            )
+        } else {
+            apply_debug_event(record, &event)
+        };
+        push_workspace_log(&mut runtime.logs_by_workspace, &workspace_id, log_message);
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -401,6 +906,70 @@ struct DebugBreakpointKey {
     workspace_id: String,
     workspace_root: String,
     source_path: String,
+}
+
+fn ensure_session_can_run(info: &DebugSessionInfo) -> Result<(), String> {
+    match info.status {
+        DebugSessionStatus::Disconnected => Err("debug session is disconnected".to_string()),
+        DebugSessionStatus::Exited => Err("debug session has exited".to_string()),
+        DebugSessionStatus::Failed => Err("debug session has failed".to_string()),
+        DebugSessionStatus::Starting
+        | DebugSessionStatus::Running
+        | DebugSessionStatus::Stopped => Ok(()),
+    }
+}
+
+fn apply_debug_event(record: &mut DebugSessionRecord, event: &DebugAdapterEvent) -> String {
+    match event.event.as_str() {
+        "stopped" => {
+            record.info.status = DebugSessionStatus::Stopped;
+            record.info.stopped_reason = event
+                .body
+                .get("reason")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            record.info.active_thread_id = event.body.get("threadId").and_then(Value::as_i64);
+            format!("debug event stopped for session {}", event.session_id)
+        }
+        "continued" => {
+            record.info.status = DebugSessionStatus::Running;
+            record.info.stopped_reason = None;
+            "debug event continued".to_string()
+        }
+        "exited" => {
+            record.info.status = DebugSessionStatus::Exited;
+            record.info.stopped_reason = None;
+            "debug event exited".to_string()
+        }
+        "terminated" => {
+            record.info.status = DebugSessionStatus::Exited;
+            record.info.stopped_reason = None;
+            "debug event terminated".to_string()
+        }
+        "output" => event
+            .body
+            .get("output")
+            .and_then(Value::as_str)
+            .map_or_else(|| "debug output event".to_string(), str::to_string),
+        other => format!("debug event {other}"),
+    }
+}
+
+fn push_workspace_log(
+    logs_by_workspace: &mut HashMap<String, Vec<String>>,
+    workspace_id: &str,
+    message: String,
+) {
+    let logs = logs_by_workspace
+        .entry(workspace_id.to_string())
+        .or_default();
+    logs.push(message);
+    while logs.iter().map(String::len).sum::<usize>() > DEBUG_LOG_LIMIT {
+        if logs.is_empty() {
+            break;
+        }
+        logs.remove(0);
+    }
 }
 
 fn normalize_path(path: &Path) -> Result<PathBuf, String> {
@@ -632,5 +1201,94 @@ mod tests {
         {
             std::os::windows::fs::symlink_dir(target, link)
         }
+    }
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+
+    #[test]
+    fn scripted_adapter_launch_sets_breakpoints_and_records_stopped_stack_variables() {
+        let state = DebugState::new_for_tests();
+        state.install_test_adapter(
+            DebugAdapterKind::Python,
+            ScriptedDebugAdapter::python_stopped_at_line(8),
+        );
+
+        let session = state
+            .start_session(DebugStartSessionRequest {
+                workspace_id: "workspace-a".to_string(),
+                workspace_root: "/repo".to_string(),
+                config: DebugLaunchConfig {
+                    id: "cfg-script".to_string(),
+                    workspace_root: "/repo".to_string(),
+                    name: "Python file".to_string(),
+                    adapter: DebugAdapterKind::Python,
+                    request: DebugRequestKind::Launch,
+                    program: "app.py".to_string(),
+                    cwd: ".".to_string(),
+                    args: Vec::new(),
+                    env: Vec::new(),
+                    stop_on_entry: true,
+                    attach: None,
+                    created_ms: 1,
+                    updated_ms: 1,
+                },
+            })
+            .expect("start");
+
+        assert_eq!(session.workspace_id, "workspace-a");
+        assert_eq!(session.status, DebugSessionStatus::Stopped);
+
+        let breakpoints = state
+            .set_session_breakpoints(
+                &session.id,
+                "app.py".to_string(),
+                vec![DebugSourceBreakpointInput {
+                    line: 8,
+                    condition: None,
+                    log_message: None,
+                }],
+            )
+            .expect("breakpoints");
+        assert!(breakpoints[0].verified);
+
+        let stack = state.stack_trace(&session.id, 1).expect("stack");
+        assert_eq!(stack[0].name, "main");
+        let scopes = state.scopes(&session.id, stack[0].id).expect("scopes");
+        let variables = state
+            .variables(&session.id, scopes[0].variables_reference)
+            .expect("variables");
+        assert_eq!(variables[0].name, "counter");
+        assert_eq!(variables[0].value, "8");
+    }
+
+    #[test]
+    fn late_events_for_disconnected_session_are_logged_but_do_not_reactivate_session() {
+        let state = DebugState::new_for_tests();
+        state.install_test_adapter(
+            DebugAdapterKind::Python,
+            ScriptedDebugAdapter::python_stopped_at_line(8),
+        );
+        let session = state
+            .start_test_python_session("workspace-a", "/repo")
+            .expect("start");
+
+        state.disconnect_session(&session.id).expect("disconnect");
+        state
+            .handle_debug_event(DebugAdapterEvent {
+                session_id: session.id.clone(),
+                event: "stopped".to_string(),
+                body: serde_json::json!({ "reason": "breakpoint", "threadId": 1 }),
+            })
+            .expect("late event");
+
+        let sessions = state.list_sessions("workspace-a");
+        assert_eq!(sessions[0].status, DebugSessionStatus::Disconnected);
+        assert!(state
+            .session_logs("workspace-a")
+            .join("\n")
+            .contains("ignored late event"));
     }
 }

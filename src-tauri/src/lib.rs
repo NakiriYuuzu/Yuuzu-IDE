@@ -33,6 +33,7 @@ pub fn run() {
             app.manage(terminal::TerminalState::new());
             app.manage(lsp::LspState::new());
             app.manage(remote::RemoteState::new());
+            app.manage(debug::DebugState::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -62,6 +63,22 @@ pub fn run() {
             commands::list_remote_hosts,
             commands::save_remote_host,
             commands::delete_remote_host,
+            commands::debug_list_launch_configs,
+            commands::debug_save_launch_config,
+            commands::debug_delete_launch_config,
+            commands::debug_list_sessions,
+            commands::debug_start_session,
+            commands::debug_set_breakpoints,
+            commands::debug_set_session_breakpoints,
+            commands::debug_continue,
+            commands::debug_step_over,
+            commands::debug_pause,
+            commands::debug_disconnect,
+            commands::debug_stack_trace,
+            commands::debug_scopes,
+            commands::debug_variables,
+            commands::debug_evaluate,
+            commands::debug_session_logs,
             commands::connect_remote_host,
             commands::disconnect_remote_host,
             commands::list_ssh_terminal_sessions,
