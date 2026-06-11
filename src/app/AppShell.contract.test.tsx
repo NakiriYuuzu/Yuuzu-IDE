@@ -32,6 +32,7 @@ import {
   type RemoteViewState,
 } from "../features/remote/remote-model";
 import {
+  AppShell,
   collectAgentAvailableContext,
   activeLoadedFileForWorkspace,
   PanelBody,
@@ -64,6 +65,7 @@ import {
   type AgentAvailableContextSource,
 } from "./AppShell";
 import { ensureTestDom } from "./test-dom";
+import { resetWorkspaceBootstrapForTests } from "./workspace-bootstrap";
 import { workspaceStore } from "./workspace-store";
 import { workspaceViewStore } from "./workspace-view-state";
 import {
@@ -378,6 +380,225 @@ function debugSession(overrides: Partial<DebugSessionInfo> = {}): DebugSessionIn
     last_error: overrides.last_error ?? null,
     sequence: overrides.sequence ?? 1,
   };
+}
+
+type TauriInvokeCall = {
+  command: string;
+  args: Record<string, unknown>;
+};
+
+type TauriEventCallback = (event: {
+  event: string;
+  id: number;
+  payload: unknown;
+}) => void;
+
+type AppShellTauriMockOptions = {
+  workspaceId: string;
+  workspaceRoot: string;
+  launchConfigs?: DebugLaunchConfig[];
+  debugSessions?: DebugSessionInfo[];
+  startedSession?: DebugSessionInfo;
+};
+
+function appShellGitStatus(workspaceRoot: string) {
+  return {
+    workspace_root: workspaceRoot,
+    repository_root: workspaceRoot,
+    branch: "main",
+    upstream: null,
+    ahead: 0,
+    behind: 0,
+    clean: true,
+    has_conflicts: false,
+    changes: [],
+  };
+}
+
+function installAppShellTauriMock(options: AppShellTauriMockOptions) {
+  const invokeCalls: TauriInvokeCall[] = [];
+  const callbacks = new Map<number, TauriEventCallback>();
+  const listeners: Record<string, TauriEventCallback[]> = {};
+  let callbackId = 1;
+  const registry = {
+    active_workspace_id: options.workspaceId,
+    workspaces: [
+      {
+        id: options.workspaceId,
+        name: options.workspaceId,
+        path: options.workspaceRoot,
+        pinned: false,
+      },
+    ],
+  };
+
+  const internals = {
+    transformCallback: (callback: TauriEventCallback) => {
+      const id = callbackId;
+      callbackId += 1;
+      callbacks.set(id, callback);
+      return id;
+    },
+    unregisterCallback: (id: number) => {
+      callbacks.delete(id);
+    },
+    invoke: async (command: string, args: Record<string, unknown> = {}) => {
+      invokeCalls.push({ command, args });
+
+      if (command === "plugin:event|listen") {
+        const event = String(args.event);
+        const handlerId = Number(args.handler);
+        const callback = callbacks.get(handlerId);
+        if (callback) {
+          listeners[event] = [...(listeners[event] ?? []), callback];
+        }
+        return `${event}:${listeners[event]?.length ?? 0}`;
+      }
+      if (command === "plugin:event|unlisten") {
+        return null;
+      }
+
+      switch (command) {
+        case "list_workspaces":
+          return registry;
+        case "list_workspace_tasks":
+        case "list_task_runs":
+        case "git_list_branches":
+        case "docs_index":
+        case "list_context_packs":
+        case "list_agent_sessions":
+        case "list_remote_hosts":
+        case "list_ssh_terminal_sessions":
+        case "list_database_profiles":
+        case "lsp_server_status":
+        case "lsp_workspace_diagnostics":
+        case "debug_stack_trace":
+        case "scan_workspace":
+        case "scan_directory":
+          return [];
+        case "watch_workspace":
+          return {
+            workspace_root: args.workspaceRoot ?? options.workspaceRoot,
+            watch_id: "watch-test",
+          };
+        case "unwatch_workspace":
+          return null;
+        case "git_status":
+          return appShellGitStatus(String(args.workspaceRoot));
+        case "debug_list_launch_configs":
+          return options.launchConfigs ?? [];
+        case "debug_list_sessions":
+          return options.debugSessions ?? [];
+        case "debug_start_session":
+          return (
+            options.startedSession ??
+            debugSession({
+              id: "session-started",
+              workspace_id: String(args.workspaceId),
+              workspace_root: String(args.workspaceRoot),
+              config_id: String(args.configId),
+              name: "Python",
+            })
+          );
+        default:
+          return null;
+      }
+    },
+  };
+
+  (window as unknown as { __TAURI_INTERNALS__: typeof internals }).__TAURI_INTERNALS__ =
+    internals;
+
+  return {
+    invokeCalls,
+    emit(event: string, payload: unknown) {
+      for (const callback of listeners[event] ?? []) {
+        callback({ event, id: 1, payload });
+      }
+    },
+  };
+}
+
+function setupAppShellDebugWorkspace({
+  workspaceId,
+  workspaceRoot,
+  launchConfigs = [debugLaunchConfig({ workspace_root: workspaceRoot })],
+  debugSessions = [],
+  activeSessionId = null,
+  surface = "empty",
+}: {
+  workspaceId: string;
+  workspaceRoot: string;
+  launchConfigs?: DebugLaunchConfig[];
+  debugSessions?: DebugSessionInfo[];
+  activeSessionId?: string | null;
+  surface?: "empty" | "debug-console";
+}) {
+  resetWorkspaceBootstrapForTests();
+  workspaceStore.getState().setRegistry({
+    active_workspace_id: workspaceId,
+    workspaces: [
+      {
+        id: workspaceId,
+        path: workspaceRoot,
+        name: workspaceId,
+        pinned: false,
+      },
+    ],
+  });
+  workspaceViewStore.getState().updateView(workspaceId, {
+    activeActivity: "explorer",
+    panelOpen: true,
+    surface,
+  });
+  workspaceViewStore.getState().updateDebug(workspaceId, () => ({
+    ...replaceDebugLaunchConfigs(createDebugState(), launchConfigs),
+    sessions: debugSessions,
+    activeSessionId,
+    consoleBySessionId: Object.fromEntries(
+      debugSessions.map((session) => [session.id, "debug console output"]),
+    ),
+  }));
+}
+
+async function flushAppShellEffects() {
+  for (let index = 0; index < 3; index += 1) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+}
+
+async function renderAppShellForDebug(
+  options: AppShellTauriMockOptions & {
+    initialSessions?: DebugSessionInfo[];
+    initialActiveSessionId?: string | null;
+    surface?: "empty" | "debug-console";
+  },
+) {
+  const launchConfigs = options.launchConfigs ?? [
+    debugLaunchConfig({ workspace_root: options.workspaceRoot }),
+  ];
+  const tauri = installAppShellTauriMock({
+    ...options,
+    launchConfigs,
+  });
+  setupAppShellDebugWorkspace({
+    workspaceId: options.workspaceId,
+    workspaceRoot: options.workspaceRoot,
+    launchConfigs,
+    debugSessions: options.initialSessions ?? [],
+    activeSessionId: options.initialActiveSessionId ?? null,
+    surface: options.surface,
+  });
+
+  let renderResult!: ReturnType<typeof render>;
+  await act(async () => {
+    renderResult = render(<AppShell />);
+  });
+  await flushAppShellEffects();
+
+  return { renderResult, tauri };
 }
 
 afterEach(() => {
@@ -1475,6 +1696,168 @@ describe("AppShell AppShell helpers", () => {
     ).toBe(true);
     expect(withoutActiveCalls).toEqual([]);
     expect(runDebugCommandFromPalette("unknown", context)).toBe(false);
+  });
+
+  test("AppShell debug refresh keeps null active session after backend snapshots", async () => {
+    const workspaceId = "debug-refresh-null";
+    const workspaceRoot = "/repo-debug-refresh-null";
+    const session = debugSession({
+      id: "session-from-refresh",
+      workspace_id: workspaceId,
+      workspace_root: workspaceRoot,
+    });
+
+    await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot,
+      debugSessions: [session],
+      initialActiveSessionId: null,
+    });
+
+    const debug = workspaceViewStore.getState().viewFor(workspaceId).debug;
+    expect(debug.sessions.map((item) => item.id)).toContain("session-from-refresh");
+    expect(debug.activeSessionId).toBeNull();
+  });
+
+  test("AppShell debug refresh clears stale active session instead of selecting first snapshot", async () => {
+    const workspaceId = "debug-refresh-stale";
+    const workspaceRoot = "/repo-debug-refresh-stale";
+    const session = debugSession({
+      id: "session-first-snapshot",
+      workspace_id: workspaceId,
+      workspace_root: workspaceRoot,
+    });
+
+    await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot,
+      debugSessions: [session],
+      initialActiveSessionId: "missing-session",
+    });
+
+    const debug = workspaceViewStore.getState().viewFor(workspaceId).debug;
+    expect(debug.sessions.map((item) => item.id)).toContain("session-first-snapshot");
+    expect(debug.activeSessionId).toBeNull();
+  });
+
+  test("AppShell debug rail opens the Debug panel", async () => {
+    const workspaceId = "debug-rail-contract";
+    const workspaceRoot = "/repo-debug-rail-contract";
+    const { renderResult } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot,
+    });
+
+    fireEvent.click(renderResult.getByRole("button", { name: "Debug" }));
+
+    const view = workspaceViewStore.getState().viewFor(workspaceId);
+    expect(view.activeActivity).toBe("debug");
+    expect(view.panelOpen).toBe(true);
+    expect(renderResult.getByLabelText("Start debug session")).toBeTruthy();
+  });
+
+  test("AppShell command palette open-debug switches to the Debug activity", async () => {
+    const workspaceId = "debug-palette-open";
+    const workspaceRoot = "/repo-debug-palette-open";
+    const { renderResult } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot,
+    });
+
+    fireEvent.click(
+      renderResult.getByRole("button", { name: /Search or run a command/ }),
+    );
+    fireEvent.click(
+      renderResult.getByRole("button", { name: /Debug: Open panel/ }),
+    );
+
+    const view = workspaceViewStore.getState().viewFor(workspaceId);
+    expect(view.activeActivity).toBe("debug");
+    expect(view.panelOpen).toBe(true);
+    expect(renderResult.getByLabelText("Start debug session")).toBeTruthy();
+  });
+
+  test("AppShell command palette starts debug with the active workspace identity", async () => {
+    const workspaceId = "debug-palette-start";
+    const workspaceRoot = "/repo-debug-palette-start";
+    const config = debugLaunchConfig({
+      id: "cfg-start",
+      workspace_root: workspaceRoot,
+    });
+    const { renderResult, tauri } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot,
+      launchConfigs: [config],
+      startedSession: debugSession({
+        id: "session-started",
+        workspace_id: workspaceId,
+        workspace_root: workspaceRoot,
+        config_id: config.id,
+        name: "Python",
+      }),
+    });
+
+    fireEvent.click(
+      renderResult.getByRole("button", { name: /Search or run a command/ }),
+    );
+    fireEvent.click(
+      renderResult.getByRole("button", { name: /Debug: Start session/ }),
+    );
+    await flushAppShellEffects();
+
+    const startCall = tauri.invokeCalls.find(
+      (call) => call.command === "debug_start_session",
+    );
+    expect(startCall?.args).toEqual({
+      workspaceId,
+      workspaceRoot,
+      configId: "cfg-start",
+    });
+    expect(workspaceViewStore.getState().viewFor(workspaceId).surface).toBe(
+      "debug-console",
+    );
+    expect(renderResult.getByText("debug console ready")).toBeTruthy();
+  });
+
+  test("AppShell wires all debug backend listeners on mount", async () => {
+    const workspaceId = "debug-listener-contract";
+    const workspaceRoot = "/repo-debug-listener-contract";
+    const { tauri } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot,
+    });
+
+    const listenedEvents = tauri.invokeCalls
+      .filter((call) => call.command === "plugin:event|listen")
+      .map((call) => call.args.event);
+    expect(listenedEvents).toContain("workspace://debug-session");
+    expect(listenedEvents).toContain("workspace://debug-console");
+    expect(listenedEvents).toContain("workspace://debug-stopped");
+    expect(listenedEvents).toContain("workspace://debug-exited");
+  });
+
+  test("AppShell renders DebugConsoleSurface for the active debug console surface", async () => {
+    const workspaceId = "debug-console-surface-contract";
+    const workspaceRoot = "/repo-debug-console-surface-contract";
+    const session = debugSession({
+      id: "session-console-active",
+      workspace_id: workspaceId,
+      workspace_root: workspaceRoot,
+      name: "Python",
+    });
+    const { renderResult } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot,
+      debugSessions: [session],
+      initialSessions: [session],
+      initialActiveSessionId: session.id,
+      surface: "debug-console",
+    });
+
+    expect(renderResult.getByText("debug console output")).toBeTruthy();
+    expect(
+      renderResult.getByLabelText("Continue debug session").hasAttribute("disabled"),
+    ).toBe(false);
   });
 
   test("openBrowserPreviewWithValidation does not switch surface on invalid URL", async () => {

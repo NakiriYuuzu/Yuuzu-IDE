@@ -67,6 +67,7 @@ import {
   setDebugStack,
   toggleDebugBreakpoint,
   updateDebugWatchResult,
+  type DebugLaunchConfig,
   type DebugConsoleEvent,
   type DebugSessionEvent,
   type DebugSessionInfo,
@@ -1959,6 +1960,28 @@ export function activeDebugLineForFile(
       (frame) => frame.source_path === sourcePath,
     )?.line ?? null
   );
+}
+
+export function applyDebugRefreshSnapshot(
+  state: DebugViewState,
+  launchConfigs: DebugLaunchConfig[],
+  sessions: DebugSessionInfo[],
+): DebugViewState {
+  const previousActiveSessionId = state.activeSessionId;
+  const refreshed = replaceDebugSessions(
+    replaceDebugLaunchConfigs(state, launchConfigs),
+    sessions,
+  );
+  const activeSessionId =
+    previousActiveSessionId &&
+    sessions.some((session) => session.id === previousActiveSessionId)
+      ? previousActiveSessionId
+      : null;
+
+  return {
+    ...refreshed,
+    activeSessionId,
+  };
 }
 
 function activeDebugConsoleText(state: DebugViewState): string {
@@ -6293,10 +6316,7 @@ export function AppShell() {
       }
 
       updateDebug(workspaceId, (debug) => ({
-        ...replaceDebugSessions(
-          replaceDebugLaunchConfigs(debug, launchConfigs),
-          sessions,
-        ),
+        ...applyDebugRefreshSnapshot(debug, launchConfigs, sessions),
         loading: false,
         error: null,
       }));
