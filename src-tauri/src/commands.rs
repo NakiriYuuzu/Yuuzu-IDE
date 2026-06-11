@@ -616,17 +616,11 @@ impl AppState {
         input: crate::debug::DebugLaunchConfigInput,
     ) -> Result<crate::debug::DebugLaunchConfig, String> {
         let workspace_root = self.trusted_workspace_root(&input.workspace_root)?;
-        if let Some(config_id) = input.id.as_deref() {
-            if let Ok(config) = self.debug_launch_configs.get_config(config_id) {
-                if config.workspace_root != workspace_root.to_string_lossy() {
-                    return Err("debug launch config does not belong to workspace".to_string());
-                }
-            }
-        }
-
-        self.debug_launch_configs.save_config(
+        let workspace_root = workspace_root.to_string_lossy().to_string();
+        self.debug_launch_configs.save_config_for_workspace(
+            &workspace_root,
             crate::debug::DebugLaunchConfigInput {
-                workspace_root: workspace_root.to_string_lossy().to_string(),
+                workspace_root: workspace_root.clone(),
                 ..input
             },
             || Ok(crate::debug::debug_now_ms()),
@@ -648,12 +642,8 @@ impl AppState {
         config_id: &str,
     ) -> Result<(), String> {
         let workspace_root = self.trusted_workspace_root(workspace_root)?;
-        let config = self.debug_launch_configs.get_config(config_id)?;
-        if config.workspace_root != workspace_root.to_string_lossy() {
-            return Err("debug launch config does not belong to workspace".to_string());
-        }
-
-        self.debug_launch_configs.delete_config(config_id)
+        self.debug_launch_configs
+            .delete_config_for_workspace(&workspace_root.to_string_lossy(), config_id)
     }
 
     pub fn debug_list_sessions(
@@ -2787,10 +2777,12 @@ mod tests {
                 && event.payload["session_id"] == session.id
                 && event.payload["workspace_id"] == workspace_a_id
                 && event.payload["workspace_root"] == workspace_a.to_string_lossy().to_string()
+                && event.payload["sequence"].as_u64().is_some()
         }));
         assert!(events
             .iter()
-            .any(|event| event.name == crate::debug::DEBUG_STOPPED_EVENT));
+            .any(|event| event.name == crate::debug::DEBUG_STOPPED_EVENT
+                && event.payload["sequence"].as_u64() == Some(session.sequence)));
         assert!(events
             .iter()
             .any(|event| event.name == crate::debug::DEBUG_CONSOLE_EVENT));

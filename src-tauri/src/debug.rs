@@ -186,6 +186,7 @@ pub struct DebugSessionInfo {
     pub active_thread_id: Option<i64>,
     pub stopped_reason: Option<String>,
     pub last_error: Option<String>,
+    pub sequence: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -270,6 +271,7 @@ impl ScriptedDebugAdapter {
             active_thread_id: Some(thread_id),
             stopped_reason: Some("breakpoint".to_string()),
             last_error: None,
+            sequence: 0,
         };
 
         DebugSessionRecord {
@@ -468,6 +470,59 @@ impl DebugLaunchConfigStore {
         Ok(config)
     }
 
+    pub fn save_config_for_workspace<FNow, FId>(
+        &self,
+        workspace_root: &str,
+        input: DebugLaunchConfigInput,
+        now: FNow,
+        id_factory: FId,
+    ) -> Result<DebugLaunchConfig, String>
+    where
+        FNow: Fn() -> Result<u64, String>,
+        FId: Fn() -> String,
+    {
+        let _guard = self.lock.lock().map_err(|err| err.to_string())?;
+        if input.workspace_root != workspace_root {
+            return Err("debug launch config does not belong to workspace".to_string());
+        }
+
+        let now = now()?;
+        let mut configs = self.load()?;
+        let config_id = input.id.unwrap_or_else(&id_factory);
+        let previous = configs
+            .iter()
+            .find(|config| config.id == config_id)
+            .cloned();
+        if previous
+            .as_ref()
+            .is_some_and(|config| config.workspace_root != workspace_root)
+        {
+            return Err("debug launch config does not belong to workspace".to_string());
+        }
+
+        let created_ms = previous.as_ref().map_or(now, |config| config.created_ms);
+        let config = DebugLaunchConfig {
+            id: config_id.clone(),
+            workspace_root: input.workspace_root,
+            name: input.name,
+            adapter: input.adapter,
+            request: input.request,
+            program: input.program,
+            cwd: input.cwd,
+            args: input.args,
+            env: input.env,
+            stop_on_entry: input.stop_on_entry,
+            attach: input.attach,
+            created_ms,
+            updated_ms: now,
+        };
+
+        configs.retain(|config| config.id != config_id);
+        configs.push(config.clone());
+        self.save(&configs)?;
+        Ok(config)
+    }
+
     pub fn delete_config(&self, id: &str) -> Result<(), String> {
         let _guard = self.lock.lock().map_err(|err| err.to_string())?;
         let mut configs = self.load()?;
@@ -475,6 +530,25 @@ impl DebugLaunchConfigStore {
             .iter()
             .position(|config| config.id == id)
             .ok_or_else(|| format!("debug launch config not found: {id}"))?;
+        configs.remove(index);
+        self.save(&configs)
+    }
+
+    pub fn delete_config_for_workspace(
+        &self,
+        workspace_root: &str,
+        id: &str,
+    ) -> Result<(), String> {
+        let _guard = self.lock.lock().map_err(|err| err.to_string())?;
+        let mut configs = self.load()?;
+        let index = configs
+            .iter()
+            .position(|config| config.id == id)
+            .ok_or_else(|| format!("debug launch config not found: {id}"))?;
+        if configs[index].workspace_root != workspace_root {
+            return Err("debug launch config does not belong to workspace".to_string());
+        }
+
         configs.remove(index);
         self.save(&configs)
     }
@@ -625,7 +699,7 @@ impl DebugState {
             return Err("debug launch config does not belong to workspace".to_string());
         }
 
-        let (info, logs) = {
+        let (info, events) = {
             let mut runtime = self.runtime.lock().map_err(|err| err.to_string())?;
             let adapter = runtime
                 .test_adapters
@@ -646,27 +720,31 @@ impl DebugState {
 
             let workspace_id = request.workspace_id.clone();
             let logs = adapter.logs.clone();
-            let record = adapter.launch(request, session_id);
-            let info = record.info.clone();
-            runtime.sessions.insert(info.id.clone(), record);
+            let mut record = adapter.launch(request, session_id);
+            let session_id = record.info.id.clone();
+            let mut events = vec![PendingDebugEvent::session(next_session_info(&mut record))];
             push_workspace_log(
                 &mut runtime.logs_by_workspace,
                 &workspace_id,
-                format!("started debug session {}", info.id),
+                format!("started debug session {session_id}"),
             );
             for log in &logs {
-                push_workspace_log(&mut runtime.logs_by_workspace, &workspace_id, log.clone());
+                if push_workspace_log(&mut runtime.logs_by_workspace, &workspace_id, log.clone()) {
+                    events.push(PendingDebugEvent::console(
+                        next_session_info(&mut record),
+                        log.clone(),
+                    ));
+                }
             }
-            (info, logs)
+            if record.info.status == DebugSessionStatus::Stopped {
+                events.push(PendingDebugEvent::stopped(next_session_info(&mut record)));
+            }
+            let info = record.info.clone();
+            runtime.sessions.insert(session_id, record);
+            (info, events)
         };
 
-        self.emit_session_event(&info);
-        for log in logs {
-            self.emit_console_event(&info, log);
-        }
-        if info.status == DebugSessionStatus::Stopped {
-            self.emit_stopped_event(&info);
-        }
+        self.emit_pending_events(events);
         Ok(info)
     }
 
@@ -825,7 +903,8 @@ impl DebugState {
             ensure_session_can_run(&record.info)?;
             record.info.status = DebugSessionStatus::Running;
             record.info.stopped_reason = None;
-            (record.info.workspace_id.clone(), record.info.clone())
+            let info = next_session_info(record);
+            (info.workspace_id.clone(), info)
         };
         push_workspace_log(
             &mut runtime.logs_by_workspace,
@@ -854,7 +933,8 @@ impl DebugState {
             }
             record.info.status = DebugSessionStatus::Stopped;
             record.info.stopped_reason = Some("step".to_string());
-            (record.info.workspace_id.clone(), record.info.clone())
+            let info = next_session_info(record);
+            (info.workspace_id.clone(), info)
         };
         push_workspace_log(
             &mut runtime.logs_by_workspace,
@@ -878,7 +958,8 @@ impl DebugState {
             record.info.status = DebugSessionStatus::Stopped;
             record.info.stopped_reason = Some("pause".to_string());
             record.info.active_thread_id = record.info.active_thread_id.or(Some(1));
-            (record.info.workspace_id.clone(), record.info.clone())
+            let info = next_session_info(record);
+            (info.workspace_id.clone(), info)
         };
         push_workspace_log(
             &mut runtime.logs_by_workspace,
@@ -900,7 +981,8 @@ impl DebugState {
                 .ok_or_else(|| format!("debug session not found: {session_id}"))?;
             record.info.status = DebugSessionStatus::Disconnected;
             record.info.stopped_reason = None;
-            (record.info.workspace_id.clone(), record.info.clone())
+            let info = next_session_info(record);
+            (info.workspace_id.clone(), info)
         };
         push_workspace_log(
             &mut runtime.logs_by_workspace,
@@ -998,6 +1080,16 @@ impl DebugState {
                 return Ok(());
             };
             let workspace_id = record.info.workspace_id.clone();
+            if event.event == "output"
+                && event
+                    .body
+                    .get("output")
+                    .and_then(Value::as_str)
+                    .is_some_and(str::is_empty)
+            {
+                return Ok(());
+            }
+
             if matches!(
                 record.info.status,
                 DebugSessionStatus::Disconnected
@@ -1024,17 +1116,21 @@ impl DebugState {
             let emits_stopped = event.event == "stopped";
             let emits_exited = matches!(event.event.as_str(), "exited" | "terminated");
             let log_message = apply_debug_event(record, &event);
-            let info = record.info.clone();
-            push_workspace_log(&mut runtime.logs_by_workspace, &workspace_id, log_message);
+            let info = next_session_info(record);
+            let log_stored =
+                push_workspace_log(&mut runtime.logs_by_workspace, &workspace_id, log_message);
             DebugEventDispatch {
                 info,
-                console_chunk,
+                console_chunk: console_chunk.filter(|_| log_stored),
+                emits_session: event.event != "output",
                 emits_stopped,
                 emits_exited,
             }
         };
 
-        self.emit_session_event(&dispatch.info);
+        if dispatch.emits_session {
+            self.emit_session_event(&dispatch.info);
+        }
         if let Some(chunk) = dispatch.console_chunk {
             self.emit_console_event(&dispatch.info, chunk);
         }
@@ -1056,6 +1152,7 @@ impl DebugState {
                 "workspace_root": &info.workspace_root,
                 "status": &info.status,
                 "reason": &info.stopped_reason,
+                "sequence": info.sequence,
             }),
         );
     }
@@ -1068,6 +1165,7 @@ impl DebugState {
                 "workspace_id": &info.workspace_id,
                 "workspace_root": &info.workspace_root,
                 "chunk": chunk,
+                "sequence": info.sequence,
             }),
         );
     }
@@ -1082,6 +1180,7 @@ impl DebugState {
                 "thread_id": info.active_thread_id,
                 "reason": &info.stopped_reason,
                 "status": &info.status,
+                "sequence": info.sequence,
             }),
         );
     }
@@ -1095,16 +1194,66 @@ impl DebugState {
                 "workspace_root": &info.workspace_root,
                 "status": &info.status,
                 "reason": &info.stopped_reason,
+                "sequence": info.sequence,
             }),
         );
+    }
+
+    fn emit_pending_events(&self, events: Vec<PendingDebugEvent>) {
+        for event in events {
+            match event.name {
+                DEBUG_SESSION_EVENT => self.emit_session_event(&event.info),
+                DEBUG_CONSOLE_EVENT => {
+                    if let Some(chunk) = event.chunk {
+                        self.emit_console_event(&event.info, chunk);
+                    }
+                }
+                DEBUG_STOPPED_EVENT => self.emit_stopped_event(&event.info),
+                DEBUG_EXITED_EVENT => self.emit_exited_event(&event.info),
+                _ => {}
+            }
+        }
     }
 }
 
 struct DebugEventDispatch {
     info: DebugSessionInfo,
     console_chunk: Option<String>,
+    emits_session: bool,
     emits_stopped: bool,
     emits_exited: bool,
+}
+
+struct PendingDebugEvent {
+    name: &'static str,
+    info: DebugSessionInfo,
+    chunk: Option<String>,
+}
+
+impl PendingDebugEvent {
+    fn session(info: DebugSessionInfo) -> Self {
+        Self {
+            name: DEBUG_SESSION_EVENT,
+            info,
+            chunk: None,
+        }
+    }
+
+    fn console(info: DebugSessionInfo, chunk: String) -> Self {
+        Self {
+            name: DEBUG_CONSOLE_EVENT,
+            info,
+            chunk: Some(chunk),
+        }
+    }
+
+    fn stopped(info: DebugSessionInfo) -> Self {
+        Self {
+            name: DEBUG_STOPPED_EVENT,
+            info,
+            chunk: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -1123,6 +1272,11 @@ fn ensure_session_can_run(info: &DebugSessionInfo) -> Result<(), String> {
         | DebugSessionStatus::Running
         | DebugSessionStatus::Stopped => Ok(()),
     }
+}
+
+fn next_session_info(record: &mut DebugSessionRecord) -> DebugSessionInfo {
+    record.info.sequence = record.info.sequence.saturating_add(1);
+    record.info.clone()
 }
 
 fn apply_debug_event(record: &mut DebugSessionRecord, event: &DebugAdapterEvent) -> String {
@@ -1165,7 +1319,11 @@ fn push_workspace_log(
     logs_by_workspace: &mut HashMap<String, Vec<String>>,
     workspace_id: &str,
     message: String,
-) {
+) -> bool {
+    if message.is_empty() {
+        return false;
+    }
+
     let logs = logs_by_workspace
         .entry(workspace_id.to_string())
         .or_default();
@@ -1176,6 +1334,7 @@ fn push_workspace_log(
         }
         logs.remove(0);
     }
+    true
 }
 
 fn normalize_path(path: &Path) -> Result<PathBuf, String> {
@@ -1293,6 +1452,38 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["compiled", "script"],
         );
+    }
+
+    #[test]
+    fn save_delete_launch_config_validate_workspace_inside_store_lock() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = DebugLaunchConfigStore::new(temp.path().join("debug-launch.json"));
+        let mut first = debug_config_input("/repo-a", "script", DebugAdapterKind::Python);
+        first.id = Some("cfg-shared".to_string());
+        store
+            .save_config_for_workspace("/repo-a", first, || Ok(10), || "unused".to_string())
+            .expect("save first");
+
+        let mut forged = debug_config_input("/repo-b", "forged", DebugAdapterKind::Python);
+        forged.id = Some("cfg-shared".to_string());
+        let save =
+            store.save_config_for_workspace("/repo-b", forged, || Ok(20), || "unused".to_string());
+        assert!(save
+            .expect_err("workspace mismatch")
+            .contains("debug launch config does not belong to workspace"));
+
+        let delete = store.delete_config_for_workspace("/repo-b", "cfg-shared");
+        assert!(delete
+            .expect_err("workspace mismatch")
+            .contains("debug launch config does not belong to workspace"));
+
+        let configs = store.list_configs("/repo-a").expect("repo-a configs");
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].name, "script");
+        assert!(store
+            .list_configs("/repo-b")
+            .expect("repo-b configs")
+            .is_empty());
     }
 
     #[test]
@@ -1529,6 +1720,20 @@ mod runtime_tests {
         assert_eq!(stopped_event.payload["session_id"], session.id);
         assert_eq!(stopped_event.payload["reason"], "breakpoint");
         assert_eq!(stopped_event.payload["thread_id"], 1);
+        assert!(
+            stopped_event.payload["sequence"]
+                .as_u64()
+                .expect("stopped sequence")
+                > session_event.payload["sequence"]
+                    .as_u64()
+                    .expect("session sequence")
+        );
+        assert_eq!(
+            session.sequence,
+            stopped_event.payload["sequence"]
+                .as_u64()
+                .expect("stopped sequence")
+        );
 
         let console_event = events
             .iter()
@@ -1539,6 +1744,81 @@ mod runtime_tests {
             .as_str()
             .expect("chunk")
             .contains("Python debug adapter launched"));
+    }
+
+    #[test]
+    fn debug_event_sequence_increases_across_start_stopped_and_disconnect() {
+        let sink = Arc::new(TestDebugEventSink::default());
+        let state = DebugState::new_for_tests_with_event_sink(sink.clone());
+        state.install_test_adapter(
+            DebugAdapterKind::Python,
+            ScriptedDebugAdapter::python_stopped_at_line(8),
+        );
+
+        let session = state
+            .start_test_python_session("workspace-a", "/repo")
+            .expect("start");
+        let events = sink.events();
+        let start_sequence = events
+            .iter()
+            .find(|event| event.name == DEBUG_SESSION_EVENT)
+            .and_then(|event| event.payload["sequence"].as_u64())
+            .expect("start sequence");
+        let stopped_sequence = events
+            .iter()
+            .find(|event| event.name == DEBUG_STOPPED_EVENT)
+            .and_then(|event| event.payload["sequence"].as_u64())
+            .expect("stopped sequence");
+        assert!(stopped_sequence > start_sequence);
+        assert_eq!(session.sequence, stopped_sequence);
+
+        let disconnected = state.disconnect_session(&session.id).expect("disconnect");
+        let events = sink.events();
+        let disconnect_sequence = events
+            .iter()
+            .rev()
+            .find(|event| event.name == DEBUG_SESSION_EVENT)
+            .and_then(|event| event.payload["sequence"].as_u64())
+            .expect("disconnect sequence");
+        assert!(disconnect_sequence > stopped_sequence);
+        assert_eq!(disconnected.sequence, disconnect_sequence);
+    }
+
+    #[test]
+    fn empty_output_events_do_not_grow_logs_or_emit_console_events() {
+        let sink = Arc::new(TestDebugEventSink::default());
+        let state = DebugState::new_for_tests_with_event_sink(sink.clone());
+        state.install_test_adapter(
+            DebugAdapterKind::Python,
+            ScriptedDebugAdapter::python_stopped_at_line(8),
+        );
+        let session = state
+            .start_test_python_session("workspace-a", "/repo")
+            .expect("start");
+        let initial_logs = state.session_logs("workspace-a").len();
+        let initial_console_events = sink
+            .events()
+            .into_iter()
+            .filter(|event| event.name == DEBUG_CONSOLE_EVENT)
+            .count();
+
+        for _ in 0..3 {
+            state
+                .handle_debug_event(DebugAdapterEvent {
+                    session_id: session.id.clone(),
+                    event: "output".to_string(),
+                    body: serde_json::json!({ "output": "" }),
+                })
+                .expect("empty output");
+        }
+
+        assert_eq!(state.session_logs("workspace-a").len(), initial_logs);
+        let console_events = sink
+            .events()
+            .into_iter()
+            .filter(|event| event.name == DEBUG_CONSOLE_EVENT)
+            .count();
+        assert_eq!(console_events, initial_console_events);
     }
 
     #[test]
