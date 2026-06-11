@@ -31,8 +31,8 @@
 ## File Structure
 
 - Create `src-tauri/src/debug.rs`: launch config store, DAP framing, adapter profiles, session state, runtime seam, real-adapter smoke tests.
+- Modify `src-tauri/src/lib.rs`: expose `debug` module during Task 1, then manage `debug::DebugState` and register commands during Task 2.
 - Modify `src-tauri/src/commands.rs`: workspace-scoped `debug_*` command wrappers and command tests.
-- Modify `src-tauri/src/lib.rs`: expose `debug` module, manage `debug::DebugState`, register commands.
 - Create `src/features/debug/debug-model.ts`: frontend debug state, reducers, bounded console/log behavior.
 - Create `src/features/debug/debug-model.test.ts`: reducer and guard tests.
 - Create `src/features/debug/debug-api.ts`: Tauri command wrappers and event listeners.
@@ -56,6 +56,7 @@
 
 **Files:**
 - Create: `src-tauri/src/debug.rs`
+- Modify: `src-tauri/src/lib.rs`
 - Test: `src-tauri/src/debug.rs`
 
 - [ ] **Step 1: Write failing Rust tests**
@@ -222,6 +223,12 @@ pub struct DebugLaunchConfigInput {
 
 Also implement `DebugLaunchConfig`, `DebugEnvVar`, `DebugAttachConfig`, `DebugLaunchConfigStore`, `DebugState`, `DebugSourceBreakpointInput`, `DebugSourceBreakpoint`, `encode_dap_message`, `decode_dap_message`, `normalize_debug_source_path`, `debug_now_ms`, and `new_debug_config_id`. Store JSON on disk like the database and remote stores, sort configs by name, and keep breakpoints in memory by `(workspace_id, workspace_root, source_path)`.
 
+Add this module declaration to `src-tauri/src/lib.rs` so `cargo test debug::tests` compiles the new module:
+
+```rust
+pub mod debug;
+```
+
 - [ ] **Step 4: Run test to verify GREEN**
 
 Run:
@@ -245,7 +252,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src-tauri/src/debug.rs
+git add src-tauri/src/debug.rs src-tauri/src/lib.rs
 git commit -m "feat: add debug launch config domain"
 ```
 
