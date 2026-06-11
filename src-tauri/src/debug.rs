@@ -10,11 +10,79 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
+use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
 pub const DEBUG_LOG_LIMIT: usize = 120_000;
 pub const DAP_MESSAGE_BODY_LIMIT: usize = 120_000;
+pub const DEBUG_SESSION_EVENT: &str = "workspace://debug-session";
+pub const DEBUG_CONSOLE_EVENT: &str = "workspace://debug-console";
+pub const DEBUG_STOPPED_EVENT: &str = "workspace://debug-stopped";
+pub const DEBUG_EXITED_EVENT: &str = "workspace://debug-exited";
+
+pub trait DebugEventSink: Send + Sync {
+    fn emit_debug_event(&self, event_name: &'static str, payload: Value);
+}
+
+#[derive(Clone, Default)]
+pub struct NoopDebugEventSink;
+
+impl DebugEventSink for NoopDebugEventSink {
+    fn emit_debug_event(&self, _event_name: &'static str, _payload: Value) {}
+}
+
+#[derive(Clone)]
+pub struct TauriDebugEventSink {
+    app: AppHandle,
+}
+
+impl TauriDebugEventSink {
+    pub fn new(app: AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+impl DebugEventSink for TauriDebugEventSink {
+    fn emit_debug_event(&self, event_name: &'static str, payload: Value) {
+        let _ = self.app.emit(event_name, payload);
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DebugRecordedEvent {
+    pub name: &'static str,
+    pub payload: Value,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+pub struct TestDebugEventSink {
+    events: Mutex<Vec<DebugRecordedEvent>>,
+}
+
+#[cfg(test)]
+impl TestDebugEventSink {
+    pub fn events(&self) -> Vec<DebugRecordedEvent> {
+        self.events
+            .lock()
+            .map(|events| events.clone())
+            .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+impl DebugEventSink for TestDebugEventSink {
+    fn emit_debug_event(&self, event_name: &'static str, payload: Value) {
+        if let Ok(mut events) = self.events.lock() {
+            events.push(DebugRecordedEvent {
+                name: event_name,
+                payload,
+            });
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum DebugAdapterKind {
@@ -503,10 +571,16 @@ struct DebugRuntimeState {
     logs_by_workspace: HashMap<String, Vec<String>>,
 }
 
-#[derive(Default)]
 pub struct DebugState {
     breakpoints: Arc<Mutex<HashMap<DebugBreakpointKey, Vec<DebugSourceBreakpoint>>>>,
     runtime: Arc<Mutex<DebugRuntimeState>>,
+    event_sink: Arc<dyn DebugEventSink>,
+}
+
+impl Default for DebugState {
+    fn default() -> Self {
+        Self::new_with_event_sink(Arc::new(NoopDebugEventSink))
+    }
 }
 
 impl DebugState {
@@ -514,8 +588,27 @@ impl DebugState {
         Self::default()
     }
 
+    pub fn new_with_event_sink<T>(event_sink: Arc<T>) -> Self
+    where
+        T: DebugEventSink + 'static,
+    {
+        Self {
+            breakpoints: Arc::new(Mutex::new(HashMap::new())),
+            runtime: Arc::new(Mutex::new(DebugRuntimeState::default())),
+            event_sink,
+        }
+    }
+
     pub fn new_for_tests() -> Self {
         Self::new()
+    }
+
+    #[cfg(test)]
+    pub fn new_for_tests_with_event_sink<T>(event_sink: Arc<T>) -> Self
+    where
+        T: DebugEventSink + 'static,
+    {
+        Self::new_with_event_sink(event_sink)
     }
 
     pub fn install_test_adapter(&self, adapter: DebugAdapterKind, scripted: ScriptedDebugAdapter) {
@@ -532,36 +625,47 @@ impl DebugState {
             return Err("debug launch config does not belong to workspace".to_string());
         }
 
-        let mut runtime = self.runtime.lock().map_err(|err| err.to_string())?;
-        let adapter = runtime
-            .test_adapters
-            .get(&request.config.adapter)
-            .cloned()
-            .ok_or_else(|| {
-                format!(
-                    "debug adapter is not available for {:?}",
-                    request.config.adapter
-                )
-            })?;
-        let next = runtime
-            .next_by_workspace
-            .entry(request.workspace_id.clone())
-            .or_insert(1);
-        let session_id = format!("{}:debug-{next}", request.workspace_id);
-        *next += 1;
+        let (info, logs) = {
+            let mut runtime = self.runtime.lock().map_err(|err| err.to_string())?;
+            let adapter = runtime
+                .test_adapters
+                .get(&request.config.adapter)
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "debug adapter is not available for {:?}",
+                        request.config.adapter
+                    )
+                })?;
+            let next = runtime
+                .next_by_workspace
+                .entry(request.workspace_id.clone())
+                .or_insert(1);
+            let session_id = format!("{}:debug-{next}", request.workspace_id);
+            *next += 1;
 
-        let workspace_id = request.workspace_id.clone();
-        let logs = adapter.logs.clone();
-        let record = adapter.launch(request, session_id);
-        let info = record.info.clone();
-        runtime.sessions.insert(info.id.clone(), record);
-        push_workspace_log(
-            &mut runtime.logs_by_workspace,
-            &workspace_id,
-            format!("started debug session {}", info.id),
-        );
+            let workspace_id = request.workspace_id.clone();
+            let logs = adapter.logs.clone();
+            let record = adapter.launch(request, session_id);
+            let info = record.info.clone();
+            runtime.sessions.insert(info.id.clone(), record);
+            push_workspace_log(
+                &mut runtime.logs_by_workspace,
+                &workspace_id,
+                format!("started debug session {}", info.id),
+            );
+            for log in &logs {
+                push_workspace_log(&mut runtime.logs_by_workspace, &workspace_id, log.clone());
+            }
+            (info, logs)
+        };
+
+        self.emit_session_event(&info);
         for log in logs {
-            push_workspace_log(&mut runtime.logs_by_workspace, &workspace_id, log);
+            self.emit_console_event(&info, log);
+        }
+        if info.status == DebugSessionStatus::Stopped {
+            self.emit_stopped_event(&info);
         }
         Ok(info)
     }
@@ -728,6 +832,8 @@ impl DebugState {
             &workspace_id,
             format!("continued debug session {session_id}"),
         );
+        drop(runtime);
+        self.emit_session_event(&info);
         Ok(info)
     }
 
@@ -755,6 +861,9 @@ impl DebugState {
             &workspace_id,
             format!("stepped over debug session {session_id}"),
         );
+        drop(runtime);
+        self.emit_session_event(&info);
+        self.emit_stopped_event(&info);
         Ok(info)
     }
 
@@ -776,6 +885,9 @@ impl DebugState {
             &workspace_id,
             format!("paused debug session {session_id}"),
         );
+        drop(runtime);
+        self.emit_session_event(&info);
+        self.emit_stopped_event(&info);
         Ok(info)
     }
 
@@ -795,6 +907,8 @@ impl DebugState {
             &workspace_id,
             format!("disconnected debug session {session_id}"),
         );
+        drop(runtime);
+        self.emit_session_event(&info);
         Ok(info)
     }
 
@@ -878,27 +992,119 @@ impl DebugState {
     }
 
     pub fn handle_debug_event(&self, event: DebugAdapterEvent) -> Result<(), String> {
-        let mut runtime = self.runtime.lock().map_err(|err| err.to_string())?;
-        let Some(record) = runtime.sessions.get_mut(&event.session_id) else {
-            return Ok(());
+        let dispatch = {
+            let mut runtime = self.runtime.lock().map_err(|err| err.to_string())?;
+            let Some(record) = runtime.sessions.get_mut(&event.session_id) else {
+                return Ok(());
+            };
+            let workspace_id = record.info.workspace_id.clone();
+            if matches!(
+                record.info.status,
+                DebugSessionStatus::Disconnected
+                    | DebugSessionStatus::Exited
+                    | DebugSessionStatus::Failed
+            ) {
+                push_workspace_log(
+                    &mut runtime.logs_by_workspace,
+                    &workspace_id,
+                    format!(
+                        "ignored late event {} for session {}",
+                        event.event, event.session_id
+                    ),
+                );
+                return Ok(());
+            }
+
+            let console_chunk = event
+                .body
+                .get("output")
+                .and_then(Value::as_str)
+                .filter(|_| event.event == "output")
+                .map(str::to_string);
+            let emits_stopped = event.event == "stopped";
+            let emits_exited = matches!(event.event.as_str(), "exited" | "terminated");
+            let log_message = apply_debug_event(record, &event);
+            let info = record.info.clone();
+            push_workspace_log(&mut runtime.logs_by_workspace, &workspace_id, log_message);
+            DebugEventDispatch {
+                info,
+                console_chunk,
+                emits_stopped,
+                emits_exited,
+            }
         };
-        let workspace_id = record.info.workspace_id.clone();
-        let log_message = if matches!(
-            record.info.status,
-            DebugSessionStatus::Disconnected
-                | DebugSessionStatus::Exited
-                | DebugSessionStatus::Failed
-        ) {
-            format!(
-                "ignored late event {} for session {}",
-                event.event, event.session_id
-            )
-        } else {
-            apply_debug_event(record, &event)
-        };
-        push_workspace_log(&mut runtime.logs_by_workspace, &workspace_id, log_message);
+
+        self.emit_session_event(&dispatch.info);
+        if let Some(chunk) = dispatch.console_chunk {
+            self.emit_console_event(&dispatch.info, chunk);
+        }
+        if dispatch.emits_stopped {
+            self.emit_stopped_event(&dispatch.info);
+        }
+        if dispatch.emits_exited {
+            self.emit_exited_event(&dispatch.info);
+        }
         Ok(())
     }
+
+    fn emit_session_event(&self, info: &DebugSessionInfo) {
+        self.event_sink.emit_debug_event(
+            DEBUG_SESSION_EVENT,
+            json!({
+                "session_id": &info.id,
+                "workspace_id": &info.workspace_id,
+                "workspace_root": &info.workspace_root,
+                "status": &info.status,
+                "reason": &info.stopped_reason,
+            }),
+        );
+    }
+
+    fn emit_console_event(&self, info: &DebugSessionInfo, chunk: String) {
+        self.event_sink.emit_debug_event(
+            DEBUG_CONSOLE_EVENT,
+            json!({
+                "session_id": &info.id,
+                "workspace_id": &info.workspace_id,
+                "workspace_root": &info.workspace_root,
+                "chunk": chunk,
+            }),
+        );
+    }
+
+    fn emit_stopped_event(&self, info: &DebugSessionInfo) {
+        self.event_sink.emit_debug_event(
+            DEBUG_STOPPED_EVENT,
+            json!({
+                "session_id": &info.id,
+                "workspace_id": &info.workspace_id,
+                "workspace_root": &info.workspace_root,
+                "thread_id": info.active_thread_id,
+                "reason": &info.stopped_reason,
+                "status": &info.status,
+            }),
+        );
+    }
+
+    fn emit_exited_event(&self, info: &DebugSessionInfo) {
+        self.event_sink.emit_debug_event(
+            DEBUG_EXITED_EVENT,
+            json!({
+                "session_id": &info.id,
+                "workspace_id": &info.workspace_id,
+                "workspace_root": &info.workspace_root,
+                "status": &info.status,
+                "reason": &info.stopped_reason,
+            }),
+        );
+    }
+}
+
+struct DebugEventDispatch {
+    info: DebugSessionInfo,
+    console_chunk: Option<String>,
+    emits_stopped: bool,
+    emits_exited: bool,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -1207,6 +1413,7 @@ mod tests {
 #[cfg(test)]
 mod runtime_tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn scripted_adapter_launch_sets_breakpoints_and_records_stopped_stack_variables() {
@@ -1290,5 +1497,77 @@ mod runtime_tests {
             .session_logs("workspace-a")
             .join("\n")
             .contains("ignored late event"));
+    }
+
+    #[test]
+    fn scripted_adapter_launch_emits_session_console_and_stopped_events() {
+        let sink = Arc::new(TestDebugEventSink::default());
+        let state = DebugState::new_for_tests_with_event_sink(sink.clone());
+        state.install_test_adapter(
+            DebugAdapterKind::Python,
+            ScriptedDebugAdapter::python_stopped_at_line(8),
+        );
+
+        let session = state
+            .start_test_python_session("workspace-a", "/repo")
+            .expect("start");
+
+        let events = sink.events();
+        let session_event = events
+            .iter()
+            .find(|event| event.name == DEBUG_SESSION_EVENT)
+            .expect("session event");
+        assert_eq!(session_event.payload["session_id"], session.id);
+        assert_eq!(session_event.payload["workspace_id"], "workspace-a");
+        assert_eq!(session_event.payload["workspace_root"], "/repo");
+        assert_eq!(session_event.payload["status"], "Stopped");
+
+        let stopped_event = events
+            .iter()
+            .find(|event| event.name == DEBUG_STOPPED_EVENT)
+            .expect("stopped event");
+        assert_eq!(stopped_event.payload["session_id"], session.id);
+        assert_eq!(stopped_event.payload["reason"], "breakpoint");
+        assert_eq!(stopped_event.payload["thread_id"], 1);
+
+        let console_event = events
+            .iter()
+            .find(|event| event.name == DEBUG_CONSOLE_EVENT)
+            .expect("console event");
+        assert_eq!(console_event.payload["session_id"], session.id);
+        assert!(console_event.payload["chunk"]
+            .as_str()
+            .expect("chunk")
+            .contains("Python debug adapter launched"));
+    }
+
+    #[test]
+    fn adapter_exited_event_emits_debug_exited_event() {
+        let sink = Arc::new(TestDebugEventSink::default());
+        let state = DebugState::new_for_tests_with_event_sink(sink.clone());
+        state.install_test_adapter(
+            DebugAdapterKind::Python,
+            ScriptedDebugAdapter::python_stopped_at_line(8),
+        );
+        let session = state
+            .start_test_python_session("workspace-a", "/repo")
+            .expect("start");
+
+        state
+            .handle_debug_event(DebugAdapterEvent {
+                session_id: session.id.clone(),
+                event: "exited".to_string(),
+                body: serde_json::json!({ "exitCode": 0 }),
+            })
+            .expect("exited event");
+
+        let events = sink.events();
+        let exited_event = events
+            .iter()
+            .find(|event| event.name == DEBUG_EXITED_EVENT)
+            .expect("exited event");
+        assert_eq!(exited_event.payload["session_id"], session.id);
+        assert_eq!(exited_event.payload["workspace_id"], "workspace-a");
+        assert_eq!(exited_event.payload["status"], "Exited");
     }
 }

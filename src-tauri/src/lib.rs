@@ -33,7 +33,9 @@ pub fn run() {
             app.manage(terminal::TerminalState::new());
             app.manage(lsp::LspState::new());
             app.manage(remote::RemoteState::new());
-            app.manage(debug::DebugState::new());
+            app.manage(debug::DebugState::new_with_event_sink(std::sync::Arc::new(
+                debug::TauriDebugEventSink::new(app.handle().clone()),
+            )));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

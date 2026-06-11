@@ -2748,6 +2748,55 @@ mod tests {
     }
 
     #[test]
+    fn debug_start_session_emits_frontend_events_through_test_sink() {
+        let (_config, state, workspace_a, _workspace_b, workspace_a_id, _workspace_b_id) =
+            app_state_with_two_workspaces();
+        let sink = std::sync::Arc::new(crate::debug::TestDebugEventSink::default());
+        let debug_state = crate::debug::DebugState::new_for_tests_with_event_sink(sink.clone());
+        debug_state.install_test_adapter(
+            crate::debug::DebugAdapterKind::Python,
+            crate::debug::ScriptedDebugAdapter::python_stopped_at_line(8),
+        );
+        let config = crate::debug::DebugLaunchConfigInput {
+            id: Some("cfg".to_string()),
+            workspace_root: workspace_a.to_string_lossy().to_string(),
+            name: "Python".to_string(),
+            adapter: crate::debug::DebugAdapterKind::Python,
+            request: crate::debug::DebugRequestKind::Launch,
+            program: "app.py".to_string(),
+            cwd: ".".to_string(),
+            args: Vec::new(),
+            env: Vec::new(),
+            stop_on_entry: true,
+            attach: None,
+        };
+        state.debug_save_launch_config(config).expect("save config");
+
+        let session = state
+            .debug_start_session(
+                &debug_state,
+                workspace_a.to_string_lossy().as_ref(),
+                &workspace_a_id,
+                "cfg",
+            )
+            .expect("start");
+
+        let events = sink.events();
+        assert!(events.iter().any(|event| {
+            event.name == crate::debug::DEBUG_SESSION_EVENT
+                && event.payload["session_id"] == session.id
+                && event.payload["workspace_id"] == workspace_a_id
+                && event.payload["workspace_root"] == workspace_a.to_string_lossy().to_string()
+        }));
+        assert!(events
+            .iter()
+            .any(|event| event.name == crate::debug::DEBUG_STOPPED_EVENT));
+        assert!(events
+            .iter()
+            .any(|event| event.name == crate::debug::DEBUG_CONSOLE_EVENT));
+    }
+
+    #[test]
     fn debug_all_workspace_commands_reject_unregistered_workspaces() {
         let config = tempfile::tempdir().expect("config dir");
         let unregistered = tempfile::tempdir().expect("unregistered workspace");
