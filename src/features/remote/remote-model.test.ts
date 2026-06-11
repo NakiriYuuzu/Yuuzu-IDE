@@ -172,4 +172,23 @@ describe("remote model", () => {
     expect(state.commandOutputByRunId["run-1"]).toEndWith("ok\nwarn\n");
     expect(state.commandResults[0]?.command).toBe("uptime");
   });
+
+  test("remote command results do not retain unbounded stdout or stderr", () => {
+    const stdout = `${"o".repeat(120_000)}stdout-tail\n`;
+    const stderr = `${"e".repeat(120_000)}stderr-tail\n`;
+    const state = setRemoteCommandResult(createRemoteState(), "run-big", {
+      host_id: "edge",
+      command: "cat huge.log",
+      stdout,
+      stderr,
+      exit_code: 0,
+      duration_ms: 8,
+    });
+    const result = state.commandResults[0];
+    const retainedOutput = `${result?.stdout ?? ""}${result?.stderr ?? ""}`;
+
+    expect(retainedOutput.length).toBeLessThanOrEqual(120_000);
+    expect(retainedOutput).toBe(state.commandOutputByRunId["run-big"]);
+    expect(retainedOutput).toEndWith("stderr-tail\n");
+  });
 });

@@ -379,9 +379,11 @@ export function setRemoteCommandResult(
   runId: string,
   result: RemoteCommandResult,
 ): RemoteViewState {
+  const boundedResult = boundRemoteCommandResult(result);
+
   return {
     ...state,
-    commandResults: [result, ...state.commandResults].slice(0, 25),
+    commandResults: [boundedResult, ...state.commandResults].slice(0, 25),
     commandOutputByRunId: {
       ...state.commandOutputByRunId,
       [runId]: appendBoundedOutput(
@@ -389,6 +391,25 @@ export function setRemoteCommandResult(
         `${result.stdout}${result.stderr}`,
       ),
     },
+  };
+}
+
+function boundRemoteCommandResult(
+  result: RemoteCommandResult,
+): RemoteCommandResult {
+  const output = `${result.stdout}${result.stderr}`;
+  if (output.length <= MAX_REMOTE_OUTPUT) {
+    return result;
+  }
+
+  const dropped = output.length - MAX_REMOTE_OUTPUT;
+  const stdoutStart = Math.min(dropped, result.stdout.length);
+  const stderrStart = Math.max(0, dropped - result.stdout.length);
+
+  return {
+    ...result,
+    stdout: result.stdout.slice(stdoutStart),
+    stderr: result.stderr.slice(stderrStart),
   };
 }
 
