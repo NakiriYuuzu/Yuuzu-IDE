@@ -573,6 +573,9 @@ desktop.
 
 ### Node 11: Debugging
 
+**Status:** blocked in final verification. Current results are recorded in
+`docs/architecture/node-11-debugging-results.md`.
+
 **Goal:** add debugging once editor, terminal, and language intelligence are
 stable.
 
@@ -702,7 +705,8 @@ stable.
 ## Current Priority
 
 Node 0, Node 1, Node 2, Node 3, Node 4, Node 5, Node 6, Node 7, Node 8,
-Node 9, and Node 10 are complete. The next active priority is Node 11.
+Node 9, and Node 10 are complete. Node 11 is blocked in final verification, so
+the next active priority remains Node 11.
 
 - Node 0 measurements keep Tauri 2 as the main route; Rust-native fallback
   research remains deferred.
@@ -746,3 +750,9 @@ Node 9, and Node 10 are complete. The next active priority is Node 11.
   and transfers, remote command execution, visible connection failures, retry,
   workspace routing, and transfer filename normalization covered by Bun/Cargo
   tests, focused remote smoke, Tauri debug build, and spec/code-quality reviews.
+- Node 11 verification keeps the Debug panel, launch configs, breakpoints,
+  variables, watches, console output, DAP runtime, workspace scoping, Bun/Cargo
+  tests, clippy, formatting, and Tauri debug build covered. It remains blocked
+  because the real `debugpy` smoke passes but the real `lldb-dap` smoke fails
+  with `initialized event failed: timed out waiting for DAP adapter message`
+  while `DevToolsSecurity -status` reports `Developer mode is currently disabled.`

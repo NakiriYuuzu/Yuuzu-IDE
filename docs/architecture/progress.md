@@ -1028,3 +1028,94 @@ Next decision:
 - Move from remote SSH and SFTP to Node 11 Debugging, using the established
   workspace, terminal, language, browser, database, and remote workbench
   surfaces as integration context.
+
+### Node 11: Debugging
+
+Status: blocked in final verification.
+
+Node 11 finished implementation Tasks 1-6 and records the final verification
+state in `docs/architecture/node-11-debugging-results.md`. The standard Bun,
+Rust, lint, format, and Tauri debug build checks pass. Final acceptance is not
+complete because the real compiled-language `lldb-dap` smoke fails on this
+machine before the adapter emits a DAP `initialized` event.
+
+Completed progress:
+
+- Task 1 added the Rust debug domain, DAP framing, launch configuration store,
+  path normalization, and workspace-scoped breakpoint storage.
+- Task 2 added the Rust DAP runtime, session lifecycle, workspace-scoped Tauri
+  commands, stack/variable/watch/evaluation commands, and event emission.
+- Task 3 added the frontend debug model and Tauri API wrappers for launch
+  configs, sessions, breakpoints, watches, stack frames, variables, and bounded
+  console output.
+- Task 4 added the Debug panel, debug console surface, editor breakpoint gutter
+  affordances, and active debug line decorations.
+- Task 5 wired Debug into AppShell, activity rail, command palette, workspace
+  view state, backend listeners, editor callbacks, and the debug console
+  workbench surface.
+- Task 6 added real adapter smoke fixtures for C through `lldb-dap` and Python
+  through `debugpy`, then hardened real adapter launch behavior.
+- Task 7 ran full verification and documented the remaining compiled-adapter
+  blocker.
+
+Important files and commit milestones:
+
+- `src-tauri/src/debug.rs`, `src-tauri/src/commands.rs`, and
+  `src-tauri/src/lib.rs` own the Rust debug domain, runtime, commands, and real
+  adapter smoke tests.
+- `src/features/debug/debug-model.ts`, `src/features/debug/debug-api.ts`,
+  `src/features/debug/DebugPanel.tsx`, and
+  `src/features/debug/DebugConsoleSurface.tsx` own frontend debug state, Tauri
+  IPC, panel UI, and console rendering.
+- `src/features/editor/EditorTab.tsx`, `src/app/AppShell.tsx`,
+  `src/app/activity-rail.tsx`, `src/app/command-palette-model.ts`,
+  `src/app/workspace-view-state.ts`, and `src/index.css` own workbench
+  integration and UI styling.
+- `fixtures/debug/compiled-main.c` and `fixtures/debug/script-main.py` own the
+  real adapter smoke fixtures.
+- Node 11 implementation commits: `e06668a`, `086eece`, `3d45103`,
+  `a00617e`, `9661369`, and `1af3aa9`.
+- Node 11 hardening commits after review: `b9fb230`, `d5da874`, `fad25b7`,
+  `55273a7`, `cb2e327`, `efa33a0`, `ef2287c`, `2500b61`, `268f742`,
+  `d46b6f3`, and `f6f8599`.
+
+Verification outcomes:
+
+- `bun test`: PASS with 336 passed, 0 failed, 952 expect calls across 38 files.
+- `bun run build`: PASS with `tsc && vite build`; Vite chunk-size warnings
+  only.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml`:
+  PASS with 284 Rust lib tests passed, 0 failed, 3 ignored; main and doc-test
+  targets had no runnable tests.
+- `. "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check`:
+  PASS.
+- `. "$HOME/.cargo/env" && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings`:
+  PASS with no warnings.
+- `bun run tauri build --debug`: PASS with
+  `src-tauri/target/debug/yuuzu-ide`,
+  `src-tauri/target/debug/bundle/macos/Yuuzu-IDE.app`, and
+  `src-tauri/target/debug/bundle/dmg/Yuuzu-IDE_0.1.0_aarch64.dmg`.
+- `DevToolsSecurity -status`: `Developer mode is currently disabled.`
+- `xcrun --find lldb-dap`:
+  `/Applications/Xcode.app/Contents/Developer/usr/bin/lldb-dap`.
+- `. "$HOME/.cargo/env" && YUZZU_DEBUG_SMOKE=1 cargo test --manifest-path src-tauri/Cargo.toml debug::adapter_smoke_tests -- --ignored --test-threads=1`:
+  FAILED with 1 passed and 1 failed; `debugpy` passed, while `lldb-dap` failed
+  with `lldb smoke: "initialized event failed: timed out waiting for DAP adapter message"`.
+
+Acceptance state:
+
+- Scripting-language real adapter smoke: PASS through `debugpy`.
+- Compiled-language real adapter smoke: BLOCKED by the `lldb-dap`
+  initialization timeout.
+- Breakpoints, variables, watches, console output, session lifecycle, and
+  workspace scoping: PASS through Bun/Cargo tests and scripted-adapter runtime
+  coverage.
+
+Residual risks:
+
+- Node 11 cannot be marked complete until the `lldb-dap` smoke passes after an
+  external macOS Developer Mode or equivalent debug-permission change.
+- Other Debug Adapter Protocol implementations remain compatibility work beyond
+  the C and Python smoke fixtures.
+- Vite chunk-size warnings remain expected because Monaco, language workers, and
+  terminal assets are large; the build exits successfully.
