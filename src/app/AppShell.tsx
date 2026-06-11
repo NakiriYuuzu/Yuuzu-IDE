@@ -1205,6 +1205,7 @@ export async function refreshRemoteHostsRequest({
     }
 
     updateRemote(workspaceId, (remote) => {
+      const previousActiveSshSessionId = remote.activeSshSessionId;
       const resetSessions = replaceRemoteHosts(
         {
           ...remote,
@@ -1216,10 +1217,20 @@ export async function refreshRemoteHostsRequest({
         hosts,
       );
 
-      return sessions.reduce(
+      const refreshedRemote = sessions.reduce(
         (nextRemote, session) => upsertSshTerminal(nextRemote, session),
         resetSessions,
       );
+      const hasPreviousActiveSession =
+        previousActiveSshSessionId !== null &&
+        sessions.some((session) => session.id === previousActiveSshSessionId);
+
+      return hasPreviousActiveSession
+        ? {
+            ...refreshedRemote,
+            activeSshSessionId: previousActiveSshSessionId,
+          }
+        : refreshedRemote;
     });
   } catch (error) {
     if (!isLatestRemoteHostsRequest(workspaceId, requestId)) {

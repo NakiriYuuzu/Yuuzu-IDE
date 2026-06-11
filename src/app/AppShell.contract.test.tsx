@@ -620,6 +620,66 @@ describe("AppShell AppShell helpers", () => {
     expect(remote.hosts).toEqual([previousHost]);
   });
 
+  test("refreshRemoteHostsRequest preserves active ssh session when refreshed session still exists", async () => {
+    const workspaceId = "remote-active-session";
+    const workspaceRoot = "/repo-remote-active";
+    const host = remoteHost({
+      id: "edge",
+      workspace_root: workspaceRoot,
+    });
+    const firstSession = {
+      id: "edge:ssh-1",
+      host_id: "edge",
+      workspace_id: workspaceId,
+      name: "edge",
+      running: true,
+    };
+    const secondSession = {
+      id: "edge:ssh-2",
+      host_id: "edge",
+      workspace_id: workspaceId,
+      name: "edge 2",
+      running: true,
+    };
+
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: workspaceId,
+      workspaces: [
+        {
+          id: workspaceId,
+          path: workspaceRoot,
+          name: workspaceId,
+          pinned: false,
+        },
+      ],
+    });
+    setRemote(workspaceId, (remote) => ({
+      ...remote,
+      hosts: [host],
+      sshSessions: [firstSession],
+      activeSshSessionId: firstSession.id,
+    }));
+
+    await refreshRemoteHostsRequest({
+      workspaceId,
+      workspaceRoot,
+      requestId: 1,
+      hasRegisteredWorkspace: () => true,
+      getWorkspaceRoot: () => workspaceRoot,
+      isLatestRemoteHostsRequest: () => true,
+      updateRemote: setRemote,
+      listRemoteHosts: async () => [host],
+      listSshTerminalSessions: async () => [firstSession, secondSession],
+    });
+
+    const remote = workspaceViewStore.getState().viewFor(workspaceId).remote;
+    expect(remote.activeSshSessionId).toBe(firstSession.id);
+    expect(remote.sshSessions.map((session) => session.id)).toEqual([
+      firstSession.id,
+      secondSession.id,
+    ]);
+  });
+
   test("PanelBody renders BrowserPanel for browser activity", () => {
     const onBrowserOpenTarget = mock<(url: string) => void>(() => {});
     const state = {
