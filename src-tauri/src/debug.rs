@@ -1384,6 +1384,728 @@ fn relative_path_string(path: &Path) -> Result<String, String> {
 }
 
 #[cfg(test)]
+use real_adapter_helpers::{
+    compile_c_fixture, find_lldb_dap, require_debug_smoke, run_real_dap_smoke, RealDapSmokeProgram,
+};
+
+#[cfg(test)]
+mod real_adapter_helpers {
+    use super::*;
+    use std::{
+        collections::VecDeque,
+        io::{Read, Write},
+        process::{Child, ChildStdin, Command, Stdio},
+        sync::mpsc::{self, Receiver},
+        thread,
+        time::{Duration, Instant},
+    };
+
+    const DAP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+    const DAP_LAUNCH_TIMEOUT: Duration = Duration::from_secs(90);
+
+    #[derive(Clone, Debug)]
+    pub(super) struct RealDapSmokeProgram {
+        pub program: String,
+        pub source_path: String,
+        pub breakpoint_line: u32,
+        pub expected_variable: (String, String),
+    }
+
+    #[derive(Clone, Debug)]
+    pub(super) struct RealDapSmokeResult {
+        pub stopped_reason: Option<String>,
+        pub stack: Vec<DebugStackFrame>,
+    }
+
+    #[derive(Clone, Debug)]
+    struct RealDapBreakpoint {
+        source_path: String,
+        line: u32,
+    }
+
+    #[derive(Clone, Debug)]
+    struct RealDapLaunchResult {
+        stopped_reason: Option<String>,
+        stack: Vec<DebugStackFrame>,
+        variables: Vec<DebugVariable>,
+    }
+
+    pub(super) fn require_debug_smoke() {
+        assert_eq!(
+            std::env::var("YUZZU_DEBUG_SMOKE").ok().as_deref(),
+            Some("1"),
+            "set YUZZU_DEBUG_SMOKE=1 to run real debug adapter smoke tests"
+        );
+    }
+
+    pub(super) fn find_lldb_dap() -> Result<String, String> {
+        let output = Command::new("xcrun")
+            .args(["--find", "lldb-dap"])
+            .output()
+            .map_err(|err| format!("lldb-dap lookup failed: xcrun is unavailable: {err}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "lldb-dap not found via xcrun --find lldb-dap: {}",
+                command_output_summary(&output)
+            ));
+        }
+
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if path.is_empty() {
+            return Err("lldb-dap not found via xcrun --find lldb-dap: empty path".to_string());
+        }
+        Ok(path)
+    }
+
+    pub(super) fn compile_c_fixture(fixture_path: &str) -> Result<String, String> {
+        let source = repo_root().join(fixture_path);
+        let source = source
+            .canonicalize()
+            .map_err(|err| format!("failed to resolve {}: {err}", source.display()))?;
+        let output_dir = std::env::temp_dir().join("yuuzu-ide-debug-smoke");
+        std::fs::create_dir_all(&output_dir).map_err(|err| err.to_string())?;
+        let binary = output_dir.join(format!("compiled-main-{}", std::process::id()));
+        let output = Command::new("xcrun")
+            .args(["clang", "-g", "-O0"])
+            .arg(&source)
+            .arg("-o")
+            .arg(&binary)
+            .output()
+            .map_err(|err| format!("xcrun clang failed to start: {err}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "xcrun clang -g -O0 failed for {}: {}",
+                source.display(),
+                command_output_summary(&output)
+            ));
+        }
+        Ok(binary.to_string_lossy().into_owned())
+    }
+
+    pub(super) fn run_real_dap_smoke(
+        adapter: DebugAdapterKind,
+        adapter_command: String,
+        program: RealDapSmokeProgram,
+    ) -> Result<RealDapSmokeResult, String> {
+        let workspace_root = repo_root().to_string_lossy().into_owned();
+        let command_args = adapter_command_args(adapter);
+        let request = DebugStartSessionRequest {
+            workspace_id: "debug-smoke-workspace".to_string(),
+            workspace_root: workspace_root.clone(),
+            config: DebugLaunchConfig {
+                id: "debug-smoke-config".to_string(),
+                workspace_root,
+                name: "Real adapter smoke".to_string(),
+                adapter,
+                request: DebugRequestKind::Launch,
+                program: program.program.clone(),
+                cwd: ".".to_string(),
+                args: Vec::new(),
+                env: Vec::new(),
+                stop_on_entry: false,
+                attach: None,
+                created_ms: 1,
+                updated_ms: 1,
+            },
+        };
+        let result = run_real_dap_launch(
+            &request,
+            adapter_command,
+            command_args,
+            Some(RealDapBreakpoint {
+                source_path: program.source_path,
+                line: program.breakpoint_line,
+            }),
+        )?;
+
+        let expected = &program.expected_variable;
+        let actual = result
+            .variables
+            .iter()
+            .find(|variable| variable.name == expected.0)
+            .ok_or_else(|| format!("expected variable {} was not returned", expected.0))?;
+        if actual.value != expected.1 {
+            return Err(format!(
+                "expected variable {}={} but adapter returned {}",
+                expected.0, expected.1, actual.value
+            ));
+        }
+
+        Ok(RealDapSmokeResult {
+            stopped_reason: result.stopped_reason,
+            stack: result.stack,
+        })
+    }
+
+    fn run_real_dap_launch(
+        request: &DebugStartSessionRequest,
+        adapter_command: String,
+        adapter_args: Vec<String>,
+        breakpoint: Option<RealDapBreakpoint>,
+    ) -> Result<RealDapLaunchResult, String> {
+        if request.config.request != DebugRequestKind::Launch {
+            return Err("real DAP smoke only supports launch requests".to_string());
+        }
+
+        let workspace_root = PathBuf::from(&request.workspace_root);
+        let cwd = resolve_workspace_path(&workspace_root, &request.config.cwd)?;
+        let program = resolve_workspace_path(&workspace_root, &request.config.program)?;
+        let source_path = breakpoint
+            .as_ref()
+            .map(|breakpoint| resolve_workspace_path(&workspace_root, &breakpoint.source_path))
+            .transpose()?;
+        let mut client = DapClient::spawn(adapter_command, adapter_args, &cwd)?;
+
+        let initialize = client.send_request(
+            "initialize",
+            json!({
+                "clientID": "yuuzu-ide",
+                "clientName": "Yuuzu-IDE",
+                "adapterID": adapter_id(request.config.adapter),
+                "pathFormat": "path",
+                "linesStartAt1": true,
+                "columnsStartAt1": true,
+                "supportsVariableType": true,
+                "supportsVariablePaging": false,
+                "supportsRunInTerminalRequest": false,
+                "locale": "en-us",
+            }),
+        )?;
+        client
+            .wait_for_response(initialize, DAP_REQUEST_TIMEOUT)
+            .map_err(|err| format!("initialize response failed: {err}"))?;
+
+        let launch = client.send_request("launch", launch_arguments(request, &program, &cwd)?)?;
+        client
+            .wait_for_event("initialized", DAP_REQUEST_TIMEOUT)
+            .map_err(|err| format!("initialized event failed: {err}"))?;
+
+        if let (Some(breakpoint), Some(source_path)) = (&breakpoint, source_path.as_ref()) {
+            let set_breakpoints = client.send_request(
+                "setBreakpoints",
+                json!({
+                    "source": {
+                        "name": file_name(source_path),
+                        "path": source_path.to_string_lossy(),
+                    },
+                    "breakpoints": [{ "line": breakpoint.line }],
+                    "lines": [breakpoint.line],
+                    "sourceModified": false,
+                }),
+            )?;
+            client
+                .wait_for_response(set_breakpoints, DAP_REQUEST_TIMEOUT)
+                .map_err(|err| format!("setBreakpoints response failed: {err}"))?;
+        }
+
+        let set_exception_breakpoints = client.send_request(
+            "setExceptionBreakpoints",
+            json!({
+                "filters": [],
+            }),
+        )?;
+        client
+            .wait_for_response(set_exception_breakpoints, DAP_REQUEST_TIMEOUT)
+            .map_err(|err| format!("setExceptionBreakpoints response failed: {err}"))?;
+
+        let configuration_done = client.send_request("configurationDone", json!({}))?;
+        client
+            .wait_for_response(configuration_done, DAP_REQUEST_TIMEOUT)
+            .map_err(|err| format!("configurationDone response failed: {err}"))?;
+        client
+            .wait_for_response(launch, DAP_REQUEST_TIMEOUT)
+            .map_err(|err| format!("launch response failed: {err}"))?;
+
+        let stopped = client
+            .wait_for_one_of_events(&["stopped", "exited", "terminated"], DAP_LAUNCH_TIMEOUT)
+            .map_err(|err| format!("stopped/exited event failed: {err}"))?;
+        let event_name = stopped
+            .get("event")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if event_name != "stopped" {
+            let _ = client.disconnect();
+            return Err(format!("adapter exited before breakpoint: {stopped}"));
+        }
+
+        let stopped_body = stopped.get("body").cloned().unwrap_or_else(|| json!({}));
+        let stopped_reason = stopped_body
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let thread_id = stopped_body
+            .get("threadId")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| format!("stopped event missing threadId: {stopped_body}"))?;
+        let stack = client.stack_trace(thread_id)?;
+        let mut variables = Vec::new();
+        for frame in &stack {
+            for scope in client.scopes(frame.id)? {
+                variables.extend(client.variables(scope.variables_reference)?);
+            }
+        }
+
+        client.disconnect()?;
+        Ok(RealDapLaunchResult {
+            stopped_reason,
+            stack,
+            variables,
+        })
+    }
+
+    struct DapClient {
+        child: Child,
+        stdin: ChildStdin,
+        messages: Receiver<Result<Value, String>>,
+        pending: VecDeque<Value>,
+        next_seq: i64,
+    }
+
+    impl DapClient {
+        fn spawn(program: String, args: Vec<String>, cwd: &Path) -> Result<Self, String> {
+            let mut command = Command::new(&program);
+            command
+                .args(&args)
+                .current_dir(cwd)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                command.process_group(0);
+            }
+            let mut child = command.spawn().map_err(|err| {
+                format!(
+                    "failed to start DAP adapter `{}`: {err}",
+                    command_line(&program, &args)
+                )
+            })?;
+            let stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| "DAP adapter stdin was not captured".to_string())?;
+            let stdout = child
+                .stdout
+                .take()
+                .ok_or_else(|| "DAP adapter stdout was not captured".to_string())?;
+            let stderr = child
+                .stderr
+                .take()
+                .ok_or_else(|| "DAP adapter stderr was not captured".to_string())?;
+            let (messages_tx, messages) = mpsc::channel();
+
+            thread::spawn(move || {
+                let mut stdout = stdout;
+                let mut buffer = Vec::new();
+                let mut chunk = [0_u8; 8192];
+                loop {
+                    match stdout.read(&mut chunk) {
+                        Ok(0) => {
+                            let _ = messages_tx.send(Err("DAP adapter stdout closed".to_string()));
+                            break;
+                        }
+                        Ok(len) => {
+                            buffer.extend_from_slice(&chunk[..len]);
+                            loop {
+                                match decode_dap_message(&mut buffer) {
+                                    Ok(Some(message)) => {
+                                        if messages_tx.send(Ok(message)).is_err() {
+                                            return;
+                                        }
+                                    }
+                                    Ok(None) => break,
+                                    Err(err) => {
+                                        let _ = messages_tx.send(Err(err));
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            let _ = messages_tx
+                                .send(Err(format!("failed to read DAP adapter stdout: {err}")));
+                            break;
+                        }
+                    }
+                }
+            });
+            thread::spawn(move || {
+                let mut stderr = stderr;
+                let mut sink = Vec::new();
+                let _ = stderr.read_to_end(&mut sink);
+            });
+
+            Ok(Self {
+                child,
+                stdin,
+                messages,
+                pending: VecDeque::new(),
+                next_seq: 1,
+            })
+        }
+
+        fn send_request(&mut self, command: &str, arguments: Value) -> Result<i64, String> {
+            let seq = self.next_seq;
+            self.next_seq += 1;
+            let message = json!({
+                "seq": seq,
+                "type": "request",
+                "command": command,
+                "arguments": arguments,
+            });
+            let encoded = encode_dap_message(&message)?;
+            self.stdin.write_all(&encoded).map_err(|err| {
+                format!("failed to write DAP request `{command}` to adapter: {err}")
+            })?;
+            self.stdin.flush().map_err(|err| {
+                format!("failed to flush DAP request `{command}` to adapter: {err}")
+            })?;
+            Ok(seq)
+        }
+
+        fn wait_for_response(
+            &mut self,
+            request_seq: i64,
+            timeout: Duration,
+        ) -> Result<Value, String> {
+            let deadline = Instant::now() + timeout;
+            loop {
+                if let Some(message) = self.take_pending_response(request_seq) {
+                    return response_body(message);
+                }
+
+                let message = self.receive_message(deadline)?;
+                if message.get("type").and_then(Value::as_str) == Some("response")
+                    && message.get("request_seq").and_then(Value::as_i64) == Some(request_seq)
+                {
+                    return response_body(message);
+                }
+                self.pending.push_back(message);
+            }
+        }
+
+        fn wait_for_event(&mut self, event: &str, timeout: Duration) -> Result<Value, String> {
+            self.wait_for_one_of_events(&[event], timeout)
+        }
+
+        fn wait_for_one_of_events(
+            &mut self,
+            events: &[&str],
+            timeout: Duration,
+        ) -> Result<Value, String> {
+            let deadline = Instant::now() + timeout;
+            loop {
+                if let Some(message) = self.take_pending_event(events) {
+                    return Ok(message);
+                }
+
+                let message = self.receive_message(deadline)?;
+                if message.get("type").and_then(Value::as_str) == Some("event")
+                    && message
+                        .get("event")
+                        .and_then(Value::as_str)
+                        .is_some_and(|event| events.contains(&event))
+                {
+                    return Ok(message);
+                }
+                self.pending.push_back(message);
+            }
+        }
+
+        fn stack_trace(&mut self, thread_id: i64) -> Result<Vec<DebugStackFrame>, String> {
+            let request = self.send_request("stackTrace", json!({ "threadId": thread_id }))?;
+            let body = self.wait_for_response(request, DAP_REQUEST_TIMEOUT)?;
+            Ok(body
+                .get("stackFrames")
+                .and_then(Value::as_array)
+                .map(|frames| {
+                    frames
+                        .iter()
+                        .filter_map(parse_stack_frame)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default())
+        }
+
+        fn scopes(&mut self, frame_id: i64) -> Result<Vec<DebugScope>, String> {
+            let request = self.send_request("scopes", json!({ "frameId": frame_id }))?;
+            let body = self.wait_for_response(request, DAP_REQUEST_TIMEOUT)?;
+            Ok(body
+                .get("scopes")
+                .and_then(Value::as_array)
+                .map(|scopes| scopes.iter().filter_map(parse_scope).collect::<Vec<_>>())
+                .unwrap_or_default())
+        }
+
+        fn variables(&mut self, variables_reference: i64) -> Result<Vec<DebugVariable>, String> {
+            if variables_reference == 0 {
+                return Ok(Vec::new());
+            }
+
+            let request = self.send_request(
+                "variables",
+                json!({ "variablesReference": variables_reference }),
+            )?;
+            let body = self.wait_for_response(request, DAP_REQUEST_TIMEOUT)?;
+            Ok(body
+                .get("variables")
+                .and_then(Value::as_array)
+                .map(|variables| {
+                    variables
+                        .iter()
+                        .filter_map(parse_variable)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default())
+        }
+
+        fn disconnect(&mut self) -> Result<(), String> {
+            let request = self.send_request(
+                "disconnect",
+                json!({
+                    "terminateDebuggee": true,
+                    "restart": false,
+                }),
+            )?;
+            let _ = self.wait_for_response(request, Duration::from_secs(5));
+            self.terminate();
+            Ok(())
+        }
+
+        fn receive_message(&mut self, deadline: Instant) -> Result<Value, String> {
+            let now = Instant::now();
+            if now >= deadline {
+                return Err("timed out waiting for DAP adapter message".to_string());
+            }
+            let remaining = deadline.saturating_duration_since(now);
+            match self.messages.recv_timeout(remaining) {
+                Ok(Ok(message)) => Ok(message),
+                Ok(Err(err)) => Err(err),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    Err("timed out waiting for DAP adapter message".to_string())
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    Err("DAP adapter message channel closed".to_string())
+                }
+            }
+        }
+
+        fn take_pending_response(&mut self, request_seq: i64) -> Option<Value> {
+            let index = self.pending.iter().position(|message| {
+                message.get("type").and_then(Value::as_str) == Some("response")
+                    && message.get("request_seq").and_then(Value::as_i64) == Some(request_seq)
+            })?;
+            self.pending.remove(index)
+        }
+
+        fn take_pending_event(&mut self, events: &[&str]) -> Option<Value> {
+            let index = self.pending.iter().position(|message| {
+                message.get("type").and_then(Value::as_str) == Some("event")
+                    && message
+                        .get("event")
+                        .and_then(Value::as_str)
+                        .is_some_and(|event| events.contains(&event))
+            })?;
+            self.pending.remove(index)
+        }
+
+        fn terminate(&mut self) {
+            #[cfg(unix)]
+            terminate_process_group(self.child.id());
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    impl Drop for DapClient {
+        fn drop(&mut self) {
+            self.terminate();
+        }
+    }
+
+    fn adapter_command_args(adapter: DebugAdapterKind) -> Vec<String> {
+        match adapter {
+            DebugAdapterKind::Python => [
+                "run",
+                "--with",
+                "debugpy",
+                "python",
+                "-m",
+                "debugpy.adapter",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            DebugAdapterKind::Lldb | DebugAdapterKind::Custom => Vec::new(),
+        }
+    }
+
+    fn launch_arguments(
+        request: &DebugStartSessionRequest,
+        program: &Path,
+        cwd: &Path,
+    ) -> Result<Value, String> {
+        let program = program.to_string_lossy();
+        let cwd = cwd.to_string_lossy();
+        match request.config.adapter {
+            DebugAdapterKind::Lldb => Ok(json!({
+                "name": request.config.name,
+                "type": "lldb-dap",
+                "request": "launch",
+                "program": program,
+                "cwd": cwd,
+                "stopOnEntry": request.config.stop_on_entry,
+                "args": request.config.args,
+            })),
+            DebugAdapterKind::Python => Ok(json!({
+                "program": program,
+                "cwd": cwd,
+                "stopOnEntry": request.config.stop_on_entry,
+                "console": "internalConsole",
+            })),
+            DebugAdapterKind::Custom => {
+                Err("real DAP smoke does not support custom adapters".to_string())
+            }
+        }
+    }
+
+    fn adapter_id(adapter: DebugAdapterKind) -> &'static str {
+        match adapter {
+            DebugAdapterKind::Lldb => "lldb",
+            DebugAdapterKind::Python => "python",
+            DebugAdapterKind::Custom => "custom",
+        }
+    }
+
+    fn parse_stack_frame(value: &Value) -> Option<DebugStackFrame> {
+        Some(DebugStackFrame {
+            id: value.get("id")?.as_i64()?,
+            name: value.get("name")?.as_str()?.to_string(),
+            source_path: value
+                .get("source")
+                .and_then(|source| source.get("path"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            line: value
+                .get("line")
+                .and_then(Value::as_u64)
+                .and_then(|line| u32::try_from(line).ok())
+                .unwrap_or(0),
+            column: value
+                .get("column")
+                .and_then(Value::as_u64)
+                .and_then(|column| u32::try_from(column).ok())
+                .unwrap_or(0),
+        })
+    }
+
+    fn parse_scope(value: &Value) -> Option<DebugScope> {
+        Some(DebugScope {
+            name: value.get("name")?.as_str()?.to_string(),
+            variables_reference: value.get("variablesReference")?.as_i64()?,
+            expensive: value
+                .get("expensive")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        })
+    }
+
+    fn parse_variable(value: &Value) -> Option<DebugVariable> {
+        Some(DebugVariable {
+            name: value.get("name")?.as_str()?.to_string(),
+            value: value.get("value")?.as_str()?.to_string(),
+            type_name: value
+                .get("type")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            variables_reference: value
+                .get("variablesReference")
+                .and_then(Value::as_i64)
+                .unwrap_or(0),
+        })
+    }
+
+    fn response_body(message: Value) -> Result<Value, String> {
+        if message
+            .get("success")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return Ok(message.get("body").cloned().unwrap_or_else(|| json!({})));
+        }
+        Err(format!(
+            "DAP request failed: {}",
+            message
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown adapter error")
+        ))
+    }
+
+    fn resolve_workspace_path(workspace_root: &Path, value: &str) -> Result<PathBuf, String> {
+        let path = Path::new(value);
+        let resolved = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            workspace_root.join(path)
+        };
+        resolved
+            .canonicalize()
+            .map_err(|err| format!("failed to resolve {}: {err}", resolved.display()))
+    }
+
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+    }
+
+    fn file_name(path: &Path) -> String {
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned())
+    }
+
+    fn command_line(program: &str, args: &[String]) -> String {
+        std::iter::once(program.to_string())
+            .chain(args.iter().cloned())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn command_output_summary(output: &std::process::Output) -> String {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        format!(
+            "status={} stdout={} stderr={}",
+            output.status,
+            stdout.trim(),
+            stderr.trim()
+        )
+    }
+
+    #[cfg(unix)]
+    fn terminate_process_group(pid: u32) {
+        let group = format!("-{pid}");
+        let _ = Command::new("kill")
+            .args(["-TERM", &group])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        thread::sleep(Duration::from_millis(200));
+        let _ = Command::new("kill")
+            .args(["-KILL", &group])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1849,5 +2571,52 @@ mod runtime_tests {
         assert_eq!(exited_event.payload["session_id"], session.id);
         assert_eq!(exited_event.payload["workspace_id"], "workspace-a");
         assert_eq!(exited_event.payload["status"], "Exited");
+    }
+}
+
+#[cfg(test)]
+mod adapter_smoke_tests {
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn lldb_dap_debugs_compiled_c_fixture_to_breakpoint() {
+        require_debug_smoke();
+        let lldb_dap = find_lldb_dap().expect("lldb-dap");
+        let binary = compile_c_fixture("fixtures/debug/compiled-main.c").expect("compile fixture");
+        let result = run_real_dap_smoke(
+            DebugAdapterKind::Lldb,
+            lldb_dap,
+            RealDapSmokeProgram {
+                program: binary,
+                source_path: "fixtures/debug/compiled-main.c".to_string(),
+                breakpoint_line: 6,
+                expected_variable: ("counter".to_string(), "3".to_string()),
+            },
+        )
+        .expect("lldb smoke");
+
+        assert_eq!(result.stopped_reason.as_deref(), Some("breakpoint"));
+        assert!(result.stack.iter().any(|frame| frame.name.contains("main")));
+    }
+
+    #[test]
+    #[ignore]
+    fn debugpy_debugs_python_fixture_to_breakpoint() {
+        require_debug_smoke();
+        let result = run_real_dap_smoke(
+            DebugAdapterKind::Python,
+            "uv".to_string(),
+            RealDapSmokeProgram {
+                program: "fixtures/debug/script-main.py".to_string(),
+                source_path: "fixtures/debug/script-main.py".to_string(),
+                breakpoint_line: 5,
+                expected_variable: ("counter".to_string(), "3".to_string()),
+            },
+        )
+        .expect("debugpy smoke");
+
+        assert_eq!(result.stopped_reason.as_deref(), Some("breakpoint"));
+        assert!(result.stack.iter().any(|frame| frame.name.contains("main")));
     }
 }
