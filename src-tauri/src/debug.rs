@@ -648,6 +648,7 @@ struct DebugRuntimeState {
 pub struct DebugState {
     breakpoints: Arc<Mutex<HashMap<DebugBreakpointKey, Vec<DebugSourceBreakpoint>>>>,
     runtime: Arc<Mutex<DebugRuntimeState>>,
+    real_adapter_factory: Arc<dyn RealDebugAdapterFactory>,
     event_sink: Arc<dyn DebugEventSink>,
 }
 
@@ -666,9 +667,23 @@ impl DebugState {
     where
         T: DebugEventSink + 'static,
     {
+        Self::new_with_event_sink_and_real_adapter_factory(
+            event_sink,
+            Arc::new(StdioRealDebugAdapterFactory::default()),
+        )
+    }
+
+    fn new_with_event_sink_and_real_adapter_factory<T>(
+        event_sink: Arc<T>,
+        real_adapter_factory: Arc<dyn RealDebugAdapterFactory>,
+    ) -> Self
+    where
+        T: DebugEventSink + 'static,
+    {
         Self {
             breakpoints: Arc::new(Mutex::new(HashMap::new())),
             runtime: Arc::new(Mutex::new(DebugRuntimeState::default())),
+            real_adapter_factory,
             event_sink,
         }
     }
@@ -685,6 +700,17 @@ impl DebugState {
         Self::new_with_event_sink(event_sink)
     }
 
+    #[cfg(test)]
+    fn new_for_tests_with_real_adapter_factory<T>(real_adapter_factory: Arc<T>) -> Self
+    where
+        T: RealDebugAdapterFactory + 'static,
+    {
+        Self::new_with_event_sink_and_real_adapter_factory(
+            Arc::new(NoopDebugEventSink),
+            real_adapter_factory,
+        )
+    }
+
     pub fn install_test_adapter(&self, adapter: DebugAdapterKind, scripted: ScriptedDebugAdapter) {
         if let Ok(mut runtime) = self.runtime.lock() {
             runtime.test_adapters.insert(adapter, scripted);
@@ -699,28 +725,36 @@ impl DebugState {
             return Err("debug launch config does not belong to workspace".to_string());
         }
 
-        let (info, events) = {
+        let (session_id, scripted_adapter) = {
             let mut runtime = self.runtime.lock().map_err(|err| err.to_string())?;
-            let adapter = runtime
-                .test_adapters
-                .get(&request.config.adapter)
-                .cloned()
-                .ok_or_else(|| {
-                    format!(
-                        "debug adapter is not available for {:?}",
-                        request.config.adapter
-                    )
-                })?;
             let next = runtime
                 .next_by_workspace
                 .entry(request.workspace_id.clone())
                 .or_insert(1);
             let session_id = format!("{}:debug-{next}", request.workspace_id);
             *next += 1;
+            (
+                session_id,
+                runtime.test_adapters.get(&request.config.adapter).cloned(),
+            )
+        };
 
-            let workspace_id = request.workspace_id.clone();
+        let (mut record, logs) = if let Some(adapter) = scripted_adapter {
             let logs = adapter.logs.clone();
-            let mut record = adapter.launch(request, session_id);
+            (adapter.launch(request, session_id), logs)
+        } else {
+            let breakpoints = self
+                .real_breakpoints_for_workspace(&request.workspace_id, &request.workspace_root)?;
+            (
+                self.real_adapter_factory
+                    .launch(request, session_id, breakpoints)?,
+                Vec::new(),
+            )
+        };
+
+        let (info, events) = {
+            let mut runtime = self.runtime.lock().map_err(|err| err.to_string())?;
+            let workspace_id = record.info.workspace_id.clone();
             let session_id = record.info.id.clone();
             let mut events = vec![PendingDebugEvent::session(next_session_info(&mut record))];
             push_workspace_log(
@@ -746,6 +780,26 @@ impl DebugState {
 
         self.emit_pending_events(events);
         Ok(info)
+    }
+
+    fn real_breakpoints_for_workspace(
+        &self,
+        workspace_id: &str,
+        workspace_root: &str,
+    ) -> Result<Vec<RealDapBreakpoint>, String> {
+        let state = self.breakpoints.lock().map_err(|err| err.to_string())?;
+        Ok(state
+            .iter()
+            .filter(|(key, _)| {
+                key.workspace_id == workspace_id && key.workspace_root == workspace_root
+            })
+            .flat_map(|(key, breakpoints)| {
+                breakpoints.iter().map(|breakpoint| RealDapBreakpoint {
+                    source_path: key.source_path.clone(),
+                    line: breakpoint.line,
+                })
+            })
+            .collect())
     }
 
     pub fn start_test_python_session(
@@ -1383,13 +1437,14 @@ fn relative_path_string(path: &Path) -> Result<String, String> {
     Ok(parts.join("/"))
 }
 
+use real_adapter::{RealDapBreakpoint, RealDebugAdapterFactory, StdioRealDebugAdapterFactory};
+
 #[cfg(test)]
-use real_adapter_helpers::{
+use real_adapter::{
     compile_c_fixture, find_lldb_dap, require_debug_smoke, run_real_dap_smoke, RealDapSmokeProgram,
 };
 
-#[cfg(test)]
-mod real_adapter_helpers {
+mod real_adapter {
     use super::*;
     use std::{
         collections::VecDeque,
@@ -1403,7 +1458,45 @@ mod real_adapter_helpers {
     const DAP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
     const DAP_LAUNCH_TIMEOUT: Duration = Duration::from_secs(90);
 
+    pub(super) trait RealDebugAdapterFactory: Send + Sync {
+        fn launch(
+            &self,
+            request: DebugStartSessionRequest,
+            session_id: String,
+            breakpoints: Vec<RealDapBreakpoint>,
+        ) -> Result<DebugSessionRecord, String>;
+    }
+
+    #[derive(Default)]
+    pub(super) struct StdioRealDebugAdapterFactory {
+        adapter_command_override: Option<(DebugAdapterKind, String)>,
+    }
+
+    impl StdioRealDebugAdapterFactory {
+        #[cfg(test)]
+        pub(super) fn with_adapter_command(adapter: DebugAdapterKind, command: String) -> Self {
+            Self {
+                adapter_command_override: Some((adapter, command)),
+            }
+        }
+    }
+
+    impl RealDebugAdapterFactory for StdioRealDebugAdapterFactory {
+        fn launch(
+            &self,
+            request: DebugStartSessionRequest,
+            session_id: String,
+            breakpoints: Vec<RealDapBreakpoint>,
+        ) -> Result<DebugSessionRecord, String> {
+            let (adapter_command, adapter_args) =
+                adapter_command_for(&request, self.adapter_command_override.as_ref())?;
+            let launch = run_real_dap_launch(&request, adapter_command, adapter_args, breakpoints)?;
+            Ok(real_launch_record(request, session_id, launch))
+        }
+    }
+
     #[derive(Clone, Debug)]
+    #[cfg(test)]
     pub(super) struct RealDapSmokeProgram {
         pub program: String,
         pub source_path: String,
@@ -1412,24 +1505,29 @@ mod real_adapter_helpers {
     }
 
     #[derive(Clone, Debug)]
+    #[cfg(test)]
     pub(super) struct RealDapSmokeResult {
         pub stopped_reason: Option<String>,
         pub stack: Vec<DebugStackFrame>,
     }
 
-    #[derive(Clone, Debug)]
-    struct RealDapBreakpoint {
-        source_path: String,
-        line: u32,
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub(super) struct RealDapBreakpoint {
+        pub source_path: String,
+        pub line: u32,
     }
 
     #[derive(Clone, Debug)]
     struct RealDapLaunchResult {
+        thread_id: i64,
         stopped_reason: Option<String>,
         stack: Vec<DebugStackFrame>,
-        variables: Vec<DebugVariable>,
+        scopes_by_frame: HashMap<i64, Vec<DebugScope>>,
+        variables_by_reference: HashMap<i64, Vec<DebugVariable>>,
+        evaluate_results: HashMap<String, DebugVariable>,
     }
 
+    #[cfg(test)]
     pub(super) fn require_debug_smoke() {
         assert_eq!(
             std::env::var("YUZZU_DEBUG_SMOKE").ok().as_deref(),
@@ -1457,6 +1555,7 @@ mod real_adapter_helpers {
         Ok(path)
     }
 
+    #[cfg(test)]
     pub(super) fn compile_c_fixture(fixture_path: &str) -> Result<String, String> {
         let source = repo_root().join(fixture_path);
         let source = source
@@ -1482,15 +1581,29 @@ mod real_adapter_helpers {
         Ok(binary.to_string_lossy().into_owned())
     }
 
+    #[cfg(test)]
     pub(super) fn run_real_dap_smoke(
         adapter: DebugAdapterKind,
         adapter_command: String,
         program: RealDapSmokeProgram,
     ) -> Result<RealDapSmokeResult, String> {
         let workspace_root = repo_root().to_string_lossy().into_owned();
-        let command_args = adapter_command_args(adapter);
+        let workspace_id = "debug-smoke-workspace".to_string();
+        let state = DebugState::new_for_tests_with_real_adapter_factory(Arc::new(
+            StdioRealDebugAdapterFactory::with_adapter_command(adapter, adapter_command),
+        ));
+        state.set_breakpoints(
+            workspace_id.clone(),
+            workspace_root.clone(),
+            program.source_path.clone(),
+            vec![DebugSourceBreakpointInput {
+                line: program.breakpoint_line,
+                condition: None,
+                log_message: None,
+            }],
+        )?;
         let request = DebugStartSessionRequest {
-            workspace_id: "debug-smoke-workspace".to_string(),
+            workspace_id,
             workspace_root: workspace_root.clone(),
             config: DebugLaunchConfig {
                 id: "debug-smoke-config".to_string(),
@@ -1508,19 +1621,20 @@ mod real_adapter_helpers {
                 updated_ms: 1,
             },
         };
-        let result = run_real_dap_launch(
-            &request,
-            adapter_command,
-            command_args,
-            Some(RealDapBreakpoint {
-                source_path: program.source_path,
-                line: program.breakpoint_line,
-            }),
-        )?;
+        let session = state.start_session(request)?;
+        let thread_id = session
+            .active_thread_id
+            .ok_or_else(|| "real adapter smoke did not stop with an active thread".to_string())?;
+        let stack = state.stack_trace(&session.id, thread_id)?;
+        let mut variables = Vec::new();
+        for frame in &stack {
+            for scope in state.scopes(&session.id, frame.id)? {
+                variables.extend(state.variables(&session.id, scope.variables_reference)?);
+            }
+        }
 
         let expected = &program.expected_variable;
-        let actual = result
-            .variables
+        let actual = variables
             .iter()
             .find(|variable| variable.name == expected.0)
             .ok_or_else(|| format!("expected variable {} was not returned", expected.0))?;
@@ -1532,8 +1646,8 @@ mod real_adapter_helpers {
         }
 
         Ok(RealDapSmokeResult {
-            stopped_reason: result.stopped_reason,
-            stack: result.stack,
+            stopped_reason: session.stopped_reason,
+            stack,
         })
     }
 
@@ -1541,7 +1655,7 @@ mod real_adapter_helpers {
         request: &DebugStartSessionRequest,
         adapter_command: String,
         adapter_args: Vec<String>,
-        breakpoint: Option<RealDapBreakpoint>,
+        breakpoints: Vec<RealDapBreakpoint>,
     ) -> Result<RealDapLaunchResult, String> {
         if request.config.request != DebugRequestKind::Launch {
             return Err("real DAP smoke only supports launch requests".to_string());
@@ -1550,10 +1664,7 @@ mod real_adapter_helpers {
         let workspace_root = PathBuf::from(&request.workspace_root);
         let cwd = resolve_workspace_path(&workspace_root, &request.config.cwd)?;
         let program = resolve_workspace_path(&workspace_root, &request.config.program)?;
-        let source_path = breakpoint
-            .as_ref()
-            .map(|breakpoint| resolve_workspace_path(&workspace_root, &breakpoint.source_path))
-            .transpose()?;
+        let breakpoints = resolve_breakpoints(&workspace_root, breakpoints)?;
         let mut client = DapClient::spawn(adapter_command, adapter_args, &cwd)?;
 
         let initialize = client.send_request(
@@ -1580,16 +1691,16 @@ mod real_adapter_helpers {
             .wait_for_event("initialized", DAP_REQUEST_TIMEOUT)
             .map_err(|err| format!("initialized event failed: {err}"))?;
 
-        if let (Some(breakpoint), Some(source_path)) = (&breakpoint, source_path.as_ref()) {
+        for (source_path, lines) in breakpoints {
             let set_breakpoints = client.send_request(
                 "setBreakpoints",
                 json!({
                     "source": {
-                        "name": file_name(source_path),
+                        "name": file_name(&source_path),
                         "path": source_path.to_string_lossy(),
                     },
-                    "breakpoints": [{ "line": breakpoint.line }],
-                    "lines": [breakpoint.line],
+                    "breakpoints": lines.iter().map(|line| json!({ "line": line })).collect::<Vec<_>>(),
+                    "lines": lines,
                     "sourceModified": false,
                 }),
             )?;
@@ -1639,18 +1750,31 @@ mod real_adapter_helpers {
             .and_then(Value::as_i64)
             .ok_or_else(|| format!("stopped event missing threadId: {stopped_body}"))?;
         let stack = client.stack_trace(thread_id)?;
-        let mut variables = Vec::new();
+        let mut scopes_by_frame = HashMap::new();
+        let mut variables_by_reference = HashMap::new();
+        let mut evaluate_results = HashMap::new();
         for frame in &stack {
             for scope in client.scopes(frame.id)? {
-                variables.extend(client.variables(scope.variables_reference)?);
+                let variables = client.variables(scope.variables_reference)?;
+                for variable in &variables {
+                    evaluate_results.insert(variable.name.clone(), variable.clone());
+                }
+                variables_by_reference.insert(scope.variables_reference, variables);
+                scopes_by_frame
+                    .entry(frame.id)
+                    .or_insert_with(Vec::new)
+                    .push(scope);
             }
         }
 
         client.disconnect()?;
         Ok(RealDapLaunchResult {
+            thread_id,
             stopped_reason,
             stack,
-            variables,
+            scopes_by_frame,
+            variables_by_reference,
+            evaluate_results,
         })
     }
 
@@ -1925,6 +2049,62 @@ mod real_adapter_helpers {
         }
     }
 
+    fn real_launch_record(
+        request: DebugStartSessionRequest,
+        session_id: String,
+        launch: RealDapLaunchResult,
+    ) -> DebugSessionRecord {
+        let info = DebugSessionInfo {
+            id: session_id,
+            workspace_id: request.workspace_id,
+            workspace_root: request.workspace_root,
+            config_id: request.config.id,
+            name: request.config.name,
+            adapter: request.config.adapter,
+            status: DebugSessionStatus::Stopped,
+            active_thread_id: Some(launch.thread_id),
+            stopped_reason: launch.stopped_reason,
+            last_error: None,
+            sequence: 0,
+        };
+        DebugSessionRecord {
+            info,
+            stack_by_thread: HashMap::from([(launch.thread_id, launch.stack)]),
+            scopes_by_frame: launch.scopes_by_frame,
+            variables_by_reference: launch.variables_by_reference,
+            evaluate_results: launch.evaluate_results,
+            breakpoints_by_source: HashMap::new(),
+        }
+    }
+
+    fn adapter_command_for(
+        request: &DebugStartSessionRequest,
+        override_command: Option<&(DebugAdapterKind, String)>,
+    ) -> Result<(String, Vec<String>), String> {
+        if let Some((adapter, command)) = override_command {
+            if *adapter == request.config.adapter {
+                return Ok((
+                    command.clone(),
+                    adapter_command_args(request.config.adapter),
+                ));
+            }
+        }
+
+        match request.config.adapter {
+            DebugAdapterKind::Lldb => Ok((find_lldb_dap()?, Vec::new())),
+            DebugAdapterKind::Python => Ok((
+                "uv".to_string(),
+                adapter_command_args(DebugAdapterKind::Python),
+            )),
+            DebugAdapterKind::Custom => {
+                if request.config.program.trim().is_empty() {
+                    return Err("custom debug adapter command cannot be empty".to_string());
+                }
+                Ok((request.config.program.clone(), request.config.args.clone()))
+            }
+        }
+    }
+
     fn adapter_command_args(adapter: DebugAdapterKind) -> Vec<String> {
         match adapter {
             DebugAdapterKind::Python => [
@@ -1965,9 +2145,12 @@ mod real_adapter_helpers {
                 "stopOnEntry": request.config.stop_on_entry,
                 "console": "internalConsole",
             })),
-            DebugAdapterKind::Custom => {
-                Err("real DAP smoke does not support custom adapters".to_string())
-            }
+            DebugAdapterKind::Custom => Ok(json!({
+                "program": program,
+                "cwd": cwd,
+                "stopOnEntry": request.config.stop_on_entry,
+                "args": request.config.args,
+            })),
         }
     }
 
@@ -2057,6 +2240,27 @@ mod real_adapter_helpers {
             .map_err(|err| format!("failed to resolve {}: {err}", resolved.display()))
     }
 
+    fn resolve_breakpoints(
+        workspace_root: &Path,
+        breakpoints: Vec<RealDapBreakpoint>,
+    ) -> Result<Vec<(PathBuf, Vec<u32>)>, String> {
+        let mut by_source: Vec<(PathBuf, Vec<u32>)> = Vec::new();
+        for breakpoint in breakpoints {
+            let source_path = resolve_workspace_path(workspace_root, &breakpoint.source_path)?;
+            if let Some((_, lines)) = by_source.iter_mut().find(|(path, _)| path == &source_path) {
+                lines.push(breakpoint.line);
+            } else {
+                by_source.push((source_path, vec![breakpoint.line]));
+            }
+        }
+        for (_, lines) in &mut by_source {
+            lines.sort_unstable();
+            lines.dedup();
+        }
+        Ok(by_source)
+    }
+
+    #[cfg(test)]
     fn repo_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -2382,6 +2586,85 @@ mod runtime_tests {
             .expect("variables");
         assert_eq!(variables[0].name, "counter");
         assert_eq!(variables[0].value, "8");
+    }
+
+    #[test]
+    fn real_adapter_factory_launches_when_no_scripted_adapter_is_registered() {
+        let factory = Arc::new(RecordingRealAdapterFactory::new());
+        let state = DebugState::new_for_tests_with_real_adapter_factory(factory.clone());
+
+        let session = state
+            .start_session(DebugStartSessionRequest {
+                workspace_id: "workspace-a".to_string(),
+                workspace_root: "/repo".to_string(),
+                config: DebugLaunchConfig {
+                    id: "cfg-real".to_string(),
+                    workspace_root: "/repo".to_string(),
+                    name: "Python file".to_string(),
+                    adapter: DebugAdapterKind::Python,
+                    request: DebugRequestKind::Launch,
+                    program: "app.py".to_string(),
+                    cwd: ".".to_string(),
+                    args: Vec::new(),
+                    env: Vec::new(),
+                    stop_on_entry: true,
+                    attach: None,
+                    created_ms: 1,
+                    updated_ms: 1,
+                },
+            })
+            .expect("real adapter launch");
+
+        assert_eq!(session.status, DebugSessionStatus::Stopped);
+        assert_eq!(session.stopped_reason.as_deref(), Some("breakpoint"));
+        let launches = factory.launches.lock().expect("launches");
+        assert_eq!(launches.as_slice(), &[DebugAdapterKind::Python]);
+    }
+
+    struct RecordingRealAdapterFactory {
+        launches: std::sync::Mutex<Vec<DebugAdapterKind>>,
+    }
+
+    impl RecordingRealAdapterFactory {
+        fn new() -> Self {
+            Self {
+                launches: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl RealDebugAdapterFactory for RecordingRealAdapterFactory {
+        fn launch(
+            &self,
+            request: DebugStartSessionRequest,
+            session_id: String,
+            _breakpoints: Vec<RealDapBreakpoint>,
+        ) -> Result<DebugSessionRecord, String> {
+            self.launches
+                .lock()
+                .expect("launches")
+                .push(request.config.adapter);
+            Ok(DebugSessionRecord {
+                info: DebugSessionInfo {
+                    id: session_id,
+                    workspace_id: request.workspace_id,
+                    workspace_root: request.workspace_root,
+                    config_id: request.config.id,
+                    name: request.config.name,
+                    adapter: request.config.adapter,
+                    status: DebugSessionStatus::Stopped,
+                    active_thread_id: Some(1),
+                    stopped_reason: Some("breakpoint".to_string()),
+                    last_error: None,
+                    sequence: 0,
+                },
+                stack_by_thread: HashMap::new(),
+                scopes_by_frame: HashMap::new(),
+                variables_by_reference: HashMap::new(),
+                evaluate_results: HashMap::new(),
+                breakpoints_by_source: HashMap::new(),
+            })
+        }
     }
 
     #[test]
