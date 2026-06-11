@@ -12,6 +12,7 @@ import {
   node7Commands,
   node9Commands,
   node10Commands,
+  node11Commands,
 } from "./command-palette-model";
 
 describe("filterCommands", () => {
@@ -212,5 +213,79 @@ describe("filterCommands", () => {
         "remote-open-sftp",
       ]),
     );
+  });
+
+  test("includes node 11 debug commands in palette", () => {
+    expect(node11Commands).toEqual([
+      {
+        id: "open-debug",
+        label: "Debug: Open panel",
+        group: "Debug",
+        description: "Open the debug workbench panel",
+      },
+      {
+        id: "debug-start-session",
+        label: "Debug: Start session",
+        group: "Debug",
+        description: "Start the selected launch configuration",
+      },
+      {
+        id: "debug-continue",
+        label: "Debug: Continue",
+        group: "Debug",
+        description: "Continue the active debug session",
+      },
+      {
+        id: "debug-step-over",
+        label: "Debug: Step over",
+        group: "Debug",
+        description: "Step over in the active debug session",
+      },
+      {
+        id: "debug-pause",
+        label: "Debug: Pause",
+        group: "Debug",
+        description: "Pause the active debug session",
+      },
+      {
+        id: "debug-disconnect",
+        label: "Debug: Disconnect",
+        group: "Debug",
+        description: "Disconnect the active debug session",
+      },
+      {
+        id: "debug-toggle-breakpoint",
+        label: "Debug: Toggle breakpoint",
+        group: "Debug",
+        description: "Toggle a breakpoint in the active editor",
+      },
+    ]);
+    expect(allCommands.map((command) => command.id)).toEqual(
+      expect.arrayContaining([
+        "open-debug",
+        "debug-start-session",
+        "debug-continue",
+        "debug-step-over",
+        "debug-pause",
+        "debug-disconnect",
+        "debug-toggle-breakpoint",
+      ]),
+    );
+  });
+
+  test("searches debug commands by group, label, and description", () => {
+    const byGroup = filterCommands(allCommands, "debug").map(
+      (command) => command.id,
+    );
+    const byLabel = filterCommands(allCommands, "step").map(
+      (command) => command.id,
+    );
+    const byDescription = filterCommands(allCommands, "launch configuration").map(
+      (command) => command.id,
+    );
+
+    expect(byGroup).toContain("debug-start-session");
+    expect(byLabel).toContain("debug-step-over");
+    expect(byDescription).toContain("debug-start-session");
   });
 });

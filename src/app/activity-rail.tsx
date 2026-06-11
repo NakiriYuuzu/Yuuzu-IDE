@@ -1,5 +1,6 @@
 import {
   BookOpenText,
+  Bug,
   ClipboardList,
   Database,
   Files,
@@ -18,6 +19,7 @@ export type KnownActivityId =
   | "explorer"
   | "search"
   | "git"
+  | "debug"
   | "terminal"
   | "tasks"
   | "docs"
@@ -40,6 +42,7 @@ const activities: ActivityItem[] = [
   { id: "explorer", label: "Explorer", icon: Files },
   { id: "search", label: "Search", icon: Search },
   { id: "git", label: "Git", icon: GitBranch },
+  { id: "debug", label: "Debug", icon: Bug },
   { id: "terminal", label: "Terminal", icon: SquareTerminal },
   { id: "tasks", label: "Tasks", icon: ClipboardList },
   { id: "docs", label: "Docs", icon: BookOpenText },

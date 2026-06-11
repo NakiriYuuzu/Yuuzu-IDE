@@ -2,6 +2,7 @@ export type CommandItem = {
   id: string;
   label: string;
   group: string;
+  description?: string;
 };
 
 export const node1Commands: CommandItem[] = [
@@ -109,6 +110,51 @@ export const node10Commands: CommandItem[] = [
   { id: "remote-open-sftp", label: "Remote: Open SFTP browser", group: "Remote" },
 ];
 
+export const node11Commands: CommandItem[] = [
+  {
+    id: "open-debug",
+    label: "Debug: Open panel",
+    group: "Debug",
+    description: "Open the debug workbench panel",
+  },
+  {
+    id: "debug-start-session",
+    label: "Debug: Start session",
+    group: "Debug",
+    description: "Start the selected launch configuration",
+  },
+  {
+    id: "debug-continue",
+    label: "Debug: Continue",
+    group: "Debug",
+    description: "Continue the active debug session",
+  },
+  {
+    id: "debug-step-over",
+    label: "Debug: Step over",
+    group: "Debug",
+    description: "Step over in the active debug session",
+  },
+  {
+    id: "debug-pause",
+    label: "Debug: Pause",
+    group: "Debug",
+    description: "Pause the active debug session",
+  },
+  {
+    id: "debug-disconnect",
+    label: "Debug: Disconnect",
+    group: "Debug",
+    description: "Disconnect the active debug session",
+  },
+  {
+    id: "debug-toggle-breakpoint",
+    label: "Debug: Toggle breakpoint",
+    group: "Debug",
+    description: "Toggle a breakpoint in the active editor",
+  },
+];
+
 export const allCommands: CommandItem[] = [
   ...node1Commands,
   ...node5Commands,
@@ -117,6 +163,7 @@ export const allCommands: CommandItem[] = [
   ...node8Commands,
   ...node9Commands,
   ...node10Commands,
+  ...node11Commands,
 ];
 
 export function filterCommands(
@@ -132,7 +179,12 @@ export function filterCommands(
   return commands.filter((command) => {
     const group = command.group.toLowerCase();
     const label = command.label.toLowerCase();
+    const description = command.description?.toLowerCase() ?? "";
 
-    return group === needle || label.includes(needle);
+    return (
+      group === needle ||
+      label.includes(needle) ||
+      description.includes(needle)
+    );
   });
 }

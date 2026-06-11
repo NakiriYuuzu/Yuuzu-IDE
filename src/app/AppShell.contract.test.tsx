@@ -54,6 +54,11 @@ import {
   handleSshTerminalOutputEvent,
   knownWorkspaceIdForSshTerminal,
   remoteTransferFileName,
+  activeDebugLineForFile,
+  activeDebugSessionForState,
+  handleDebugConsoleEvent,
+  handleDebugSessionEvent,
+  runDebugCommandFromPalette,
   type BrowserCaptureRequestState,
   type BrowserValidationRequestState,
   type AgentAvailableContextSource,
@@ -61,6 +66,14 @@ import {
 import { ensureTestDom } from "./test-dom";
 import { workspaceStore } from "./workspace-store";
 import { workspaceViewStore } from "./workspace-view-state";
+import {
+  createDebugState,
+  replaceDebugLaunchConfigs,
+  setDebugStack,
+  type DebugLaunchConfig,
+  type DebugSessionInfo,
+  type DebugViewState,
+} from "../features/debug/debug-model";
 
 ensureTestDom();
 
@@ -189,6 +202,181 @@ function remoteHost(
     connect_timeout_seconds: overrides.connect_timeout_seconds ?? 10,
     created_ms: overrides.created_ms ?? 1,
     updated_ms: overrides.updated_ms ?? 1,
+  };
+}
+
+type PanelBodyProps = Parameters<typeof PanelBody>[0];
+
+function panelBodyProps(overrides: Partial<PanelBodyProps> = {}): PanelBodyProps {
+  return {
+    active: "explorer",
+    refreshKey: 0,
+    activeFilePath: "src/app/AppShell.tsx",
+    terminalSessions: [],
+    activeTerminalId: null,
+    terminalCwdInput: "",
+    terminalError: null,
+    taskState: {
+      detectedTasks: [],
+      runs: [],
+      activeRunId: null,
+      outputByRunId: {},
+      problemsByRunId: {},
+      pendingOutputByRunId: {},
+      pendingFinishByRunId: {},
+      contextPackByRunId: {},
+      customCommand: "",
+    },
+    taskError: null,
+    gitState: {
+      status: null,
+      loading: false,
+      error: null,
+      commitMessage: "",
+      selectedDiff: null,
+      diffByKey: {},
+      branches: [],
+      graph: [],
+    },
+    docsState: createDocsState(),
+    contextPackNameById: {},
+    gitDecorations: {},
+    onOpenFile: () => {},
+    onCreateFile: async () => {},
+    onRenamePath: async () => {},
+    onDeletePath: async () => {},
+    onTerminalCwdInputChange: () => {},
+    onNewTerminal: () => {},
+    onActivateTerminal: () => {},
+    onCloseTerminal: () => {},
+    onRestartTerminal: () => {},
+    onTaskCustomCommandChange: () => {},
+    onRunTask: () => {},
+    onRunCustomTask: () => {},
+    onActivateTaskRun: () => {},
+    onStopTaskRun: () => {},
+    onRerunTaskRun: () => {},
+    onGitRefresh: () => {},
+    onGitCommitMessageChange: () => {},
+    onGitCommit: () => {},
+    onGitStage: () => {},
+    onGitUnstage: () => {},
+    onGitDiscard: () => {},
+    onGitOpenDiff: () => {},
+    onGitStash: () => {},
+    onGitFetch: () => {},
+    onGitPull: () => {},
+    onGitPush: () => {},
+    onGitCheckoutBranch: () => {},
+    onGitCreateBranch: () => {},
+    onGitOpenGraph: () => {},
+    onDocsRefresh: () => {},
+    onDocsSearch: () => {},
+    onDocsOpenPreview: () => {},
+    onDocsToggleSource: () => {},
+    onDocsPackNameChange: () => {},
+    onDocsCreatePack: () => {},
+    onDocsSelectPack: () => {},
+    onDocsDeletePack: () => {},
+    onDocsUsePackForActiveTask: () => {},
+    onDocsLinkPackToAgentSession: async () => {},
+    agentState: createAgentState(),
+    availableAgentContext: [],
+    onAgentModeChange: () => {},
+    onAgentPromptChange: () => {},
+    onAgentToggleContext: () => {},
+    onAgentStartSession: () => {},
+    onAgentSelectSession: () => {},
+    onAgentApprove: () => {},
+    onAgentReject: () => {},
+    onAgentExport: () => {},
+    onLanguageOpenDiagnostic: () => {},
+    onLanguageRefresh: () => {},
+    onLanguageRestartServer: () => {},
+    browserState: createBrowserState(),
+    browserTargets: [],
+    browserCanCapture: false,
+    onBrowserUrlInputChange: () => {},
+    onBrowserOpenUrl: () => {},
+    onBrowserOpenTarget: () => {},
+    onBrowserReload: () => {},
+    onBrowserHardReload: () => {},
+    onBrowserCapture: () => {},
+    onBrowserSelectScreenshot: () => {},
+    languageState: createLanguageState(),
+    databaseState: createDatabaseState(),
+    onDatabaseRefreshProfiles: () => {},
+    onDatabaseSelectProfile: () => {},
+    onDatabaseInspectProfile: () => {},
+    onDatabaseOpenTable: () => {},
+    onDatabaseDraftChange: () => {},
+    onDatabaseRunQuery: () => {},
+    onDatabaseConfirmQuery: () => {},
+    onDatabaseCancelConfirmation: () => {},
+    onDatabaseExportResult: () => {},
+    onDatabaseSelectHistory: () => {},
+    remoteState: createRemoteState(),
+    onRemoteModeChange: () => {},
+    onRemoteSelectHost: () => {},
+    onRemoteRefresh: () => {},
+    onRemoteCreateHost: () => {},
+    onRemoteConnectHost: () => {},
+    onRemoteOpenSsh: () => {},
+    onRemoteOpenSftp: () => {},
+    onRemoteRunCommand: () => {},
+    onRemoteCommandDraftChange: () => {},
+    onRemoteListSftpDirectory: () => {},
+    onRemoteDownloadFile: () => {},
+    onRemoteUploadFile: () => {},
+    debugState: createDebugState(),
+    onDebugModeChange: () => {},
+    onDebugSelectConfig: () => {},
+    onDebugStartSession: () => {},
+    onDebugContinue: () => {},
+    onDebugStepOver: () => {},
+    onDebugPause: () => {},
+    onDebugDisconnect: () => {},
+    onDebugOpenFrame: () => {},
+    onDebugAddWatch: () => {},
+    onDebugRemoveWatch: () => {},
+    onDebugEvaluate: () => {},
+    ...overrides,
+  };
+}
+
+function debugLaunchConfig(
+  overrides: Partial<DebugLaunchConfig> = {},
+): DebugLaunchConfig {
+  return {
+    id: overrides.id ?? "cfg-python",
+    workspace_root: overrides.workspace_root ?? "/repo",
+    name: overrides.name ?? "Python",
+    adapter: overrides.adapter ?? "Python",
+    request: overrides.request ?? "Launch",
+    program: overrides.program ?? "app.py",
+    cwd: overrides.cwd ?? ".",
+    args: overrides.args ?? [],
+    env: overrides.env ?? [],
+    stop_on_entry: overrides.stop_on_entry ?? true,
+    attach: overrides.attach ?? null,
+    created_ms: overrides.created_ms ?? 1,
+    updated_ms: overrides.updated_ms ?? 1,
+  };
+}
+
+function debugSession(overrides: Partial<DebugSessionInfo> = {}): DebugSessionInfo {
+  return {
+    id: overrides.id ?? "session-1",
+    workspace_id: overrides.workspace_id ?? "debug-workspace-a",
+    workspace_root: overrides.workspace_root ?? "/repo-a",
+    config_id: overrides.config_id ?? "cfg-python",
+    name: overrides.name ?? "Python",
+    adapter: overrides.adapter ?? "Python",
+    status: overrides.status ?? "Running",
+    active_thread_id: overrides.active_thread_id ?? null,
+    stopped_reason: overrides.stopped_reason ?? null,
+    last_error: overrides.last_error ?? null,
+    sequence: overrides.sequence ?? 1,
   };
 }
 
@@ -1012,6 +1200,281 @@ describe("AppShell AppShell helpers", () => {
     expect(
       renderResult.container.querySelector(".browser-split.has-editor"),
     ).toBeNull();
+  });
+
+  test("PanelBody renders DebugPanel and routes debug callbacks", () => {
+    const onDebugStartSession = mock(() => {});
+    const onDebugModeChange = mock<(mode: DebugViewState["mode"]) => void>(() => {});
+    const debugState = replaceDebugLaunchConfigs(createDebugState(), [
+      debugLaunchConfig(),
+    ]);
+
+    const renderResult = render(
+      <PanelBody
+        {...panelBodyProps({
+          active: "debug",
+          debugState,
+          onDebugStartSession,
+          onDebugModeChange,
+        })}
+      />,
+    );
+
+    expect(renderResult.getByText("Debug")).toBeTruthy();
+    fireEvent.click(renderResult.getByLabelText("Start debug session"));
+    expect(onDebugStartSession).toHaveBeenCalledTimes(1);
+    fireEvent.click(renderResult.getByRole("button", { name: "Breakpoints" }));
+    expect(onDebugModeChange).toHaveBeenCalledWith("breakpoints");
+  });
+
+  test("activeDebugSessionForState does not fall back to the first session", () => {
+    const withoutActive = {
+      ...createDebugState(),
+      sessions: [debugSession({ id: "session-first" })],
+      activeSessionId: null,
+    };
+    const withActive = {
+      ...withoutActive,
+      sessions: [
+        debugSession({ id: "session-first" }),
+        debugSession({ id: "session-active" }),
+      ],
+      activeSessionId: "session-active",
+    };
+
+    expect(activeDebugSessionForState(withoutActive)).toBeNull();
+    expect(activeDebugSessionForState(withActive)?.id).toBe("session-active");
+  });
+
+  test("activeDebugLineForFile uses only the selected session stack", () => {
+    const state = setDebugStack(
+      {
+        ...createDebugState(),
+        sessions: [
+          debugSession({ id: "session-first" }),
+          debugSession({ id: "session-active" }),
+        ],
+        activeSessionId: "session-active",
+      },
+      "session-active",
+      [
+        {
+          id: 1,
+          name: "main",
+          source_path: "src/app/AppShell.tsx",
+          line: 42,
+          column: 1,
+        },
+      ],
+    );
+
+    expect(activeDebugLineForFile(state, "src/app/AppShell.tsx")).toBe(42);
+    expect(activeDebugLineForFile(state, "src/other.ts")).toBeNull();
+    expect(
+      activeDebugLineForFile({ ...state, activeSessionId: null }, "src/app/AppShell.tsx"),
+    ).toBeNull();
+  });
+
+  test("handleDebugSessionEvent updates only registered matching workspaces by sequence", () => {
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: "debug-workspace-a",
+      workspaces: [
+        {
+          id: "debug-workspace-a",
+          path: "/repo-a",
+          name: "debug-workspace-a",
+          pinned: false,
+        },
+        {
+          id: "debug-workspace-b",
+          path: "/repo-b",
+          name: "debug-workspace-b",
+          pinned: false,
+        },
+      ],
+    });
+
+    handleDebugSessionEvent({
+      session_id: "session-a",
+      workspace_id: "debug-workspace-a",
+      workspace_root: "/repo-a",
+      sequence: 5,
+      status: "Stopped",
+      reason: "breakpoint",
+    });
+    handleDebugSessionEvent({
+      session_id: "session-a",
+      workspace_id: "debug-workspace-a",
+      workspace_root: "/repo-a",
+      sequence: 4,
+      status: "Running",
+      reason: null,
+    });
+    handleDebugSessionEvent({
+      session_id: "session-wrong-root",
+      workspace_id: "debug-workspace-a",
+      workspace_root: "/repo-b",
+      sequence: 1,
+      status: "Running",
+      reason: null,
+    });
+
+    const debug = workspaceViewStore
+      .getState()
+      .viewFor("debug-workspace-a").debug;
+    expect(debug.sessions).toHaveLength(1);
+    expect(debug.sessions[0]).toMatchObject({
+      id: "session-a",
+      status: "Stopped",
+      sequence: 5,
+    });
+    expect(debug.sessionSequenceById["session-a"]).toBe(5);
+  });
+
+  test("handleDebugConsoleEvent appends output only to the matching active session", () => {
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: "debug-console-workspace-a",
+      workspaces: [
+        {
+          id: "debug-console-workspace-a",
+          path: "/repo-a",
+          name: "debug-console-workspace-a",
+          pinned: false,
+        },
+        {
+          id: "debug-console-workspace-b",
+          path: "/repo-b",
+          name: "debug-console-workspace-b",
+          pinned: false,
+        },
+      ],
+    });
+    workspaceViewStore.getState().updateDebug("debug-console-workspace-a", () => ({
+      ...createDebugState(),
+      sessions: [
+        debugSession({
+          id: "session-a",
+          workspace_id: "debug-console-workspace-a",
+          workspace_root: "/repo-a",
+        }),
+        debugSession({
+          id: "session-inactive",
+          workspace_id: "debug-console-workspace-a",
+          workspace_root: "/repo-a",
+        }),
+      ],
+      activeSessionId: "session-a",
+    }));
+    workspaceViewStore.getState().updateDebug("debug-console-workspace-b", () => ({
+      ...createDebugState(),
+      sessions: [
+        debugSession({
+          id: "session-b",
+          workspace_id: "debug-console-workspace-b",
+          workspace_root: "/repo-b",
+        }),
+      ],
+      activeSessionId: "session-b",
+    }));
+
+    handleDebugConsoleEvent({
+      session_id: "session-a",
+      workspace_id: "debug-console-workspace-a",
+      workspace_root: "/repo-a",
+      sequence: 1,
+      chunk: "active\n",
+    });
+    handleDebugConsoleEvent({
+      session_id: "session-inactive",
+      workspace_id: "debug-console-workspace-a",
+      workspace_root: "/repo-a",
+      sequence: 1,
+      chunk: "inactive\n",
+    });
+    handleDebugConsoleEvent({
+      session_id: "session-b",
+      workspace_id: "debug-console-workspace-b",
+      workspace_root: "/repo-b",
+      sequence: 1,
+      chunk: "other workspace\n",
+    });
+
+    const firstDebug = workspaceViewStore
+      .getState()
+      .viewFor("debug-console-workspace-a").debug;
+    const secondDebug = workspaceViewStore
+      .getState()
+      .viewFor("debug-console-workspace-b").debug;
+    expect(firstDebug.consoleBySessionId["session-a"]).toBe("active\n");
+    expect(firstDebug.consoleBySessionId["session-inactive"]).toBeUndefined();
+    expect(secondDebug.consoleBySessionId["session-b"]).toBe("other workspace\n");
+  });
+
+  test("runDebugCommandFromPalette dispatches debug commands without session fallback", () => {
+    const calls: string[] = [];
+    const debugState = setDebugStack(
+      {
+        ...createDebugState(),
+        sessions: [
+          debugSession({ id: "session-first" }),
+          debugSession({ id: "session-active" }),
+        ],
+        activeSessionId: "session-active",
+      },
+      "session-active",
+      [
+        {
+          id: 1,
+          name: "main",
+          source_path: "src/app/AppShell.tsx",
+          line: 12,
+          column: 1,
+        },
+      ],
+    );
+
+    const context = {
+      debugState,
+      activeFilePath: "src/app/AppShell.tsx",
+      onOpenDebug: () => calls.push("open"),
+      onStartSession: () => calls.push("start"),
+      onContinue: (sessionId: string) => calls.push(`continue:${sessionId}`),
+      onStepOver: (sessionId: string) => calls.push(`step:${sessionId}`),
+      onPause: (sessionId: string) => calls.push(`pause:${sessionId}`),
+      onDisconnect: (sessionId: string) => calls.push(`disconnect:${sessionId}`),
+      onToggleBreakpoint: (sourcePath: string, line: number) =>
+        calls.push(`breakpoint:${sourcePath}:${line}`),
+    };
+
+    expect(runDebugCommandFromPalette("open-debug", context)).toBe(true);
+    expect(runDebugCommandFromPalette("debug-start-session", context)).toBe(true);
+    expect(runDebugCommandFromPalette("debug-continue", context)).toBe(true);
+    expect(runDebugCommandFromPalette("debug-step-over", context)).toBe(true);
+    expect(runDebugCommandFromPalette("debug-pause", context)).toBe(true);
+    expect(runDebugCommandFromPalette("debug-disconnect", context)).toBe(true);
+    expect(runDebugCommandFromPalette("debug-toggle-breakpoint", context)).toBe(
+      true,
+    );
+    expect(calls).toEqual([
+      "open",
+      "start",
+      "continue:session-active",
+      "step:session-active",
+      "pause:session-active",
+      "disconnect:session-active",
+      "breakpoint:src/app/AppShell.tsx:12",
+    ]);
+
+    const withoutActiveCalls: string[] = [];
+    expect(
+      runDebugCommandFromPalette("debug-continue", {
+        ...context,
+        debugState: { ...debugState, activeSessionId: null },
+        onContinue: (sessionId) => withoutActiveCalls.push(sessionId),
+      }),
+    ).toBe(true);
+    expect(withoutActiveCalls).toEqual([]);
+    expect(runDebugCommandFromPalette("unknown", context)).toBe(false);
   });
 
   test("openBrowserPreviewWithValidation does not switch surface on invalid URL", async () => {

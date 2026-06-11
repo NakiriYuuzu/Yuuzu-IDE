@@ -14,6 +14,7 @@ import {
   createDatabaseState,
   type DatabaseProfile,
 } from "../features/database/database-model";
+import { createDebugState } from "../features/debug/debug-model";
 import { upsertTaskRun } from "../features/tasks/task-model";
 import { upsertTerminal } from "../features/terminal/terminal-model";
 import { createWorkspaceViewStore } from "./workspace-view-state";
@@ -255,6 +256,65 @@ describe("createWorkspaceViewStore", () => {
       profile,
     ]);
     expect(store.getState().viewFor("workspace-b").database.profiles).toEqual([]);
+  });
+
+  test("debug state is restored per workspace", () => {
+    const store = createWorkspaceViewStore();
+
+    store.getState().updateDebug("workspace-a", (debug) => ({
+      ...debug,
+      activeSessionId: "session-a",
+    }));
+
+    expect(store.getState().viewFor("workspace-a").debug.activeSessionId).toBe(
+      "session-a",
+    );
+    expect(store.getState().viewFor("workspace-b").debug.activeSessionId).toBeNull();
+  });
+
+  test("unknown workspace debug defaults cannot be mutated across future defaults", () => {
+    const store = createWorkspaceViewStore();
+
+    const unknownView = store.getState().viewFor("unknown-debug");
+
+    expect(() => {
+      unknownView.debug.sessions.push({
+        id: "session-1",
+        workspace_id: "unknown-debug",
+        workspace_root: "/unknown",
+        config_id: "cfg-python",
+        name: "Python",
+        adapter: "Python",
+        status: "Running",
+        active_thread_id: null,
+        stopped_reason: null,
+        last_error: null,
+        sequence: 1,
+      });
+    }).toThrow(TypeError);
+
+    expect(() => {
+      unknownView.debug.breakpointsByPath["src/main.py"] = [
+        {
+          line: 7,
+          condition: null,
+          log_message: null,
+          verified: false,
+        },
+      ];
+    }).toThrow(TypeError);
+
+    expect(() => {
+      unknownView.debug.consoleBySessionId["session-1"] = "boot";
+    }).toThrow(TypeError);
+
+    expect(Object.isFrozen(unknownView.debug)).toBe(true);
+    expect(Object.isFrozen(unknownView.debug.sessions)).toBe(true);
+    expect(Object.isFrozen(unknownView.debug.breakpointsByPath)).toBe(true);
+    expect(Object.isFrozen(unknownView.debug.consoleBySessionId)).toBe(true);
+    expect(store.getState().viewFor("other-unknown-debug").debug).toMatchObject(
+      createDebugState(),
+    );
   });
 
   test("default workspace view includes isolated remote state", () => {

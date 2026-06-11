@@ -22,6 +22,10 @@ import {
   type DatabaseViewState,
 } from "../features/database/database-model";
 import {
+  createDebugState,
+  type DebugViewState,
+} from "../features/debug/debug-model";
+import {
   createRemoteState,
   type RemoteViewState,
 } from "../features/remote/remote-model";
@@ -48,6 +52,7 @@ export type Surface =
   | "docs-preview"
   | "browser-preview"
   | "database-result"
+  | "debug-console"
   | "ssh-terminal"
   | "sftp-browser";
 
@@ -65,6 +70,7 @@ export type WorkspaceViewState = {
   browser: BrowserViewState;
   database: DatabaseViewState;
   remote: RemoteViewState;
+  debug: DebugViewState;
 };
 
 type WorkspaceViewStore = {
@@ -114,6 +120,10 @@ type WorkspaceViewStore = {
     workspaceId: string | null,
     update: (remote: RemoteViewState) => RemoteViewState,
   ) => void;
+  updateDebug: (
+    workspaceId: string | null,
+    update: (debug: DebugViewState) => DebugViewState,
+  ) => void;
 };
 
 function defaultWorkspaceView(): WorkspaceViewState {
@@ -131,6 +141,7 @@ function defaultWorkspaceView(): WorkspaceViewState {
     browser: createBrowserState(),
     database: createDatabaseState(),
     remote: createRemoteState(),
+    debug: createDebugState(),
   };
 }
 
@@ -257,6 +268,59 @@ function freezeWorkspaceView(view: WorkspaceViewState): WorkspaceViewState {
     Object.freeze(view.remote.transfer);
   }
   Object.freeze(view.remote);
+  for (const config of view.debug.launchConfigs) {
+    Object.freeze(config.args);
+    for (const env of config.env) {
+      Object.freeze(env);
+    }
+    Object.freeze(config.env);
+    if (config.attach) {
+      Object.freeze(config.attach);
+    }
+    Object.freeze(config);
+  }
+  Object.freeze(view.debug.launchConfigs);
+  for (const session of view.debug.sessions) {
+    Object.freeze(session);
+  }
+  Object.freeze(view.debug.sessions);
+  for (const breakpoints of Object.values(view.debug.breakpointsByPath)) {
+    for (const breakpoint of breakpoints) {
+      Object.freeze(breakpoint);
+    }
+    Object.freeze(breakpoints);
+  }
+  Object.freeze(view.debug.breakpointsByPath);
+  for (const frames of Object.values(view.debug.stackBySessionId)) {
+    for (const frame of frames) {
+      Object.freeze(frame);
+    }
+    Object.freeze(frames);
+  }
+  Object.freeze(view.debug.stackBySessionId);
+  for (const scopes of Object.values(view.debug.scopesByFrameId)) {
+    for (const scope of scopes) {
+      Object.freeze(scope);
+    }
+    Object.freeze(scopes);
+  }
+  Object.freeze(view.debug.scopesByFrameId);
+  for (const variables of Object.values(view.debug.variablesByReference)) {
+    for (const variable of variables) {
+      Object.freeze(variable);
+    }
+    Object.freeze(variables);
+  }
+  Object.freeze(view.debug.variablesByReference);
+  for (const watch of view.debug.watches) {
+    Object.freeze(watch);
+  }
+  Object.freeze(view.debug.watches);
+  Object.freeze(view.debug.consoleBySessionId);
+  Object.freeze(view.debug.sessionSequenceById);
+  Object.freeze(view.debug.consoleSequenceById);
+  Object.freeze(view.debug.ignoredSessionIds);
+  Object.freeze(view.debug);
   Object.freeze(view.agent.selectedContextIds);
   for (const session of view.agent.sessions) {
     Object.freeze(session.context_items);
@@ -424,6 +488,18 @@ export function createWorkspaceViewStore() {
           views: {
             ...state.views,
             [key]: { ...current, remote: update(current.remote) },
+          },
+        };
+      }),
+    updateDebug: (workspaceId, update) =>
+      set((state) => {
+        const key = workspaceId ?? shellKey;
+        const current = state.views[key] ?? defaultViewForKey(key);
+
+        return {
+          views: {
+            ...state.views,
+            [key]: { ...current, debug: update(current.debug) },
           },
         };
       }),

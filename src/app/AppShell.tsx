@@ -2,6 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 import {
   Bell,
   BookOpenText,
+  Bug,
   ChevronDown,
   FileCode2,
   Database,
@@ -32,6 +33,47 @@ import { ActivityRail, type ActivityId } from "./activity-rail";
 import { CommandPalette } from "./CommandPalette";
 import { BrowserPanel } from "../features/browser/BrowserPanel";
 import { BrowserPreviewSurface } from "../features/browser/BrowserPreviewSurface";
+import {
+  continueDebugSession,
+  disconnectDebugSession,
+  evaluateDebugExpression,
+  getDebugStackTrace,
+  listDebugLaunchConfigs,
+  listDebugSessions,
+  listenDebugConsole,
+  listenDebugExited,
+  listenDebugSession,
+  listenDebugStopped,
+  pauseDebugSession,
+  setDebugBreakpointsCommand,
+  startDebugSession,
+  stepOverDebugSession,
+} from "../features/debug/debug-api";
+import { DebugConsoleSurface } from "../features/debug/DebugConsoleSurface";
+import { DebugPanel } from "../features/debug/DebugPanel";
+import {
+  addDebugWatch,
+  appendDebugConsole,
+  beginDebugRequest,
+  createDebugState,
+  markDebugSessionEvent,
+  removeDebugWatch,
+  replaceDebugLaunchConfigs,
+  replaceDebugSessions,
+  selectDebugConfig,
+  setDebugBreakpoints,
+  setDebugError,
+  setDebugMode,
+  setDebugStack,
+  toggleDebugBreakpoint,
+  updateDebugWatchResult,
+  type DebugConsoleEvent,
+  type DebugSessionEvent,
+  type DebugSessionInfo,
+  type DebugSourceBreakpointInput,
+  type DebugStackFrame,
+  type DebugViewState,
+} from "../features/debug/debug-model";
 import {
   DatabasePanel,
 } from "../features/database/DatabasePanel";
@@ -379,6 +421,7 @@ const panelTitles: Record<ActivityId, string> = {
   explorer: "Explorer",
   search: "Search",
   git: "Source Control",
+  debug: "Debug",
   terminal: "Terminal",
   tasks: "Tasks",
   docs: "Docs",
@@ -1889,6 +1932,145 @@ function terminalErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export function activeDebugSessionForState(
+  state: DebugViewState,
+): DebugSessionInfo | null {
+  if (!state.activeSessionId) {
+    return null;
+  }
+
+  return (
+    state.sessions.find((session) => session.id === state.activeSessionId) ??
+    null
+  );
+}
+
+export function activeDebugLineForFile(
+  state: DebugViewState,
+  sourcePath: string | null,
+): number | null {
+  const activeSession = activeDebugSessionForState(state);
+  if (!activeSession || !sourcePath) {
+    return null;
+  }
+
+  return (
+    state.stackBySessionId[activeSession.id]?.find(
+      (frame) => frame.source_path === sourcePath,
+    )?.line ?? null
+  );
+}
+
+function activeDebugConsoleText(state: DebugViewState): string {
+  const activeSession = activeDebugSessionForState(state);
+  return activeSession ? (state.consoleBySessionId[activeSession.id] ?? "") : "";
+}
+
+type DebugCommandDispatchContext = {
+  debugState: DebugViewState;
+  activeFilePath: string | null;
+  onOpenDebug: () => void;
+  onStartSession: () => void;
+  onContinue: (sessionId: string) => void;
+  onStepOver: (sessionId: string) => void;
+  onPause: (sessionId: string) => void;
+  onDisconnect: (sessionId: string) => void;
+  onToggleBreakpoint: (sourcePath: string, line: number) => void;
+};
+
+export function runDebugCommandFromPalette(
+  id: string,
+  context: DebugCommandDispatchContext,
+): boolean {
+  const activeSession = activeDebugSessionForState(context.debugState);
+
+  switch (id) {
+    case "open-debug":
+      context.onOpenDebug();
+      return true;
+    case "debug-start-session":
+      context.onStartSession();
+      return true;
+    case "debug-continue":
+      if (activeSession) {
+        context.onContinue(activeSession.id);
+      }
+      return true;
+    case "debug-step-over":
+      if (activeSession) {
+        context.onStepOver(activeSession.id);
+      }
+      return true;
+    case "debug-pause":
+      if (activeSession) {
+        context.onPause(activeSession.id);
+      }
+      return true;
+    case "debug-disconnect":
+      if (activeSession) {
+        context.onDisconnect(activeSession.id);
+      }
+      return true;
+    case "debug-toggle-breakpoint": {
+      const line = activeDebugLineForFile(
+        context.debugState,
+        context.activeFilePath,
+      );
+      if (context.activeFilePath && line) {
+        context.onToggleBreakpoint(context.activeFilePath, line);
+      }
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+export function knownWorkspaceIdForDebugEvent(
+  event: Pick<DebugSessionEvent, "workspace_id" | "workspace_root">,
+): string | null {
+  const workspace =
+    workspaceStore
+      .getState()
+      .registry.workspaces.find(
+        (item) => item.id === event.workspace_id,
+      ) ?? null;
+
+  if (!workspace || workspace.path !== event.workspace_root) {
+    return null;
+  }
+
+  return workspace.id;
+}
+
+export function handleDebugSessionEvent(event: DebugSessionEvent): void {
+  const workspaceId = knownWorkspaceIdForDebugEvent(event);
+  if (!workspaceId) {
+    return;
+  }
+
+  workspaceViewStore
+    .getState()
+    .updateDebug(workspaceId, (debug) => markDebugSessionEvent(debug, event));
+}
+
+export function handleDebugConsoleEvent(event: DebugConsoleEvent): void {
+  const workspaceId = knownWorkspaceIdForDebugEvent(event);
+  if (!workspaceId) {
+    return;
+  }
+
+  const debug = workspaceViewStore.getState().viewFor(workspaceId).debug;
+  const activeSession = activeDebugSessionForState(debug);
+  if (activeSession?.id !== event.session_id) {
+    return;
+  }
+
+  workspaceViewStore
+    .getState()
+    .updateDebug(workspaceId, (state) => appendDebugConsole(state, event));
+}
+
 export function remoteTransferFileName(
   path: string,
   fallback = "upload.bin",
@@ -2005,6 +2187,18 @@ export function PanelBody({
   onRemoteListSftpDirectory = () => {},
   onRemoteDownloadFile = () => {},
   onRemoteUploadFile = () => {},
+  debugState,
+  onDebugModeChange = () => {},
+  onDebugSelectConfig = () => {},
+  onDebugStartSession = () => {},
+  onDebugContinue = () => {},
+  onDebugStepOver = () => {},
+  onDebugPause = () => {},
+  onDebugDisconnect = () => {},
+  onDebugOpenFrame = () => {},
+  onDebugAddWatch = () => {},
+  onDebugRemoveWatch = () => {},
+  onDebugEvaluate = () => {},
 }: {
   active: ActivityId;
   refreshKey: number;
@@ -2109,7 +2303,38 @@ export function PanelBody({
   onRemoteListSftpDirectory?: (hostId: string, path: string) => void;
   onRemoteDownloadFile?: (path: string) => void;
   onRemoteUploadFile?: (path: string) => void;
+  debugState?: DebugViewState;
+  onDebugModeChange?: (mode: DebugViewState["mode"]) => void;
+  onDebugSelectConfig?: (configId: string) => void;
+  onDebugStartSession?: () => void;
+  onDebugContinue?: (sessionId: string) => void;
+  onDebugStepOver?: (sessionId: string) => void;
+  onDebugPause?: (sessionId: string) => void;
+  onDebugDisconnect?: (sessionId: string) => void;
+  onDebugOpenFrame?: (frame: DebugStackFrame) => void;
+  onDebugAddWatch?: (expression: string) => void;
+  onDebugRemoveWatch?: (watch: number | string) => void;
+  onDebugEvaluate?: (expression: string) => void;
 }) {
+  if (active === "debug") {
+    return (
+      <DebugPanel
+        state={debugState ?? createDebugState()}
+        onModeChange={onDebugModeChange}
+        onSelectConfig={onDebugSelectConfig}
+        onStartSession={onDebugStartSession}
+        onContinue={onDebugContinue}
+        onStepOver={onDebugStepOver}
+        onPause={onDebugPause}
+        onDisconnect={onDebugDisconnect}
+        onOpenFrame={onDebugOpenFrame}
+        onAddWatch={onDebugAddWatch}
+        onRemoveWatch={onDebugRemoveWatch}
+        onEvaluate={onDebugEvaluate}
+      />
+    );
+  }
+
   if (active === "git") {
     return (
       <GitPanel
@@ -2318,6 +2543,7 @@ export function AppShell() {
   const databaseQueryRequestRef = useRef<Record<string, number>>({});
   const databaseExportRequestRef = useRef<Record<string, number>>({});
   const remoteHostsLoadRef = useRef<Record<string, number>>({});
+  const debugLoadRequestRef = useRef<Record<string, number>>({});
   const docsLoadRequestRef = useRef<DocsLoadRequestState>({});
   const agentSessionsLoadRef = useRef<Record<string, number>>({});
   const languageRefreshRequestRef = useRef<LanguageRefreshRequestState>({});
@@ -2358,6 +2584,8 @@ export function AppShell() {
   const activeSshOutput = activeSshSession
     ? (view.remote.sshOutputBySessionId[activeSshSession.id] ?? "")
     : "";
+  const activeDebugSession = activeDebugSessionForState(view.debug);
+  const activeDebugOutput = activeDebugConsoleText(view.debug);
   const activeRemoteHost =
     view.remote.hosts.find((host) => host.id === view.remote.activeHostId) ??
     null;
@@ -2419,6 +2647,7 @@ export function AppShell() {
   const updateBrowser = useWorkspaceViewStore((state) => state.updateBrowser);
   const updateDatabase = useWorkspaceViewStore((state) => state.updateDatabase);
   const updateRemote = useWorkspaceViewStore((state) => state.updateRemote);
+  const updateDebug = useWorkspaceViewStore((state) => state.updateDebug);
 
   const activeWorkspace = useMemo(
     () =>
@@ -2450,6 +2679,13 @@ export function AppShell() {
     : [];
   const activeEditorTab =
     view.editor.tabs.find((tab) => tab.path === view.editor.activePath) ?? null;
+  const activeDebugBreakpoints = view.editor.activePath
+    ? (view.debug.breakpointsByPath[view.editor.activePath] ?? [])
+    : [];
+  const activeDebugLine = activeDebugLineForFile(
+    view.debug,
+    view.editor.activePath,
+  );
   const activeEditorName = activeEditorTab?.name ?? "";
   const activeEditorParent = activeEditorTab
     ? parentNameFromPath(activeEditorTab.path)
@@ -2541,6 +2777,14 @@ export function AppShell() {
   }, [activeWorkspaceId, activeWorkspace?.path]);
 
   useEffect(() => {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    void refreshDebugForWorkspace(activeWorkspaceId, activeWorkspace.path);
+  }, [activeWorkspaceId, activeWorkspace?.path]);
+
+  useEffect(() => {
     let disposed = false;
     const outputUnlisten = onTerminalOutput((event) => {
       if (disposed) {
@@ -2627,6 +2871,40 @@ export function AppShell() {
       disposed = true;
       void outputUnlisten.then((dispose) => dispose()).catch(() => {});
       void exitUnlisten.then((dispose) => dispose()).catch(() => {});
+    };
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    const sessionUnlisten = listenDebugSession((event) => {
+      if (!disposed) {
+        handleDebugSessionEvent(event);
+      }
+    });
+    const consoleUnlisten = listenDebugConsole((event) => {
+      if (!disposed) {
+        handleDebugConsoleEvent(event);
+      }
+    });
+    const stoppedUnlisten = listenDebugStopped((event) => {
+      if (disposed) {
+        return;
+      }
+      handleDebugSessionEvent(event);
+      void loadDebugStackForEvent(event);
+    });
+    const exitedUnlisten = listenDebugExited((event) => {
+      if (!disposed) {
+        handleDebugSessionEvent(event);
+      }
+    });
+
+    return () => {
+      disposed = true;
+      void sessionUnlisten.then((dispose) => dispose()).catch(() => {});
+      void consoleUnlisten.then((dispose) => dispose()).catch(() => {});
+      void stoppedUnlisten.then((dispose) => dispose()).catch(() => {});
+      void exitedUnlisten.then((dispose) => dispose()).catch(() => {});
     };
   }, []);
 
@@ -5985,7 +6263,328 @@ export function AppShell() {
     });
   }
 
+  function isLatestDebugLoadRequest(workspaceId: string, requestId: number) {
+    return debugLoadRequestRef.current[workspaceId] === requestId;
+  }
+
+  async function refreshDebugForWorkspace(
+    workspaceId: string,
+    workspaceRoot: string,
+  ): Promise<void> {
+    const requestId = (debugLoadRequestRef.current[workspaceId] ?? 0) + 1;
+    debugLoadRequestRef.current = {
+      ...debugLoadRequestRef.current,
+      [workspaceId]: requestId,
+    };
+    updateDebug(workspaceId, beginDebugRequest);
+
+    try {
+      const [launchConfigs, sessions] = await Promise.all([
+        listDebugLaunchConfigs(workspaceRoot),
+        listDebugSessions({ workspaceId, workspaceRoot }),
+      ]);
+
+      if (
+        !isLatestDebugLoadRequest(workspaceId, requestId) ||
+        !hasRegisteredWorkspace(workspaceId) ||
+        getWorkspaceRoot(workspaceId) !== workspaceRoot
+      ) {
+        return;
+      }
+
+      updateDebug(workspaceId, (debug) => ({
+        ...replaceDebugSessions(
+          replaceDebugLaunchConfigs(debug, launchConfigs),
+          sessions,
+        ),
+        loading: false,
+        error: null,
+      }));
+    } catch (error) {
+      if (!isLatestDebugLoadRequest(workspaceId, requestId)) {
+        return;
+      }
+
+      if (
+        !hasRegisteredWorkspace(workspaceId) ||
+        getWorkspaceRoot(workspaceId) !== workspaceRoot
+      ) {
+        updateDebug(workspaceId, (debug) => ({
+          ...debug,
+          loading: false,
+          error: null,
+        }));
+        return;
+      }
+
+      updateDebug(workspaceId, (debug) =>
+        setDebugError(
+          debug,
+          `Load debug configs failed: ${terminalErrorMessage(error)}`,
+        ),
+      );
+    }
+  }
+
+  function openDebugPanel() {
+    setActiveActivity("debug");
+    setPanelOpen(true);
+  }
+
+  function selectDebugLaunchConfig(configId: string) {
+    updateDebug(activeWorkspaceId, (debug) => selectDebugConfig(debug, configId));
+  }
+
+  function setDebugWorkbenchMode(mode: DebugViewState["mode"]) {
+    updateDebug(activeWorkspaceId, (debug) => setDebugMode(debug, mode));
+  }
+
+  function applyDebugSessionCommandResult(
+    workspaceId: string,
+    workspaceRoot: string,
+    session: DebugSessionInfo,
+  ) {
+    if (
+      !hasRegisteredWorkspace(workspaceId) ||
+      getWorkspaceRoot(workspaceId) !== workspaceRoot
+    ) {
+      return;
+    }
+
+    updateDebug(workspaceId, (debug) => replaceDebugSessions(debug, [session]));
+  }
+
+  async function startActiveDebugSession() {
+    openDebugPanel();
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const debug = workspaceViewStore.getState().viewFor(workspaceId).debug;
+    const configId = debug.activeConfigId;
+
+    if (!configId) {
+      updateDebug(workspaceId, (state) =>
+        setDebugError(state, "Select a debug launch configuration first"),
+      );
+      return;
+    }
+
+    updateDebug(workspaceId, beginDebugRequest);
+    try {
+      const session = await startDebugSession({
+        workspaceId,
+        workspaceRoot,
+        configId,
+      });
+      applyDebugSessionCommandResult(workspaceId, workspaceRoot, session);
+      updateView(workspaceId, {
+        activeActivity: "debug",
+        panelOpen: true,
+        surface: "debug-console",
+      });
+    } catch (error) {
+      updateDebug(workspaceId, (state) =>
+        setDebugError(
+          state,
+          `Start debug session failed: ${terminalErrorMessage(error)}`,
+        ),
+      );
+    }
+  }
+
+  function runDebugSessionCommand(
+    sessionId: string,
+    action: (args: {
+      workspaceId: string;
+      workspaceRoot: string;
+      sessionId: string;
+    }) => Promise<DebugSessionInfo>,
+    failureLabel: string,
+  ) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    void action({ workspaceId, workspaceRoot, sessionId })
+      .then((session) =>
+        applyDebugSessionCommandResult(workspaceId, workspaceRoot, session),
+      )
+      .catch((error) => {
+        updateDebug(workspaceId, (state) =>
+          setDebugError(state, `${failureLabel}: ${terminalErrorMessage(error)}`),
+        );
+      });
+  }
+
+  function continueDebugById(sessionId: string) {
+    runDebugSessionCommand(sessionId, continueDebugSession, "Continue failed");
+  }
+
+  function stepOverDebugById(sessionId: string) {
+    runDebugSessionCommand(sessionId, stepOverDebugSession, "Step over failed");
+  }
+
+  function pauseDebugById(sessionId: string) {
+    runDebugSessionCommand(sessionId, pauseDebugSession, "Pause failed");
+  }
+
+  function disconnectDebugById(sessionId: string) {
+    runDebugSessionCommand(sessionId, disconnectDebugSession, "Disconnect failed");
+  }
+
+  function breakpointInputsForBackend(
+    breakpoints: DebugViewState["breakpointsByPath"][string],
+  ): DebugSourceBreakpointInput[] {
+    return breakpoints.map((breakpoint) => ({
+      line: breakpoint.line,
+      condition: breakpoint.condition,
+      log_message: breakpoint.log_message,
+    }));
+  }
+
+  function toggleDebugBreakpointAt(sourcePath: string, line: number) {
+    if (!activeWorkspace || !activeWorkspaceId || line <= 0) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const currentDebug = workspaceViewStore.getState().viewFor(workspaceId).debug;
+    const nextDebug = toggleDebugBreakpoint(currentDebug, sourcePath, line);
+    const breakpoints = nextDebug.breakpointsByPath[sourcePath] ?? [];
+
+    updateDebug(workspaceId, () => nextDebug);
+    void setDebugBreakpointsCommand({
+      workspaceId,
+      workspaceRoot,
+      sourcePath,
+      breakpoints: breakpointInputsForBackend(breakpoints),
+    })
+      .then((verifiedBreakpoints) => {
+        if (
+          !hasRegisteredWorkspace(workspaceId) ||
+          getWorkspaceRoot(workspaceId) !== workspaceRoot
+        ) {
+          return;
+        }
+
+        updateDebug(workspaceId, (debug) =>
+          setDebugBreakpoints(debug, sourcePath, verifiedBreakpoints),
+        );
+      })
+      .catch((error) => {
+        updateDebug(workspaceId, (debug) =>
+          setDebugError(
+            debug,
+            `Set breakpoints failed: ${terminalErrorMessage(error)}`,
+          ),
+        );
+      });
+  }
+
+  function toggleLoadedFileBreakpoint(line: number) {
+    if (!loadedFile || loadedFile.workspaceId !== activeWorkspaceId) {
+      return;
+    }
+
+    toggleDebugBreakpointAt(loadedFile.path, line);
+  }
+
+  function openDebugFrame(frame: DebugStackFrame) {
+    void openFile(frame.source_path);
+  }
+
+  function addDebugWatchExpression(expression: string) {
+    updateDebug(activeWorkspaceId, (debug) => addDebugWatch(debug, expression));
+  }
+
+  function removeDebugWatchExpression(watch: number | string) {
+    updateDebug(activeWorkspaceId, (debug) => {
+      const expression =
+        typeof watch === "number" ? debug.watches[watch]?.expression : watch;
+      return expression ? removeDebugWatch(debug, expression) : debug;
+    });
+  }
+
+  function evaluateDebugWatchExpression(expression: string) {
+    const activeSession = activeDebugSessionForState(view.debug);
+    if (!activeWorkspace || !activeWorkspaceId || !activeSession) {
+      updateDebug(activeWorkspaceId, (debug) =>
+        updateDebugWatchResult(debug, expression, "no active debug session"),
+      );
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    void evaluateDebugExpression({
+      workspaceId,
+      workspaceRoot,
+      sessionId: activeSession.id,
+      expression,
+    })
+      .then((variable) => {
+        updateDebug(workspaceId, (debug) =>
+          updateDebugWatchResult(debug, expression, variable),
+        );
+      })
+      .catch((error) => {
+        updateDebug(workspaceId, (debug) =>
+          updateDebugWatchResult(debug, expression, terminalErrorMessage(error)),
+        );
+      });
+  }
+
+  async function loadDebugStackForEvent(event: DebugSessionEvent) {
+    const workspaceId = knownWorkspaceIdForDebugEvent(event);
+    const threadId = event.thread_id ?? event.active_thread_id ?? null;
+    if (!workspaceId || threadId === null) {
+      return;
+    }
+
+    try {
+      const frames = await getDebugStackTrace({
+        workspaceId,
+        workspaceRoot: event.workspace_root,
+        sessionId: event.session_id,
+        threadId,
+      });
+      const debug = workspaceViewStore.getState().viewFor(workspaceId).debug;
+      if (debug.sessionSequenceById[event.session_id] !== event.sequence) {
+        return;
+      }
+
+      updateDebug(workspaceId, (state) =>
+        setDebugStack(state, event.session_id, frames),
+      );
+    } catch {
+      // Stack refresh is best-effort; session event state remains authoritative.
+    }
+  }
+
   function runCommand(id: string) {
+    if (
+      runDebugCommandFromPalette(id, {
+        debugState: view.debug,
+        activeFilePath: view.editor.activePath,
+        onOpenDebug: openDebugPanel,
+        onStartSession: () => void startActiveDebugSession(),
+        onContinue: continueDebugById,
+        onStepOver: stepOverDebugById,
+        onPause: pauseDebugById,
+        onDisconnect: disconnectDebugById,
+        onToggleBreakpoint: toggleDebugBreakpointAt,
+      })
+    ) {
+      setPaletteOpen(false);
+      return;
+    }
+
     switch (id) {
       case "save-file":
         void saveActiveFile();
@@ -6169,14 +6768,21 @@ export function AppShell() {
             agents: agentBadgeCount(view.agent),
             language: languageDiagnosticBadge,
             database: databaseBadge,
+            debug: activeDebugSession ? "1" : null,
           }}
-          onSelect={setActiveActivity}
+          onSelect={(activity) => {
+            setActiveActivity(activity);
+            if (activity === "debug") {
+              setPanelOpen(true);
+            }
+          }}
         />
         {panelOpen ? (
           <aside className="panel">
             {activeActivity === "git" ||
             activeActivity === "docs" ||
             activeActivity === "language" ||
+            activeActivity === "debug" ||
             activeActivity === "remote" ? null : (
               <div className="panel-head">
                 <span className="panel-title">{panelTitles[activeActivity]}</span>
@@ -6339,6 +6945,18 @@ export function AppShell() {
               onRemoteDownloadFile={(path) => void downloadRemoteFile(path)}
               onRemoteUploadFile={(path) => void uploadRemoteFile(path)}
               languageState={view.language}
+              debugState={view.debug}
+              onDebugModeChange={setDebugWorkbenchMode}
+              onDebugSelectConfig={selectDebugLaunchConfig}
+              onDebugStartSession={() => void startActiveDebugSession()}
+              onDebugContinue={continueDebugById}
+              onDebugStepOver={stepOverDebugById}
+              onDebugPause={pauseDebugById}
+              onDebugDisconnect={disconnectDebugById}
+              onDebugOpenFrame={openDebugFrame}
+              onDebugAddWatch={addDebugWatchExpression}
+              onDebugRemoveWatch={removeDebugWatchExpression}
+              onDebugEvaluate={evaluateDebugWatchExpression}
             />
           </aside>
         ) : null}
@@ -6530,6 +7148,29 @@ export function AppShell() {
                   </button>
                 </div>
               ) : null}
+              {surface === "debug-console" ? (
+                <div
+                  className="tab active"
+                  title={activeDebugSession?.name ?? "Debug Console"}
+                >
+                  <Bug className="ftype" aria-hidden="true" />
+                  <span className="tlabel mono">
+                    {activeDebugSession?.name ?? "Debug Console"}
+                  </span>
+                  <button
+                    type="button"
+                    className="close"
+                    title="Close debug console"
+                    aria-label="Close debug console"
+                    onClick={() => {
+                      setSurface("empty");
+                      setActiveActivity("debug");
+                    }}
+                  >
+                    <X aria-hidden="true" />
+                  </button>
+                </div>
+              ) : null}
               <div className="tabstrip-tail">
                 <button
                   type="button"
@@ -6575,6 +7216,8 @@ export function AppShell() {
                         ? "docs"
                         : surface === "database-result"
                           ? "database"
+                          : surface === "debug-console"
+                            ? "debug"
                           : surface === "editor"
                             ? "editor"
                             : "workspace"}
@@ -6595,6 +7238,8 @@ export function AppShell() {
                         ? docsPreviewPathLabel(view.docs, "Preview")
                         : surface === "database-result"
                           ? "Database result"
+                          : surface === "debug-console"
+                            ? (activeDebugSession?.name ?? "Debug Console")
                           : surface === "editor"
                             ? "No file open"
                             : "Start"}
@@ -6611,7 +7256,8 @@ export function AppShell() {
                   surface === "git-graph" ||
                   surface === "docs-preview" ||
                   surface === "browser-preview" ||
-                  surface === "database-result"
+                  surface === "database-result" ||
+                  surface === "debug-console"
                     ? " editor-content"
                     : ""
                 }`}
@@ -6671,6 +7317,9 @@ export function AppShell() {
                         onCompletion={onLanguageCompletion}
                         onCodeActions={onLanguageCodeActions}
                         onRename={onLanguageRename}
+                        debugBreakpoints={activeDebugBreakpoints}
+                        activeDebugLine={activeDebugLine}
+                        onToggleBreakpoint={toggleLoadedFileBreakpoint}
                         onDirtyChange={() => undefined}
                       />
                     </Suspense>
@@ -6851,6 +7500,9 @@ export function AppShell() {
                           onCompletion={onLanguageCompletion}
                           onCodeActions={onLanguageCodeActions}
                           onRename={onLanguageRename}
+                          debugBreakpoints={activeDebugBreakpoints}
+                          activeDebugLine={activeDebugLine}
+                          onToggleBreakpoint={toggleLoadedFileBreakpoint}
                           onDirtyChange={() => undefined}
                         />
                       </Suspense>
@@ -6881,6 +7533,15 @@ export function AppShell() {
                   result={view.database.activeResult}
                   loading={view.database.loading}
                   error={view.database.error}
+                />
+              ) : surface === "debug-console" ? (
+                <DebugConsoleSurface
+                  session={activeDebugSession}
+                  consoleText={activeDebugOutput}
+                  onContinue={continueDebugById}
+                  onStepOver={stepOverDebugById}
+                  onPause={pauseDebugById}
+                  onDisconnect={disconnectDebugById}
                 />
               ) : (
                 <>

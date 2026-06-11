@@ -79,4 +79,22 @@ describe("ActivityRail", () => {
 
     expect(onSelect).toHaveBeenCalledWith("remote");
   });
+
+  test("renders debug activity and notifies callback", () => {
+    const onSelect = mock(() => {});
+    const result = render(
+      <ActivityRail
+        active="explorer"
+        badges={{ debug: "1" }}
+        onSelect={onSelect}
+      />,
+    );
+
+    expect(result.getByLabelText("Debug")).toBeTruthy();
+    expect(result.getByText("1")).toBeTruthy();
+
+    fireEvent.click(result.getByLabelText("Debug"));
+
+    expect(onSelect).toHaveBeenCalledWith("debug");
+  });
 });
