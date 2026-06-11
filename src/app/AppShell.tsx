@@ -1793,13 +1793,62 @@ export function knownWorkspaceIdForSshTerminal(sessionId: string): string | null
     return null;
   }
 
-  const hostMatch = Object.entries(views).find(
+  const hostMatches = Object.entries(views).filter(
     ([workspaceId, workspaceView]) =>
       registeredWorkspaceIds.has(workspaceId) &&
       workspaceView.remote.hosts.some((host) => host.id === hostId),
   );
 
-  return hostMatch?.[0] ?? null;
+  return hostMatches.length === 1 ? hostMatches[0][0] : null;
+}
+
+type SshTerminalOutputEvent = {
+  session_id: string;
+  chunk: string;
+};
+
+type SshTerminalExitEvent = {
+  session_id: string;
+};
+
+export function handleSshTerminalOutputEvent(
+  event: SshTerminalOutputEvent,
+): void {
+  const workspaceId = knownWorkspaceIdForSshTerminal(event.session_id);
+  if (!workspaceId) {
+    return;
+  }
+
+  const currentView = workspaceViewStore.getState().viewFor(workspaceId);
+  const hasSession = currentView.remote.sshSessions.some(
+    (session) => session.id === event.session_id,
+  );
+
+  workspaceViewStore.getState().updateRemote(workspaceId, (remote) =>
+    hasSession
+      ? appendSshTerminalOutput(remote, event.session_id, event.chunk)
+      : bufferSshTerminalOutput(remote, event.session_id, event.chunk),
+  );
+}
+
+export function handleSshTerminalExitEvent(
+  event: SshTerminalExitEvent,
+): void {
+  const workspaceId = knownWorkspaceIdForSshTerminal(event.session_id);
+  if (!workspaceId) {
+    return;
+  }
+
+  const currentView = workspaceViewStore.getState().viewFor(workspaceId);
+  const hasSession = currentView.remote.sshSessions.some(
+    (session) => session.id === event.session_id,
+  );
+
+  workspaceViewStore.getState().updateRemote(workspaceId, (remote) =>
+    hasSession
+      ? markSshTerminalExited(remote, event.session_id)
+      : bufferSshTerminalExit(remote, event.session_id),
+  );
 }
 
 function knownWorkspaceIdForTaskRun(runId: string): string | null {
@@ -2562,38 +2611,14 @@ export function AppShell() {
         return;
       }
 
-      const workspaceId = knownWorkspaceIdForSshTerminal(event.session_id);
-      if (workspaceId) {
-        const currentView = workspaceViewStore.getState().viewFor(workspaceId);
-        const hasSession = currentView.remote.sshSessions.some(
-          (session) => session.id === event.session_id,
-        );
-
-        workspaceViewStore.getState().updateRemote(workspaceId, (remote) =>
-          hasSession
-            ? appendSshTerminalOutput(remote, event.session_id, event.chunk)
-            : bufferSshTerminalOutput(remote, event.session_id, event.chunk),
-        );
-      }
+      handleSshTerminalOutputEvent(event);
     });
     const exitUnlisten = listenSshTerminalExit((event) => {
       if (disposed) {
         return;
       }
 
-      const workspaceId = knownWorkspaceIdForSshTerminal(event.session_id);
-      if (workspaceId) {
-        const currentView = workspaceViewStore.getState().viewFor(workspaceId);
-        const hasSession = currentView.remote.sshSessions.some(
-          (session) => session.id === event.session_id,
-        );
-
-        workspaceViewStore.getState().updateRemote(workspaceId, (remote) =>
-          hasSession
-            ? markSshTerminalExited(remote, event.session_id)
-            : bufferSshTerminalExit(remote, event.session_id),
-        );
-      }
+      handleSshTerminalExitEvent(event);
     });
 
     return () => {

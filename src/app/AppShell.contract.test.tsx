@@ -50,6 +50,8 @@ import {
   refreshDatabaseProfilesRequest,
   refreshRemoteHostsRequest,
   exportDatabaseQueryResultRequest,
+  handleSshTerminalExitEvent,
+  handleSshTerminalOutputEvent,
   knownWorkspaceIdForSshTerminal,
   type BrowserCaptureRequestState,
   type BrowserValidationRequestState,
@@ -283,6 +285,205 @@ describe("AppShell AppShell helpers", () => {
 
     expect(knownWorkspaceIdForSshTerminal("edge:ssh-1")).toBe("workspace-a");
     expect(knownWorkspaceIdForSshTerminal("missing:ssh-1")).toBeNull();
+  });
+
+  test("knownWorkspaceIdForSshTerminal drops ambiguous remote host ids", () => {
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: "ambiguous-workspace-b",
+      workspaces: [
+        {
+          id: "ambiguous-workspace-a",
+          path: "/repo-ambiguous-a",
+          name: "ambiguous-workspace-a",
+          pinned: false,
+        },
+        {
+          id: "ambiguous-workspace-b",
+          path: "/repo-ambiguous-b",
+          name: "ambiguous-workspace-b",
+          pinned: false,
+        },
+      ],
+    });
+    setRemote("ambiguous-workspace-a", (remote) => ({
+      ...remote,
+      hosts: [remoteHost({ id: "edge", workspace_root: "/repo-ambiguous-a" })],
+    }));
+    setRemote("ambiguous-workspace-b", (remote) => ({
+      ...remote,
+      hosts: [remoteHost({ id: "edge", workspace_root: "/repo-ambiguous-b" })],
+    }));
+
+    expect(knownWorkspaceIdForSshTerminal("edge:ssh-1")).toBeNull();
+  });
+
+  test("handleSshTerminalOutputEvent buffers unknown session by owning remote host", () => {
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: "listener-workspace-b",
+      workspaces: [
+        {
+          id: "listener-workspace-a",
+          path: "/repo-listener-a",
+          name: "listener-workspace-a",
+          pinned: false,
+        },
+        {
+          id: "listener-workspace-b",
+          path: "/repo-listener-b",
+          name: "listener-workspace-b",
+          pinned: false,
+        },
+      ],
+    });
+    setRemote("listener-workspace-a", (remote) => ({
+      ...remote,
+      hosts: [remoteHost({ id: "edge", workspace_root: "/repo-listener-a" })],
+    }));
+    setRemote("listener-workspace-b", (remote) => ({
+      ...remote,
+      hosts: [remoteHost({ id: "worker", workspace_root: "/repo-listener-b" })],
+    }));
+
+    handleSshTerminalOutputEvent({
+      session_id: "edge:ssh-1",
+      chunk: "boot\n",
+    });
+
+    const ownerRemote = workspaceViewStore
+      .getState()
+      .viewFor("listener-workspace-a").remote;
+    const activeRemote = workspaceViewStore
+      .getState()
+      .viewFor("listener-workspace-b").remote;
+    expect(ownerRemote.pendingSshOutputBySessionId["edge:ssh-1"]).toBe("boot\n");
+    expect(activeRemote.pendingSshOutputBySessionId["edge:ssh-1"]).toBeUndefined();
+  });
+
+  test("handleSshTerminalOutputEvent drops truly unknown sessions", () => {
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: "unknown-output-workspace-b",
+      workspaces: [
+        {
+          id: "unknown-output-workspace-a",
+          path: "/repo-unknown-output-a",
+          name: "unknown-output-workspace-a",
+          pinned: false,
+        },
+        {
+          id: "unknown-output-workspace-b",
+          path: "/repo-unknown-output-b",
+          name: "unknown-output-workspace-b",
+          pinned: false,
+        },
+      ],
+    });
+    setRemote("unknown-output-workspace-a", (remote) => ({
+      ...remote,
+      hosts: [remoteHost({ id: "edge", workspace_root: "/repo-unknown-output-a" })],
+    }));
+    setRemote("unknown-output-workspace-b", (remote) => ({
+      ...remote,
+      hosts: [
+        remoteHost({ id: "worker", workspace_root: "/repo-unknown-output-b" }),
+      ],
+    }));
+
+    handleSshTerminalOutputEvent({
+      session_id: "missing:ssh-1",
+      chunk: "lost\n",
+    });
+
+    const activeRemote = workspaceViewStore
+      .getState()
+      .viewFor("unknown-output-workspace-b").remote;
+    expect(
+      activeRemote.pendingSshOutputBySessionId["missing:ssh-1"],
+    ).toBeUndefined();
+  });
+
+  test("handleSshTerminalOutputEvent drops ambiguous remote host ids", () => {
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: "ambiguous-output-workspace-b",
+      workspaces: [
+        {
+          id: "ambiguous-output-workspace-a",
+          path: "/repo-ambiguous-output-a",
+          name: "ambiguous-output-workspace-a",
+          pinned: false,
+        },
+        {
+          id: "ambiguous-output-workspace-b",
+          path: "/repo-ambiguous-output-b",
+          name: "ambiguous-output-workspace-b",
+          pinned: false,
+        },
+      ],
+    });
+    setRemote("ambiguous-output-workspace-a", (remote) => ({
+      ...remote,
+      hosts: [
+        remoteHost({ id: "edge", workspace_root: "/repo-ambiguous-output-a" }),
+      ],
+    }));
+    setRemote("ambiguous-output-workspace-b", (remote) => ({
+      ...remote,
+      hosts: [
+        remoteHost({ id: "edge", workspace_root: "/repo-ambiguous-output-b" }),
+      ],
+    }));
+
+    handleSshTerminalOutputEvent({
+      session_id: "edge:ssh-1",
+      chunk: "ambiguous\n",
+    });
+
+    const firstRemote = workspaceViewStore
+      .getState()
+      .viewFor("ambiguous-output-workspace-a").remote;
+    const secondRemote = workspaceViewStore
+      .getState()
+      .viewFor("ambiguous-output-workspace-b").remote;
+    expect(firstRemote.pendingSshOutputBySessionId["edge:ssh-1"]).toBeUndefined();
+    expect(secondRemote.pendingSshOutputBySessionId["edge:ssh-1"]).toBeUndefined();
+  });
+
+  test("handleSshTerminalExitEvent buffers unknown session by owning remote host", () => {
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: "exit-workspace-b",
+      workspaces: [
+        {
+          id: "exit-workspace-a",
+          path: "/repo-exit-a",
+          name: "exit-workspace-a",
+          pinned: false,
+        },
+        {
+          id: "exit-workspace-b",
+          path: "/repo-exit-b",
+          name: "exit-workspace-b",
+          pinned: false,
+        },
+      ],
+    });
+    setRemote("exit-workspace-a", (remote) => ({
+      ...remote,
+      hosts: [remoteHost({ id: "edge", workspace_root: "/repo-exit-a" })],
+    }));
+    setRemote("exit-workspace-b", (remote) => ({
+      ...remote,
+      hosts: [remoteHost({ id: "worker", workspace_root: "/repo-exit-b" })],
+    }));
+
+    handleSshTerminalExitEvent({ session_id: "edge:ssh-2" });
+
+    const ownerRemote = workspaceViewStore
+      .getState()
+      .viewFor("exit-workspace-a").remote;
+    const activeRemote = workspaceViewStore
+      .getState()
+      .viewFor("exit-workspace-b").remote;
+    expect(ownerRemote.pendingSshExitBySessionId["edge:ssh-2"]).toBe(true);
+    expect(activeRemote.pendingSshExitBySessionId["edge:ssh-2"]).toBeUndefined();
   });
 
   test("refreshRemoteHostsRequest clears loading on stale workspace path success", async () => {
