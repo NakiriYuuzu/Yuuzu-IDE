@@ -102,6 +102,13 @@ export const node9Commands: CommandItem[] = [
   },
 ];
 
+export const node10Commands: CommandItem[] = [
+  { id: "open-remote", label: "Remote: Open panel", group: "Remote" },
+  { id: "remote-connect", label: "Remote: Connect active host", group: "Remote" },
+  { id: "remote-open-ssh", label: "Remote: Open SSH terminal", group: "Remote" },
+  { id: "remote-open-sftp", label: "Remote: Open SFTP browser", group: "Remote" },
+];
+
 export const allCommands: CommandItem[] = [
   ...node1Commands,
   ...node5Commands,
@@ -109,6 +116,7 @@ export const allCommands: CommandItem[] = [
   ...node7Commands,
   ...node8Commands,
   ...node9Commands,
+  ...node10Commands,
 ];
 
 export function filterCommands(

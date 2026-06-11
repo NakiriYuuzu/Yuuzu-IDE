@@ -5,6 +5,7 @@ import {
   ChevronDown,
   FileCode2,
   Database,
+  Folder,
   GitBranch,
   Globe,
   PanelLeft,
@@ -12,6 +13,7 @@ import {
   Plus,
   RotateCw,
   Save,
+  Server,
   SplitSquareHorizontal,
   SquareTerminal,
   X,
@@ -34,6 +36,35 @@ import {
   DatabasePanel,
 } from "../features/database/DatabasePanel";
 import { DatabaseResultView } from "../features/database/DatabaseResultView";
+import { RemotePanel } from "../features/remote/RemotePanel";
+import { SshTerminalSurface } from "../features/remote/SshTerminalSurface";
+import {
+  closeSshTerminalSession,
+  connectRemoteHost,
+  listRemoteHosts,
+  listSftpDirectory,
+  listSshTerminalSessions,
+  listenSshTerminalExit,
+  listenSshTerminalOutput,
+  runRemoteCommand,
+  spawnSshTerminal,
+  writeSshTerminal,
+} from "../features/remote/remote-api";
+import {
+  appendSshTerminalOutput,
+  bufferSshTerminalExit,
+  bufferSshTerminalOutput,
+  closeSshTerminal,
+  markRemoteConnection,
+  markSshTerminalExited,
+  replaceRemoteHosts,
+  selectRemoteHost,
+  setRemoteCommandResult,
+  setRemoteMode,
+  setSftpEntries,
+  upsertSshTerminal,
+  type RemoteViewState,
+} from "../features/remote/remote-model";
 import {
   beginDatabaseQuery,
   databaseBadgeCount,
@@ -347,6 +378,7 @@ const panelTitles: Record<ActivityId, string> = {
   docs: "Docs",
   language: "Language",
   agents: "Agents",
+  remote: "Remote",
   database: "Database",
   browser: "Browser",
   settings: "Settings",
@@ -1629,6 +1661,15 @@ function knownWorkspaceIdForTerminal(sessionId: string): string | null {
   return match?.[0] ?? workspaceIdFromTerminalSessionId(sessionId);
 }
 
+function knownWorkspaceIdForSshTerminal(sessionId: string): string | null {
+  const { views } = workspaceViewStore.getState();
+  const match = Object.entries(views).find(([, workspaceView]) =>
+    workspaceView.remote.sshSessions.some((session) => session.id === sessionId),
+  );
+
+  return match?.[0] ?? null;
+}
+
 function knownWorkspaceIdForTaskRun(runId: string): string | null {
   const { views } = workspaceViewStore.getState();
   const match = Object.entries(views).find(([, workspaceView]) =>
@@ -1744,6 +1785,19 @@ export function PanelBody({
   onDatabaseCancelConfirmation,
   onDatabaseExportResult,
   onDatabaseSelectHistory,
+  remoteState,
+  onRemoteModeChange = () => {},
+  onRemoteSelectHost = () => {},
+  onRemoteRefresh = () => {},
+  onRemoteCreateHost = () => {},
+  onRemoteConnectHost = () => {},
+  onRemoteOpenSsh = () => {},
+  onRemoteOpenSftp = () => {},
+  onRemoteRunCommand = () => {},
+  onRemoteCommandDraftChange = () => {},
+  onRemoteListSftpDirectory = () => {},
+  onRemoteDownloadFile = () => {},
+  onRemoteUploadFile = () => {},
 }: {
   active: ActivityId;
   refreshKey: number;
@@ -1835,6 +1889,19 @@ export function PanelBody({
   onDatabaseCancelConfirmation: () => void;
   onDatabaseExportResult: () => void;
   onDatabaseSelectHistory: (entry: DatabaseQueryHistoryEntry) => void;
+  remoteState?: RemoteViewState;
+  onRemoteModeChange?: (mode: RemoteViewState["mode"]) => void;
+  onRemoteSelectHost?: (hostId: string) => void;
+  onRemoteRefresh?: () => void;
+  onRemoteCreateHost?: () => void;
+  onRemoteConnectHost?: (hostId: string) => void;
+  onRemoteOpenSsh?: (hostId: string) => void;
+  onRemoteOpenSftp?: (hostId: string) => void;
+  onRemoteRunCommand?: () => void;
+  onRemoteCommandDraftChange?: (value: string) => void;
+  onRemoteListSftpDirectory?: (hostId: string, path: string) => void;
+  onRemoteDownloadFile?: (path: string) => void;
+  onRemoteUploadFile?: (path: string) => void;
 }) {
   if (active === "git") {
     return (
@@ -1982,6 +2049,26 @@ export function PanelBody({
     );
   }
 
+  if (active === "remote" && remoteState) {
+    return (
+      <RemotePanel
+        state={remoteState}
+        onModeChange={onRemoteModeChange}
+        onSelectHost={onRemoteSelectHost}
+        onRefresh={onRemoteRefresh}
+        onCreateHost={onRemoteCreateHost}
+        onConnectHost={onRemoteConnectHost}
+        onOpenSsh={onRemoteOpenSsh}
+        onOpenSftp={onRemoteOpenSftp}
+        onRunCommand={onRemoteRunCommand}
+        onCommandDraftChange={onRemoteCommandDraftChange}
+        onListSftpDirectory={onRemoteListSftpDirectory}
+        onDownloadFile={onRemoteDownloadFile}
+        onUploadFile={onRemoteUploadFile}
+      />
+    );
+  }
+
   if (active === "explorer") {
     return (
       <FileTreePanel
@@ -2054,6 +2141,23 @@ export function AppShell() {
     ? (view.terminal.outputBySessionId[activeTerminal.id] ?? "")
     : "";
   const activeTerminalName = activeTerminal?.name ?? "terminal";
+  const activeSshSession =
+    view.remote.sshSessions.find(
+      (session) => session.id === view.remote.activeSshSessionId,
+    ) ??
+    view.remote.sshSessions[0] ??
+    null;
+  const activeSshOutput = activeSshSession
+    ? (view.remote.sshOutputBySessionId[activeSshSession.id] ?? "")
+    : "";
+  const activeRemoteHost =
+    view.remote.hosts.find((host) => host.id === view.remote.activeHostId) ??
+    null;
+  const activeSftpPath = activeRemoteHost
+    ? (view.remote.sftpPathByHostId[activeRemoteHost.id] ||
+      activeRemoteHost.default_remote_path ||
+      "/")
+    : "/";
   const activeTaskRun =
     view.task.runs.find((run) => run.id === view.task.activeRunId) ??
     view.task.runs[0] ??
@@ -2106,6 +2210,7 @@ export function AppShell() {
   const updateAgent = useWorkspaceViewStore((state) => state.updateAgent);
   const updateBrowser = useWorkspaceViewStore((state) => state.updateBrowser);
   const updateDatabase = useWorkspaceViewStore((state) => state.updateDatabase);
+  const updateRemote = useWorkspaceViewStore((state) => state.updateRemote);
 
   const activeWorkspace = useMemo(
     () =>
@@ -2220,6 +2325,14 @@ export function AppShell() {
   }, [activeWorkspaceId, activeWorkspace?.path]);
 
   useEffect(() => {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    void refreshRemoteHostsForWorkspace(activeWorkspaceId, activeWorkspace.path);
+  }, [activeWorkspaceId, activeWorkspace?.path]);
+
+  useEffect(() => {
     let disposed = false;
     const outputUnlisten = onTerminalOutput((event) => {
       if (disposed) {
@@ -2299,6 +2412,70 @@ export function AppShell() {
         .getState()
         .updateTerminal(workspaceId, (terminal) =>
           bufferTerminalExit(terminal, event.session_id),
+        );
+    });
+
+    return () => {
+      disposed = true;
+      void outputUnlisten.then((dispose) => dispose()).catch(() => {});
+      void exitUnlisten.then((dispose) => dispose()).catch(() => {});
+    };
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    const outputUnlisten = listenSshTerminalOutput((event) => {
+      if (disposed) {
+        return;
+      }
+
+      const workspaceId = knownWorkspaceIdForSshTerminal(event.session_id);
+      if (workspaceId) {
+        workspaceViewStore
+          .getState()
+          .updateRemote(workspaceId, (remote) =>
+            appendSshTerminalOutput(remote, event.session_id, event.chunk),
+          );
+        return;
+      }
+
+      const fallbackWorkspaceId =
+        workspaceStore.getState().registry.active_workspace_id;
+      if (!fallbackWorkspaceId) {
+        return;
+      }
+
+      workspaceViewStore
+        .getState()
+        .updateRemote(fallbackWorkspaceId, (remote) =>
+          bufferSshTerminalOutput(remote, event.session_id, event.chunk),
+        );
+    });
+    const exitUnlisten = listenSshTerminalExit((event) => {
+      if (disposed) {
+        return;
+      }
+
+      const workspaceId = knownWorkspaceIdForSshTerminal(event.session_id);
+      if (workspaceId) {
+        workspaceViewStore
+          .getState()
+          .updateRemote(workspaceId, (remote) =>
+            markSshTerminalExited(remote, event.session_id),
+          );
+        return;
+      }
+
+      const fallbackWorkspaceId =
+        workspaceStore.getState().registry.active_workspace_id;
+      if (!fallbackWorkspaceId) {
+        return;
+      }
+
+      workspaceViewStore
+        .getState()
+        .updateRemote(fallbackWorkspaceId, (remote) =>
+          bufferSshTerminalExit(remote, event.session_id),
         );
     });
 
@@ -4283,6 +4460,318 @@ export function AppShell() {
     }));
   }
 
+  function openRemotePanel() {
+    setActiveActivity("remote");
+    setPanelOpen(true);
+  }
+
+  async function refreshRemoteHostsForWorkspace(
+    workspaceId: string,
+    workspaceRoot: string,
+  ) {
+    updateRemote(workspaceId, (remote) => ({
+      ...remote,
+      loading: true,
+      error: null,
+    }));
+
+    try {
+      const [hosts, sessions] = await Promise.all([
+        listRemoteHosts(workspaceRoot),
+        listSshTerminalSessions(workspaceId),
+      ]);
+      const currentWorkspace =
+        workspaceStore
+          .getState()
+          .registry.workspaces.find((workspace) => workspace.id === workspaceId) ??
+        null;
+
+      if (!currentWorkspace || currentWorkspace.path !== workspaceRoot) {
+        return;
+      }
+
+      updateRemote(workspaceId, (remote) => {
+        const resetSessions = replaceRemoteHosts(
+          {
+            ...remote,
+            sshSessions: [],
+            activeSshSessionId: null,
+            loading: false,
+            error: null,
+          },
+          hosts,
+        );
+
+        return sessions.reduce(
+          (nextRemote, session) => upsertSshTerminal(nextRemote, session),
+          resetSessions,
+        );
+      });
+    } catch (error) {
+      updateRemote(workspaceId, (remote) => ({
+        ...remote,
+        loading: false,
+        error: `Load remotes failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
+  function refreshRemoteHosts() {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    void refreshRemoteHostsForWorkspace(activeWorkspaceId, activeWorkspace.path);
+  }
+
+  function selectRemoteHostById(hostId: string) {
+    if (!activeWorkspaceId) {
+      return;
+    }
+
+    updateRemote(activeWorkspaceId, (remote) => selectRemoteHost(remote, hostId));
+  }
+
+  function setRemoteWorkbenchMode(mode: RemoteViewState["mode"]) {
+    updateRemote(activeWorkspaceId, (remote) => setRemoteMode(remote, mode));
+  }
+
+  function activeRemoteHostId(hostId?: string): string | null {
+    const remote = workspaceViewStore.getState().viewFor(activeWorkspaceId).remote;
+    return hostId ?? remote.activeHostId ?? remote.hosts[0]?.id ?? null;
+  }
+
+  async function connectActiveRemoteHost(hostId?: string) {
+    if (!activeWorkspaceId) {
+      openRemotePanel();
+      return;
+    }
+
+    const profileId = activeRemoteHostId(hostId);
+    if (!profileId) {
+      openRemotePanel();
+      return;
+    }
+
+    updateRemote(activeWorkspaceId, (remote) =>
+      markRemoteConnection(
+        {
+          ...selectRemoteHost(remote, profileId),
+          loading: true,
+          error: null,
+        },
+        {
+          host_id: profileId,
+          status: "Connecting",
+          message: null,
+          checked_ms: Date.now(),
+        },
+      ),
+    );
+
+    try {
+      const snapshot = await connectRemoteHost(profileId);
+      updateRemote(activeWorkspaceId, (remote) => ({
+        ...markRemoteConnection(remote, snapshot),
+        loading: false,
+        error: null,
+      }));
+    } catch (error) {
+      updateRemote(activeWorkspaceId, (remote) => ({
+        ...remote,
+        loading: false,
+        error: `Connect failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
+  async function openSshForHost(hostId?: string) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      openRemotePanel();
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const profileId = activeRemoteHostId(hostId);
+    if (!profileId) {
+      openRemotePanel();
+      return;
+    }
+
+    updateRemote(workspaceId, (remote) => ({
+      ...setRemoteMode(selectRemoteHost(remote, profileId), "ssh"),
+      loading: true,
+      error: null,
+    }));
+
+    try {
+      const session = await spawnSshTerminal({
+        workspaceId,
+        workspaceRoot,
+        profileId,
+        rows: 24,
+        cols: 80,
+      });
+
+      updateRemote(workspaceId, (remote) => ({
+        ...upsertSshTerminal(remote, session),
+        loading: false,
+        error: null,
+      }));
+      updateView(workspaceId, {
+        activeActivity: "remote",
+        panelOpen: true,
+        surface: "ssh-terminal",
+      });
+    } catch (error) {
+      updateRemote(workspaceId, (remote) => ({
+        ...remote,
+        loading: false,
+        error: `Open SSH failed: ${terminalErrorMessage(error)}`,
+      }));
+      openRemotePanel();
+    }
+  }
+
+  function openSftpForHost(hostId?: string) {
+    if (!activeWorkspaceId) {
+      openRemotePanel();
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const remote = workspaceViewStore.getState().viewFor(workspaceId).remote;
+    const profileId = hostId ?? remote.activeHostId ?? remote.hosts[0]?.id ?? null;
+    const host = remote.hosts.find((item) => item.id === profileId) ?? null;
+    if (!profileId || !host) {
+      openRemotePanel();
+      return;
+    }
+
+    const path = remote.sftpPathByHostId[profileId] || host.default_remote_path || "/";
+    updateRemote(workspaceId, (current) =>
+      setRemoteMode(selectRemoteHost(current, profileId), "sftp"),
+    );
+    updateView(workspaceId, {
+      activeActivity: "remote",
+      panelOpen: true,
+      surface: "sftp-browser",
+    });
+    void listSftpDirectoryForHost(profileId, path);
+  }
+
+  function writeSshInput(sessionId: string, data: string) {
+    void writeSshTerminal(sessionId, data).catch((error) => {
+      const workspaceId = knownWorkspaceIdForSshTerminal(sessionId) ?? activeWorkspaceId;
+      if (!workspaceId) {
+        return;
+      }
+
+      updateRemote(workspaceId, (remote) => ({
+        ...remote,
+        error: `SSH input failed: ${terminalErrorMessage(error)}`,
+      }));
+    });
+  }
+
+  async function closeSshById(sessionId: string) {
+    const workspaceId = knownWorkspaceIdForSshTerminal(sessionId) ?? activeWorkspaceId;
+    if (!workspaceId) {
+      return;
+    }
+
+    try {
+      await closeSshTerminalSession(sessionId);
+      updateRemote(workspaceId, (remote) => closeSshTerminal(remote, sessionId));
+    } catch (error) {
+      updateRemote(workspaceId, (remote) => ({
+        ...remote,
+        error: `Close SSH failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
+  function updateRemoteCommandDraft(value: string) {
+    updateRemote(activeWorkspaceId, (remote) => ({
+      ...remote,
+      commandDraft: value,
+      error: null,
+    }));
+  }
+
+  function runActiveRemoteCommand() {
+    if (!activeWorkspaceId) {
+      openRemotePanel();
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const remote = workspaceViewStore.getState().viewFor(workspaceId).remote;
+    const profileId = remote.activeHostId;
+    const command = remote.commandDraft.trim();
+    if (!profileId || !command) {
+      openRemotePanel();
+      return;
+    }
+
+    const runId = `${profileId}:${Date.now()}`;
+    updateRemote(workspaceId, (current) => ({
+      ...current,
+      loading: true,
+      error: null,
+    }));
+
+    void runRemoteCommand(profileId, command)
+      .then((result) => {
+        updateRemote(workspaceId, (current) => ({
+          ...setRemoteCommandResult(current, runId, result),
+          loading: false,
+          error: null,
+        }));
+      })
+      .catch((error) => {
+        updateRemote(workspaceId, (current) => ({
+          ...current,
+          loading: false,
+          error: `Run command failed: ${terminalErrorMessage(error)}`,
+        }));
+      });
+  }
+
+  function listSftpDirectoryForHost(hostId: string, path: string) {
+    const workspaceId = activeWorkspaceId;
+    if (!workspaceId) {
+      return;
+    }
+
+    updateRemote(workspaceId, (remote) => ({
+      ...remote,
+      loading: true,
+      error: null,
+    }));
+
+    void listSftpDirectory(hostId, path)
+      .then((entries) => {
+        updateRemote(workspaceId, (remote) => ({
+          ...setSftpEntries(remote, hostId, path, entries),
+          loading: false,
+          error: null,
+        }));
+      })
+      .catch((error) => {
+        updateRemote(workspaceId, (remote) => ({
+          ...remote,
+          loading: false,
+          error: `List SFTP failed: ${terminalErrorMessage(error)}`,
+        }));
+      });
+  }
+
+  function noopRemoteTask6Action() {
+    openRemotePanel();
+  }
+
   function openAgentsPanel() {
     setActiveActivity("agents");
     setPanelOpen(true);
@@ -5315,6 +5804,19 @@ export function AppShell() {
       case "browser-capture-screenshot":
         captureBrowserScreenshot();
         break;
+      case "open-remote":
+        setActiveActivity("remote");
+        setPanelOpen(true);
+        break;
+      case "remote-connect":
+        void connectActiveRemoteHost();
+        break;
+      case "remote-open-ssh":
+        void openSshForHost();
+        break;
+      case "remote-open-sftp":
+        openSftpForHost();
+        break;
       case "open-database":
         setActiveActivity("database");
         setPanelOpen(true);
@@ -5415,7 +5917,8 @@ export function AppShell() {
           <aside className="panel">
             {activeActivity === "git" ||
             activeActivity === "docs" ||
-            activeActivity === "language" ? null : (
+            activeActivity === "language" ||
+            activeActivity === "remote" ? null : (
               <div className="panel-head">
                 <span className="panel-title">{panelTitles[activeActivity]}</span>
                 <div className="panel-acts">
@@ -5559,6 +6062,23 @@ export function AppShell() {
               }
               onDatabaseExportResult={() => void exportDatabaseResult()}
               onDatabaseSelectHistory={(entry) => selectDatabaseHistory(entry)}
+              remoteState={view.remote}
+              onRemoteModeChange={setRemoteWorkbenchMode}
+              onRemoteSelectHost={selectRemoteHostById}
+              onRemoteRefresh={() => refreshRemoteHosts()}
+              onRemoteCreateHost={noopRemoteTask6Action}
+              onRemoteConnectHost={(hostId) =>
+                void connectActiveRemoteHost(hostId)
+              }
+              onRemoteOpenSsh={(hostId) => void openSshForHost(hostId)}
+              onRemoteOpenSftp={(hostId) => openSftpForHost(hostId)}
+              onRemoteRunCommand={() => runActiveRemoteCommand()}
+              onRemoteCommandDraftChange={updateRemoteCommandDraft}
+              onRemoteListSftpDirectory={(hostId, path) =>
+                listSftpDirectoryForHost(hostId, path)
+              }
+              onRemoteDownloadFile={noopRemoteTask6Action}
+              onRemoteUploadFile={noopRemoteTask6Action}
               languageState={view.language}
             />
           </aside>
@@ -5645,6 +6165,43 @@ export function AppShell() {
                     className="close"
                     title="Close terminal"
                     aria-label="Close terminal"
+                    onClick={() => setSurface("empty")}
+                  >
+                    <X aria-hidden="true" />
+                  </button>
+                </div>
+              ) : null}
+              {surface === "ssh-terminal" ? (
+                <div
+                  className="tab active"
+                  title={activeSshSession?.name ?? "SSH terminal"}
+                >
+                  <Server className="ftype" aria-hidden="true" />
+                  <span className="tlabel mono">
+                    {activeSshSession?.name ?? "SSH"}
+                  </span>
+                  <button
+                    type="button"
+                    className="close"
+                    title="Close SSH terminal"
+                    aria-label="Close SSH terminal"
+                    onClick={() => setSurface("empty")}
+                  >
+                    <X aria-hidden="true" />
+                  </button>
+                </div>
+              ) : null}
+              {surface === "sftp-browser" ? (
+                <div className="tab active" title={activeSftpPath}>
+                  <Folder className="ftype" aria-hidden="true" />
+                  <span className="tlabel mono">
+                    {activeRemoteHost?.name ?? "SFTP"}
+                  </span>
+                  <button
+                    type="button"
+                    className="close"
+                    title="Close SFTP browser"
+                    aria-label="Close SFTP browser"
                     onClick={() => setSurface("empty")}
                   >
                     <X aria-hidden="true" />
@@ -5749,6 +6306,10 @@ export function AppShell() {
                     ? activeEditorParent
                     : surface === "terminal"
                       ? "terminal"
+                      : surface === "ssh-terminal"
+                        ? "remote"
+                      : surface === "sftp-browser"
+                        ? "remote"
                       : surface === "browser-preview"
                         ? "browser"
                       : surface === "docs-preview"
@@ -5765,6 +6326,10 @@ export function AppShell() {
                     ? activeEditorName
                     : surface === "terminal"
                       ? activeTerminalName
+                      : surface === "ssh-terminal"
+                        ? (activeSshSession?.name ?? "SSH terminal")
+                      : surface === "sftp-browser"
+                        ? activeSftpPath
                       : surface === "browser-preview"
                         ? (view.browser.activeTitle ?? "Start")
                       : surface === "docs-preview"
@@ -5781,6 +6346,8 @@ export function AppShell() {
                 className={`group-content${
                   showEditor ||
                   surface === "terminal" ||
+                  surface === "ssh-terminal" ||
+                  surface === "sftp-browser" ||
                   surface === "git-diff" ||
                   surface === "git-graph" ||
                   surface === "docs-preview" ||
@@ -5923,6 +6490,39 @@ export function AppShell() {
                       </button>
                     </div>
                   )}
+                </div>
+              ) : surface === "ssh-terminal" ? (
+                <SshTerminalSurface
+                  state={view.remote}
+                  activeSession={activeSshSession}
+                  activeOutput={activeSshOutput}
+                  onNewSession={() => void openSshForHost()}
+                  onSelectSession={(sessionId) =>
+                    updateRemote(activeWorkspaceId, (remote) => ({
+                      ...remote,
+                      activeSshSessionId: sessionId,
+                    }))
+                  }
+                  onCloseSession={(sessionId) => void closeSshById(sessionId)}
+                  onInput={writeSshInput}
+                />
+              ) : surface === "sftp-browser" ? (
+                <div className="terminal-surface">
+                  <RemotePanel
+                    state={{ ...view.remote, mode: "sftp" }}
+                    onModeChange={setRemoteWorkbenchMode}
+                    onSelectHost={selectRemoteHostById}
+                    onRefresh={refreshRemoteHosts}
+                    onCreateHost={noopRemoteTask6Action}
+                    onConnectHost={(hostId) => void connectActiveRemoteHost(hostId)}
+                    onOpenSsh={(hostId) => void openSshForHost(hostId)}
+                    onOpenSftp={(hostId) => openSftpForHost(hostId)}
+                    onRunCommand={runActiveRemoteCommand}
+                    onCommandDraftChange={updateRemoteCommandDraft}
+                    onListSftpDirectory={listSftpDirectoryForHost}
+                    onDownloadFile={noopRemoteTask6Action}
+                    onUploadFile={noopRemoteTask6Action}
+                  />
                 </div>
               ) : surface === "git-diff" ? (
                 <GitDiffView

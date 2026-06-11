@@ -257,6 +257,15 @@ describe("createWorkspaceViewStore", () => {
     expect(store.getState().viewFor("workspace-b").database.profiles).toEqual([]);
   });
 
+  test("default workspace view includes isolated remote state", () => {
+    const store = createWorkspaceViewStore();
+    const first = store.getState().viewFor("first");
+    const second = store.getState().viewFor("second");
+
+    expect(first.remote.hosts).toEqual([]);
+    expect(first.remote).not.toBe(second.remote);
+  });
+
   test("unknown workspace task defaults cannot be mutated across future defaults", () => {
     const store = createWorkspaceViewStore();
 

@@ -8,6 +8,7 @@ import {
   Globe,
   Bot,
   Search,
+  Server,
   Settings,
   SquareTerminal,
 } from "lucide-react";
@@ -22,6 +23,7 @@ export type KnownActivityId =
   | "docs"
   | "language"
   | "agents"
+  | "remote"
   | "database"
   | "settings"
   | "browser";
@@ -44,6 +46,7 @@ const activities: ActivityItem[] = [
   { id: "language", label: "Language", icon: Languages },
   { id: "agents", label: "Agents", icon: Bot },
   { id: "browser", label: "Browser", icon: Globe },
+  { id: "remote", label: "Remotes", icon: Server },
   { id: "database", label: "Database", icon: Database },
   { id: "settings", label: "Settings", icon: Settings },
 ];

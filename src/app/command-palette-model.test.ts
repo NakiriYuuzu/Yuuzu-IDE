@@ -11,6 +11,7 @@ import {
   node6Commands,
   node7Commands,
   node9Commands,
+  node10Commands,
 } from "./command-palette-model";
 
 describe("filterCommands", () => {
@@ -194,5 +195,22 @@ describe("filterCommands", () => {
 
     expect(ids).toContain("open-database");
     expect(ids).toContain("database-refresh");
+  });
+
+  test("includes remote commands in palette", () => {
+    expect(node10Commands).toEqual([
+      { id: "open-remote", label: "Remote: Open panel", group: "Remote" },
+      { id: "remote-connect", label: "Remote: Connect active host", group: "Remote" },
+      { id: "remote-open-ssh", label: "Remote: Open SSH terminal", group: "Remote" },
+      { id: "remote-open-sftp", label: "Remote: Open SFTP browser", group: "Remote" },
+    ]);
+    expect(allCommands.map((command) => command.id)).toEqual(
+      expect.arrayContaining([
+        "open-remote",
+        "remote-connect",
+        "remote-open-ssh",
+        "remote-open-sftp",
+      ]),
+    );
   });
 });

@@ -65,4 +65,18 @@ describe("ActivityRail", () => {
 
     expect(onSelect).toHaveBeenCalledWith("browser");
   });
+
+  test("renders remote activity and notifies callback", () => {
+    const onSelect = mock(() => {});
+    const result = render(
+      <ActivityRail
+        active="explorer"
+        onSelect={onSelect}
+      />,
+    );
+
+    fireEvent.click(result.getByLabelText("Remotes"));
+
+    expect(onSelect).toHaveBeenCalledWith("remote");
+  });
 });

@@ -22,6 +22,10 @@ import {
   type DatabaseViewState,
 } from "../features/database/database-model";
 import {
+  createRemoteState,
+  type RemoteViewState,
+} from "../features/remote/remote-model";
+import {
   createGitState,
   type GitViewState,
 } from "../features/git/git-model";
@@ -43,7 +47,9 @@ export type Surface =
   | "git-graph"
   | "docs-preview"
   | "browser-preview"
-  | "database-result";
+  | "database-result"
+  | "ssh-terminal"
+  | "sftp-browser";
 
 export type WorkspaceViewState = {
   activeActivity: ActivityId;
@@ -58,6 +64,7 @@ export type WorkspaceViewState = {
   language: LanguageViewState;
   browser: BrowserViewState;
   database: DatabaseViewState;
+  remote: RemoteViewState;
 };
 
 type WorkspaceViewStore = {
@@ -103,6 +110,10 @@ type WorkspaceViewStore = {
     workspaceId: string | null,
     update: (database: DatabaseViewState) => DatabaseViewState,
   ) => void;
+  updateRemote: (
+    workspaceId: string | null,
+    update: (remote: RemoteViewState) => RemoteViewState,
+  ) => void;
 };
 
 function defaultWorkspaceView(): WorkspaceViewState {
@@ -119,6 +130,7 @@ function defaultWorkspaceView(): WorkspaceViewState {
     language: createLanguageState(),
     browser: createBrowserState(),
     database: createDatabaseState(),
+    remote: createRemoteState(),
   };
 }
 
@@ -227,6 +239,24 @@ function freezeWorkspaceView(view: WorkspaceViewState): WorkspaceViewState {
     Object.freeze(view.database.export);
   }
   Object.freeze(view.database);
+  Object.freeze(view.remote.hosts);
+  Object.freeze(view.remote.connectionByHostId);
+  Object.freeze(view.remote.sshSessions);
+  Object.freeze(view.remote.sshOutputBySessionId);
+  Object.freeze(view.remote.pendingSshOutputBySessionId);
+  Object.freeze(view.remote.pendingSshExitBySessionId);
+  Object.freeze(view.remote.ignoredSshSessionIds);
+  Object.freeze(view.remote.sftpPathByHostId);
+  Object.freeze(view.remote.sftpEntriesByHostPath);
+  for (const entries of Object.values(view.remote.sftpEntriesByHostPath)) {
+    Object.freeze(entries);
+  }
+  Object.freeze(view.remote.commandResults);
+  Object.freeze(view.remote.commandOutputByRunId);
+  if (view.remote.transfer) {
+    Object.freeze(view.remote.transfer);
+  }
+  Object.freeze(view.remote);
   Object.freeze(view.agent.selectedContextIds);
   for (const session of view.agent.sessions) {
     Object.freeze(session.context_items);
@@ -248,16 +278,27 @@ const defaultView: WorkspaceViewState = freezeWorkspaceView(
   defaultWorkspaceView(),
 );
 const shellKey = "__shell__";
+const defaultViewsByKey: Record<string, WorkspaceViewState> = {};
+
+function defaultViewForKey(key: string): WorkspaceViewState {
+  if (key === shellKey) {
+    return defaultView;
+  }
+
+  defaultViewsByKey[key] ??= freezeWorkspaceView(defaultWorkspaceView());
+  return defaultViewsByKey[key];
+}
 
 export function createWorkspaceViewStore() {
   return create<WorkspaceViewStore>((set, get) => ({
     views: { [shellKey]: defaultWorkspaceView() },
     viewFor: (workspaceId) =>
-      get().views[workspaceId ?? shellKey] ?? defaultView,
+      get().views[workspaceId ?? shellKey] ??
+      defaultViewForKey(workspaceId ?? shellKey),
     updateView: (workspaceId, patch) =>
       set((state) => {
         const key = workspaceId ?? shellKey;
-        const current = state.views[key] ?? defaultView;
+        const current = state.views[key] ?? defaultViewForKey(key);
 
         return {
           views: {
@@ -269,7 +310,7 @@ export function createWorkspaceViewStore() {
     updateEditor: (workspaceId, update) =>
       set((state) => {
         const key = workspaceId ?? shellKey;
-        const current = state.views[key] ?? defaultView;
+        const current = state.views[key] ?? defaultViewForKey(key);
 
         return {
           views: {
@@ -281,7 +322,7 @@ export function createWorkspaceViewStore() {
     updateTerminal: (workspaceId, update) =>
       set((state) => {
         const key = workspaceId ?? shellKey;
-        const current = state.views[key] ?? defaultView;
+        const current = state.views[key] ?? defaultViewForKey(key);
 
         return {
           views: {
@@ -293,7 +334,7 @@ export function createWorkspaceViewStore() {
     updateTask: (workspaceId, update) =>
       set((state) => {
         const key = workspaceId ?? shellKey;
-        const current = state.views[key] ?? defaultView;
+        const current = state.views[key] ?? defaultViewForKey(key);
 
         return {
           views: {
@@ -305,7 +346,7 @@ export function createWorkspaceViewStore() {
     updateGit: (workspaceId, update) =>
       set((state) => {
         const key = workspaceId ?? shellKey;
-        const current = state.views[key] ?? defaultView;
+        const current = state.views[key] ?? defaultViewForKey(key);
 
         return {
           views: {
@@ -317,7 +358,7 @@ export function createWorkspaceViewStore() {
     updateDocs: (workspaceId, update) =>
       set((state) => {
         const key = workspaceId ?? shellKey;
-        const current = state.views[key] ?? defaultView;
+        const current = state.views[key] ?? defaultViewForKey(key);
 
         return {
           views: {
@@ -329,7 +370,7 @@ export function createWorkspaceViewStore() {
     updateLanguage: (workspaceId, update) =>
       set((state) => {
         const key = workspaceId ?? shellKey;
-        const current = state.views[key] ?? defaultView;
+        const current = state.views[key] ?? defaultViewForKey(key);
 
         return {
           views: {
@@ -341,7 +382,7 @@ export function createWorkspaceViewStore() {
     updateAgent: (workspaceId, update) =>
       set((state) => {
         const key = workspaceId ?? shellKey;
-        const current = state.views[key] ?? defaultView;
+        const current = state.views[key] ?? defaultViewForKey(key);
 
         return {
           views: {
@@ -353,7 +394,7 @@ export function createWorkspaceViewStore() {
     updateBrowser: (workspaceId, update) =>
       set((state) => {
         const key = workspaceId ?? shellKey;
-        const current = state.views[key] ?? defaultView;
+        const current = state.views[key] ?? defaultViewForKey(key);
 
         return {
           views: {
@@ -365,12 +406,24 @@ export function createWorkspaceViewStore() {
     updateDatabase: (workspaceId, update) =>
       set((state) => {
         const key = workspaceId ?? shellKey;
-        const current = state.views[key] ?? defaultView;
+        const current = state.views[key] ?? defaultViewForKey(key);
 
         return {
           views: {
             ...state.views,
             [key]: { ...current, database: update(current.database) },
+          },
+        };
+      }),
+    updateRemote: (workspaceId, update) =>
+      set((state) => {
+        const key = workspaceId ?? shellKey;
+        const current = state.views[key] ?? defaultViewForKey(key);
+
+        return {
+          views: {
+            ...state.views,
+            [key]: { ...current, remote: update(current.remote) },
           },
         };
       }),
