@@ -1,7 +1,7 @@
 use keyring_core::Entry;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
@@ -574,6 +574,45 @@ impl RemoteTerminalEventSink for NoopRemoteTerminalEventSink {
     fn emit_exit(&self, _event: RemoteTerminalExitEvent) {}
 }
 
+struct RemoteStateTerminalEventSink {
+    inner: Arc<dyn RemoteTerminalEventSink>,
+    terminal_sessions: Arc<Mutex<HashMap<String, RemoteTerminalSessionInfo>>>,
+    exited_terminal_sessions: Arc<Mutex<HashSet<String>>>,
+}
+
+impl RemoteStateTerminalEventSink {
+    fn new(
+        inner: Arc<dyn RemoteTerminalEventSink>,
+        terminal_sessions: Arc<Mutex<HashMap<String, RemoteTerminalSessionInfo>>>,
+        exited_terminal_sessions: Arc<Mutex<HashSet<String>>>,
+    ) -> Self {
+        Self {
+            inner,
+            terminal_sessions,
+            exited_terminal_sessions,
+        }
+    }
+}
+
+impl RemoteTerminalEventSink for RemoteStateTerminalEventSink {
+    fn emit_output(&self, event: RemoteTerminalOutputEvent) {
+        self.inner.emit_output(event);
+    }
+
+    fn emit_exit(&self, event: RemoteTerminalExitEvent) {
+        let session_id = event.session_id.clone();
+        if let Ok(mut sessions) = self.terminal_sessions.lock() {
+            if let Some(session) = sessions.get_mut(&session_id) {
+                session.running = false;
+            } else if let Ok(mut exited) = self.exited_terminal_sessions.lock() {
+                exited.insert(session_id);
+            }
+        }
+
+        self.inner.emit_exit(event);
+    }
+}
+
 #[derive(Clone)]
 pub struct TauriRemoteTerminalEventSink {
     app: AppHandle,
@@ -673,17 +712,62 @@ pub trait RemoteBackend: Send + Sync {
     }
 }
 
-#[derive(Default)]
-struct RusshClient;
+#[derive(Clone, Default)]
+struct RusshClient {
+    host: String,
+    port: u16,
+    known_hosts_path: Option<PathBuf>,
+}
+
+impl RusshClient {
+    fn new(host: impl Into<String>, port: u16) -> Self {
+        Self {
+            host: host.into(),
+            port,
+            known_hosts_path: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_known_hosts_path(
+        host: impl Into<String>,
+        port: u16,
+        known_hosts_path: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            host: host.into(),
+            port,
+            known_hosts_path: Some(known_hosts_path.into()),
+        }
+    }
+}
 
 impl client::Handler for RusshClient {
     type Error = russh::Error;
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &keys::ssh_key::PublicKey,
+        server_public_key: &keys::ssh_key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        Ok(true)
+        check_known_host_key(
+            &self.host,
+            self.port,
+            server_public_key,
+            self.known_hosts_path.as_deref(),
+        )
+        .map_err(russh::Error::from)
+    }
+}
+
+fn check_known_host_key(
+    host: &str,
+    port: u16,
+    server_public_key: &keys::ssh_key::PublicKey,
+    known_hosts_path: Option<&Path>,
+) -> Result<bool, keys::Error> {
+    match known_hosts_path {
+        Some(path) => keys::check_known_hosts_path(host, port, server_public_key, path),
+        None => keys::check_known_hosts(host, port, server_public_key),
     }
 }
 
@@ -720,6 +804,13 @@ fn file_type_order(file_type: &RemoteFileKind) -> u8 {
     }
 }
 
+fn russh_client_config(profile: &RemoteHostProfile) -> client::Config {
+    client::Config {
+        keepalive_interval: Some(Duration::from_secs(profile.keepalive_seconds)),
+        ..client::Config::default()
+    }
+}
+
 #[derive(Default)]
 pub struct RusshRemoteBackend {
     sessions: Arc<TokioMutex<u64>>,
@@ -746,18 +837,14 @@ impl RusshRemoteBackend {
         }
 
         let timeout_secs = profile.connect_timeout_seconds.max(1);
-        let config = client::Config {
-            inactivity_timeout: Some(Duration::from_secs(profile.connect_timeout_seconds)),
-            keepalive_interval: Some(Duration::from_secs(profile.keepalive_seconds)),
-            ..client::Config::default()
-        };
+        let config = russh_client_config(profile);
 
         let handshake = timeout(
             Duration::from_secs(timeout_secs),
             client::connect(
                 Arc::new(config),
                 (profile.host.as_str(), profile.port),
-                RusshClient,
+                RusshClient::new(profile.host.clone(), profile.port),
             ),
         )
         .await
@@ -931,9 +1018,10 @@ impl RemoteBackend for RusshRemoteBackend {
 
         let sink = events.clone();
         let output_session_id = session_id.clone();
-        let output_writer = session_id.clone();
+        let terminal_writers = self.terminal_writers.clone();
+        let cleanup_session_id = session_id.clone();
         tokio::spawn(async move {
-            let mut exited = false;
+            let mut exit_code = None;
             let mut reader = reader;
             let mut stream = String::new();
             loop {
@@ -962,31 +1050,21 @@ impl RemoteBackend for RusshRemoteBackend {
                         stream.clear();
                     }
                     ChannelMsg::ExitStatus { exit_status } => {
-                        exited = true;
-                        sink.emit_exit(RemoteTerminalExitEvent {
-                            session_id: output_writer.clone(),
-                            exit_code: Some(exit_status),
-                        });
+                        exit_code = Some(exit_status);
                         break;
                     }
                     ChannelMsg::ExitSignal { .. } => {
-                        exited = true;
-                        sink.emit_exit(RemoteTerminalExitEvent {
-                            session_id: output_writer.clone(),
-                            exit_code: None,
-                        });
                         break;
                     }
                     _ => {}
                 }
             }
 
-            if !exited {
-                sink.emit_exit(RemoteTerminalExitEvent {
-                    session_id: output_writer,
-                    exit_code: None,
-                });
-            }
+            terminal_writers.lock().await.remove(&cleanup_session_id);
+            sink.emit_exit(RemoteTerminalExitEvent {
+                session_id: output_session_id,
+                exit_code,
+            });
         });
 
         tokio::spawn(async move {
@@ -1245,6 +1323,7 @@ pub struct RemoteState {
     backend: Arc<dyn RemoteBackend>,
     connection_snapshots: Arc<Mutex<HashMap<String, RemoteConnectionSnapshot>>>,
     terminal_sessions: Arc<Mutex<HashMap<String, RemoteTerminalSessionInfo>>>,
+    exited_terminal_sessions: Arc<Mutex<HashSet<String>>>,
 }
 
 impl RemoteState {
@@ -1257,6 +1336,7 @@ impl RemoteState {
             backend,
             connection_snapshots: Arc::new(Mutex::new(HashMap::new())),
             terminal_sessions: Arc::new(Mutex::new(HashMap::new())),
+            exited_terminal_sessions: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -1340,35 +1420,48 @@ impl RemoteState {
         rows: u16,
         cols: u16,
     ) -> Result<RemoteTerminalSessionInfo, String> {
+        let events = Arc::new(RemoteStateTerminalEventSink::new(
+            events,
+            self.terminal_sessions.clone(),
+            self.exited_terminal_sessions.clone(),
+        ));
         let handle = self
             .backend
             .spawn_terminal(profile, secrets, events, rows.max(1), cols.max(1))
             .await?;
 
+        let mut sessions = self
+            .terminal_sessions
+            .lock()
+            .map_err(|err| err.to_string())?;
+        let running = !self
+            .exited_terminal_sessions
+            .lock()
+            .map_err(|err| err.to_string())?
+            .remove(&handle.session_id);
         let info = RemoteTerminalSessionInfo {
             id: handle.session_id.clone(),
             host_id: handle.host_id,
             workspace_id: workspace_id.to_string(),
             name: handle.name,
-            running: true,
+            running,
         };
 
-        self.terminal_sessions
-            .lock()
-            .map_err(|err| err.to_string())?
-            .insert(handle.session_id.clone(), info.clone());
+        sessions.insert(handle.session_id.clone(), info.clone());
 
         Ok(info)
     }
 
     pub async fn write_ssh_terminal(&self, session_id: &str, data: &str) -> Result<(), String> {
-        if !self
+        let running = self
             .terminal_sessions
             .lock()
             .map_err(|err| err.to_string())?
-            .contains_key(session_id)
-        {
-            return Err(format!("terminal session not found: {session_id}"));
+            .get(session_id)
+            .map(|session| session.running)
+            .ok_or_else(|| format!("terminal session not found: {session_id}"))?;
+        if !running {
+            return Err(format!("terminal session not running: {session_id}"));
         }
 
         self.backend.write_terminal(session_id, data).await
@@ -1387,6 +1480,10 @@ impl RemoteState {
         let mut session = sessions
             .remove(session_id)
             .ok_or_else(|| format!("terminal session not found: {session_id}"))?;
+        self.exited_terminal_sessions
+            .lock()
+            .map_err(|err| err.to_string())?
+            .remove(session_id);
 
         session.name = if backend_info.name.is_empty() {
             session.name
@@ -1791,6 +1888,7 @@ mod tests {
 #[cfg(test)]
 mod runtime_tests {
     use super::*;
+    use russh::client::Handler as _;
     use std::sync::Mutex;
 
     #[derive(Default)]
@@ -1925,6 +2023,62 @@ mod runtime_tests {
         }
     }
 
+    #[derive(Default)]
+    struct ExitCapturingBackend {
+        events: Mutex<Option<Arc<dyn RemoteTerminalEventSink>>>,
+        written: Mutex<Vec<(String, String)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl RemoteBackend for ExitCapturingBackend {
+        async fn connect(
+            &self,
+            profile: &RemoteHostProfile,
+            _secrets: &dyn RemoteSecretStore,
+        ) -> Result<RemoteConnectionSnapshot, String> {
+            Ok(RemoteConnectionSnapshot {
+                host_id: profile.id.clone(),
+                status: RemoteConnectionStatus::Connected,
+                message: None,
+                checked_ms: 99,
+            })
+        }
+
+        async fn spawn_terminal(
+            &self,
+            profile: &RemoteHostProfile,
+            _secrets: &dyn RemoteSecretStore,
+            events: Arc<dyn RemoteTerminalEventSink>,
+            _rows: u16,
+            _cols: u16,
+        ) -> Result<RemoteTerminalHandle, String> {
+            self.events
+                .lock()
+                .map_err(|err| err.to_string())?
+                .replace(events);
+            Ok(RemoteTerminalHandle {
+                session_id: format!("{}:ssh-1", profile.id),
+                host_id: profile.id.clone(),
+                name: format!("{}@{}", profile.username, profile.host),
+            })
+        }
+
+        async fn write_terminal(&self, session_id: &str, data: &str) -> Result<(), String> {
+            self.written
+                .lock()
+                .map_err(|err| err.to_string())?
+                .push((session_id.to_string(), data.to_string()));
+            Ok(())
+        }
+    }
+
+    fn known_hosts_test_key() -> keys::ssh_key::PublicKey {
+        keys::parse_public_key_base64(
+            "AAAAC3NzaC1lZDI1NTE5AAAAIJdD7y3aLq454yWBdwLWbieU1ebz9/cu7/QEXn9OIeZJ",
+        )
+        .expect("test public key")
+    }
+
     fn profile() -> RemoteHostProfile {
         RemoteHostProfile {
             id: "host-1".to_string(),
@@ -1940,6 +2094,71 @@ mod runtime_tests {
             created_ms: 1,
             updated_ms: 1,
         }
+    }
+
+    #[tokio::test]
+    async fn unknown_server_key_is_rejected_by_default() {
+        let temp = tempfile::tempdir().expect("known hosts dir");
+        let mut client =
+            RusshClient::with_known_hosts_path("edge.example.com", 22, temp.path().join("missing"));
+
+        let accepted = client
+            .check_server_key(&known_hosts_test_key())
+            .await
+            .expect("host key check");
+
+        assert!(!accepted, "unknown SSH server keys must be rejected");
+    }
+
+    #[tokio::test]
+    async fn changed_known_hosts_key_is_rejected() {
+        let temp = tempfile::tempdir().expect("known hosts dir");
+        let known_hosts_path = temp.path().join("known_hosts");
+        std::fs::write(
+            &known_hosts_path,
+            "edge.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA6rWI3G2sz07DnfFlrouTcysQlj2P+jpNSOEWD9OJ3X\n",
+        )
+        .expect("known hosts");
+        let mut client =
+            RusshClient::with_known_hosts_path("edge.example.com", 22, known_hosts_path);
+
+        let err = client
+            .check_server_key(&known_hosts_test_key())
+            .await
+            .expect_err("changed host key");
+
+        assert!(err.to_string().contains("server key changed"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn known_hosts_path_accepts_matching_server_key() {
+        let temp = tempfile::tempdir().expect("known hosts dir");
+        let known_hosts_path = temp.path().join("known_hosts");
+        std::fs::write(
+            &known_hosts_path,
+            "edge.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJdD7y3aLq454yWBdwLWbieU1ebz9/cu7/QEXn9OIeZJ\n",
+        )
+        .expect("known hosts");
+        let mut client =
+            RusshClient::with_known_hosts_path("edge.example.com", 22, known_hosts_path);
+
+        let accepted = client
+            .check_server_key(&known_hosts_test_key())
+            .await
+            .expect("host key check");
+
+        assert!(accepted, "matching known_hosts entries should be accepted");
+    }
+
+    #[test]
+    fn russh_client_config_does_not_map_connect_timeout_to_inactivity_timeout() {
+        let config = russh_client_config(&profile());
+
+        assert_eq!(config.inactivity_timeout, None);
+        assert_eq!(
+            config.keepalive_interval,
+            Some(Duration::from_secs(profile().keepalive_seconds)),
+        );
     }
 
     #[tokio::test]
@@ -2035,6 +2254,56 @@ mod runtime_tests {
         assert!(
             backend.written.lock().expect("written").is_empty(),
             "unregistered writes should not reach backend"
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_exit_sink_marks_session_stopped_before_backend_write() {
+        let backend = Arc::new(ExitCapturingBackend::default());
+        let state = RemoteState::new_with_backend(backend.clone());
+        let secrets = super::tests::MemoryRemoteSecretStore::default();
+        let session = state
+            .spawn_ssh_terminal(
+                "workspace",
+                &profile(),
+                &secrets,
+                Arc::new(NoopRemoteTerminalEventSink),
+                24,
+                80,
+            )
+            .await
+            .expect("spawn");
+        let events = backend
+            .events
+            .lock()
+            .expect("events")
+            .as_ref()
+            .expect("captured event sink")
+            .clone();
+
+        events.emit_exit(RemoteTerminalExitEvent {
+            session_id: session.id.clone(),
+            exit_code: Some(0),
+        });
+
+        let sessions = state
+            .list_ssh_terminal_sessions("workspace")
+            .expect("sessions");
+        assert!(
+            sessions
+                .iter()
+                .any(|item| item.id == session.id && !item.running),
+            "exited sessions should be visible as stopped"
+        );
+        let err = state
+            .write_ssh_terminal(&session.id, "ls\n")
+            .await
+            .expect_err("stopped session");
+
+        assert!(err.contains("terminal session not running"), "{err}");
+        assert!(
+            backend.written.lock().expect("written").is_empty(),
+            "stopped sessions should not write through to the backend"
         );
     }
 
