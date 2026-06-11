@@ -64,6 +64,9 @@ export function DebugPanel({
   const [evalExpression, setEvalExpression] = useState("");
   const activeSession = activeDebugSession(state);
   const sessionId = activeSession?.id ?? null;
+  const canStartSession = state.launchConfigs.some(
+    (config) => config.id === state.activeConfigId,
+  );
   const stack = sessionId ? (state.stackBySessionId[sessionId] ?? []) : [];
   const variables = debugVariablesForSession(state, sessionId);
   const consoleText = sessionId ? (state.consoleBySessionId[sessionId] ?? "") : "";
@@ -97,7 +100,8 @@ export function DebugPanel({
             className="iconbtn"
             type="button"
             aria-label="Start debug session"
-            onClick={onStartSession}
+            disabled={!canStartSession}
+            onClick={() => canStartSession && onStartSession()}
           >
             <Play aria-hidden="true" />
           </button>
@@ -254,11 +258,7 @@ export function DebugPanel({
 }
 
 function activeDebugSession(state: DebugViewState): DebugSessionInfo | null {
-  return (
-    state.sessions.find((session) => session.id === state.activeSessionId) ??
-    state.sessions[0] ??
-    null
-  );
+  return state.sessions.find((session) => session.id === state.activeSessionId) ?? null;
 }
 
 function debugVariablesForSession(
