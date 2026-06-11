@@ -1561,7 +1561,7 @@ mod real_adapter {
         let source = source
             .canonicalize()
             .map_err(|err| format!("failed to resolve {}: {err}", source.display()))?;
-        let output_dir = std::env::temp_dir().join("yuuzu-ide-debug-smoke");
+        let output_dir = repo_root().join("src-tauri/target/debug-fixtures");
         std::fs::create_dir_all(&output_dir).map_err(|err| err.to_string())?;
         let binary = output_dir.join(format!("compiled-main-{}", std::process::id()));
         let output = Command::new("xcrun")
@@ -2096,12 +2096,10 @@ mod real_adapter {
                 "uv".to_string(),
                 adapter_command_args(DebugAdapterKind::Python),
             )),
-            DebugAdapterKind::Custom => {
-                if request.config.program.trim().is_empty() {
-                    return Err("custom debug adapter command cannot be empty".to_string());
-                }
-                Ok((request.config.program.clone(), request.config.args.clone()))
-            }
+            DebugAdapterKind::Custom => Err(
+                "custom debug adapter is unsupported without a distinct adapter command"
+                    .to_string(),
+            ),
         }
     }
 
@@ -2143,14 +2141,13 @@ mod real_adapter {
                 "program": program,
                 "cwd": cwd,
                 "stopOnEntry": request.config.stop_on_entry,
+                "args": request.config.args,
                 "console": "internalConsole",
             })),
-            DebugAdapterKind::Custom => Ok(json!({
-                "program": program,
-                "cwd": cwd,
-                "stopOnEntry": request.config.stop_on_entry,
-                "args": request.config.args,
-            })),
+            DebugAdapterKind::Custom => Err(
+                "custom debug adapter is unsupported without a distinct adapter command"
+                    .to_string(),
+            ),
         }
     }
 
@@ -2229,15 +2226,25 @@ mod real_adapter {
     }
 
     fn resolve_workspace_path(workspace_root: &Path, value: &str) -> Result<PathBuf, String> {
+        let root = workspace_root.canonicalize().map_err(|err| {
+            format!(
+                "failed to resolve workspace root {}: {err}",
+                workspace_root.display()
+            )
+        })?;
         let path = Path::new(value);
-        let resolved = if path.is_absolute() {
+        let candidate = if path.is_absolute() {
             path.to_path_buf()
         } else {
-            workspace_root.join(path)
+            root.join(path)
         };
-        resolved
+        let resolved = candidate
             .canonicalize()
-            .map_err(|err| format!("failed to resolve {}: {err}", resolved.display()))
+            .map_err(|err| format!("failed to resolve {}: {err}", candidate.display()))?;
+        if !resolved.starts_with(&root) {
+            return Err(format!("path outside workspace: {}", resolved.display()));
+        }
+        Ok(resolved)
     }
 
     fn resolve_breakpoints(
@@ -2306,6 +2313,98 @@ mod real_adapter {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::path::Path;
+
+        #[test]
+        fn resolve_workspace_path_rejects_parent_absolute_and_symlink_escape() {
+            let root = tempfile::tempdir().expect("root");
+            let workspace = root.path().join("workspace");
+            let outside = root.path().join("outside");
+            std::fs::create_dir_all(&workspace).expect("workspace");
+            std::fs::create_dir_all(&outside).expect("outside");
+            std::fs::write(workspace.join("main.py"), "print('inside')\n").expect("inside");
+            std::fs::write(outside.join("main.py"), "print('outside')\n").expect("outside");
+
+            let inside = resolve_workspace_path(&workspace, "main.py").expect("inside path");
+            assert!(inside.starts_with(workspace.canonicalize().expect("canonical workspace")));
+
+            assert!(resolve_workspace_path(&workspace, "../outside/main.py")
+                .expect_err("parent escape")
+                .contains("outside workspace"));
+            assert!(resolve_workspace_path(
+                &workspace,
+                outside.join("main.py").to_string_lossy().as_ref()
+            )
+            .expect_err("absolute escape")
+            .contains("outside workspace"));
+
+            create_dir_symlink(&outside, &workspace.join("linked-outside")).expect("symlink");
+            assert!(resolve_workspace_path(&workspace, "linked-outside/main.py")
+                .expect_err("symlink escape")
+                .contains("outside workspace"));
+        }
+
+        #[test]
+        fn python_launch_arguments_include_configured_program_args() {
+            let mut request = real_adapter_request(DebugAdapterKind::Python);
+            request.config.args = vec!["--port".to_string(), "3000".to_string()];
+
+            let arguments =
+                launch_arguments(&request, Path::new("/repo/app.py"), Path::new("/repo"))
+                    .expect("python launch arguments");
+
+            assert_eq!(arguments["args"], json!(["--port", "3000"]));
+        }
+
+        #[test]
+        fn custom_adapter_without_distinct_adapter_command_is_unsupported() {
+            let mut request = real_adapter_request(DebugAdapterKind::Custom);
+            request.config.program = "debuggee.py".to_string();
+            request.config.args = vec!["--debuggee-arg".to_string()];
+
+            assert!(adapter_command_for(&request, None)
+                .expect_err("custom adapter unsupported")
+                .contains("custom debug adapter is unsupported"));
+        }
+
+        fn real_adapter_request(adapter: DebugAdapterKind) -> DebugStartSessionRequest {
+            DebugStartSessionRequest {
+                workspace_id: "workspace-a".to_string(),
+                workspace_root: "/repo".to_string(),
+                config: DebugLaunchConfig {
+                    id: "cfg-real".to_string(),
+                    workspace_root: "/repo".to_string(),
+                    name: "Real Adapter".to_string(),
+                    adapter,
+                    request: DebugRequestKind::Launch,
+                    program: "app.py".to_string(),
+                    cwd: ".".to_string(),
+                    args: Vec::new(),
+                    env: Vec::new(),
+                    stop_on_entry: true,
+                    attach: None,
+                    created_ms: 1,
+                    updated_ms: 1,
+                },
+            }
+        }
+
+        fn create_dir_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(target, link)
+            }
+
+            #[cfg(windows)]
+            {
+                std::os::windows::fs::symlink_dir(target, link)
+            }
+        }
     }
 }
 
