@@ -26,7 +26,11 @@ import {
   type DatabaseTable,
 } from "../features/database/database-model";
 import { SshTerminalSurface } from "../features/remote/SshTerminalSurface";
-import { createRemoteState } from "../features/remote/remote-model";
+import {
+  createRemoteState,
+  type RemoteHostProfile,
+  type RemoteViewState,
+} from "../features/remote/remote-model";
 import {
   collectAgentAvailableContext,
   activeLoadedFileForWorkspace,
@@ -44,7 +48,9 @@ import {
   executeDatabaseQueryRequest,
   inspectDatabaseProfileRequest,
   refreshDatabaseProfilesRequest,
+  refreshRemoteHostsRequest,
   exportDatabaseQueryResultRequest,
+  knownWorkspaceIdForSshTerminal,
   type BrowserCaptureRequestState,
   type BrowserValidationRequestState,
   type AgentAvailableContextSource,
@@ -157,6 +163,32 @@ function setDatabase(
   workspaceViewStore.getState().updateDatabase(workspaceId, update);
 }
 
+function setRemote(
+  workspaceId: string,
+  update: (state: RemoteViewState) => RemoteViewState,
+): void {
+  workspaceViewStore.getState().updateRemote(workspaceId, update);
+}
+
+function remoteHost(
+  overrides: Partial<RemoteHostProfile> = {},
+): RemoteHostProfile {
+  return {
+    id: overrides.id ?? "edge",
+    workspace_root: overrides.workspace_root ?? "/repo",
+    name: overrides.name ?? overrides.id ?? "edge",
+    host: overrides.host ?? "edge.example.com",
+    port: overrides.port ?? 22,
+    username: overrides.username ?? "deploy",
+    auth: overrides.auth ?? "Agent",
+    default_remote_path: overrides.default_remote_path ?? "/srv/app",
+    keepalive_seconds: overrides.keepalive_seconds ?? 30,
+    connect_timeout_seconds: overrides.connect_timeout_seconds ?? 10,
+    created_ms: overrides.created_ms ?? 1,
+    updated_ms: overrides.updated_ms ?? 1,
+  };
+}
+
 afterEach(() => {
   cleanup();
 });
@@ -220,6 +252,171 @@ describe("AppShell AppShell helpers", () => {
       renderResult.getByRole("button", { name: "Close SSH terminal" }),
     );
     expect(onClose).toHaveBeenCalledWith("ssh-2");
+  });
+
+  test("knownWorkspaceIdForSshTerminal resolves unknown session by remote host id", () => {
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: "workspace-b",
+      workspaces: [
+        {
+          id: "workspace-a",
+          path: "/repo-a",
+          name: "workspace-a",
+          pinned: false,
+        },
+        {
+          id: "workspace-b",
+          path: "/repo-b",
+          name: "workspace-b",
+          pinned: false,
+        },
+      ],
+    });
+    setRemote("workspace-a", (remote) => ({
+      ...remote,
+      hosts: [remoteHost({ id: "edge", workspace_root: "/repo-a" })],
+    }));
+    setRemote("workspace-b", (remote) => ({
+      ...remote,
+      hosts: [remoteHost({ id: "worker", workspace_root: "/repo-b" })],
+    }));
+
+    expect(knownWorkspaceIdForSshTerminal("edge:ssh-1")).toBe("workspace-a");
+    expect(knownWorkspaceIdForSshTerminal("missing:ssh-1")).toBeNull();
+  });
+
+  test("refreshRemoteHostsRequest clears loading on stale workspace path success", async () => {
+    const workspaceId = "remote-stale-success";
+    const workspaceRoot = "/repo-remote-success";
+    const previousHost = remoteHost({
+      id: "previous",
+      workspace_root: workspaceRoot,
+    });
+    const nextHost = remoteHost({
+      id: "next",
+      workspace_root: workspaceRoot,
+    });
+    const deferredHosts = createDeferred<RemoteHostProfile[]>();
+
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: workspaceId,
+      workspaces: [
+        {
+          id: workspaceId,
+          path: workspaceRoot,
+          name: workspaceId,
+          pinned: false,
+        },
+      ],
+    });
+    setRemote(workspaceId, (remote) => ({
+      ...remote,
+      loading: false,
+      error: "previous remote load error",
+      hosts: [previousHost],
+    }));
+
+    const request = refreshRemoteHostsRequest({
+      workspaceId,
+      workspaceRoot,
+      requestId: 1,
+      hasRegisteredWorkspace: (currentWorkspaceId) =>
+        workspaceStore.getState().registry.workspaces.some(
+          (workspace) => workspace.id === currentWorkspaceId,
+        ),
+      getWorkspaceRoot: (currentWorkspaceId) =>
+        workspaceStore.getState().registry.workspaces.find(
+          (workspace) => workspace.id === currentWorkspaceId,
+        )?.path ?? null,
+      isLatestRemoteHostsRequest: () => true,
+      updateRemote: setRemote,
+      listRemoteHosts: () => deferredHosts.promise,
+      listSshTerminalSessions: async () => [],
+    });
+
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: workspaceId,
+      workspaces: [
+        {
+          id: workspaceId,
+          path: `${workspaceRoot}-switched`,
+          name: workspaceId,
+          pinned: false,
+        },
+      ],
+    });
+    deferredHosts.resolve([nextHost]);
+    await request;
+
+    const remote = workspaceViewStore.getState().viewFor(workspaceId).remote;
+    expect(remote.loading).toBe(false);
+    expect(remote.error).toBeNull();
+    expect(remote.hosts).toEqual([previousHost]);
+  });
+
+  test("refreshRemoteHostsRequest clears stale errors on workspace path failure", async () => {
+    const workspaceId = "remote-stale-failure";
+    const workspaceRoot = "/repo-remote-failure";
+    const previousHost = remoteHost({
+      id: "previous",
+      workspace_root: workspaceRoot,
+    });
+    const deferredHosts = createDeferred<RemoteHostProfile[]>();
+
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: workspaceId,
+      workspaces: [
+        {
+          id: workspaceId,
+          path: workspaceRoot,
+          name: workspaceId,
+          pinned: false,
+        },
+      ],
+    });
+    setRemote(workspaceId, (remote) => ({
+      ...remote,
+      loading: false,
+      error: "previous remote load error",
+      hosts: [previousHost],
+    }));
+
+    const request = refreshRemoteHostsRequest({
+      workspaceId,
+      workspaceRoot,
+      requestId: 1,
+      hasRegisteredWorkspace: (currentWorkspaceId) =>
+        workspaceStore.getState().registry.workspaces.some(
+          (workspace) => workspace.id === currentWorkspaceId,
+        ),
+      getWorkspaceRoot: (currentWorkspaceId) =>
+        workspaceStore.getState().registry.workspaces.find(
+          (workspace) => workspace.id === currentWorkspaceId,
+        )?.path ?? null,
+      isLatestRemoteHostsRequest: () => true,
+      updateRemote: setRemote,
+      listRemoteHosts: () => deferredHosts.promise,
+      listSshTerminalSessions: async () => [],
+    });
+
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: workspaceId,
+      workspaces: [
+        {
+          id: workspaceId,
+          path: `${workspaceRoot}-switched`,
+          name: workspaceId,
+          pinned: false,
+        },
+      ],
+    });
+    deferredHosts.reject(new Error("remote host list failed"));
+    await request;
+
+    const remote = workspaceViewStore.getState().viewFor(workspaceId).remote;
+    expect(remote.loading).toBe(false);
+    expect(remote.error).toBeNull();
+    expect(remote.hosts).toEqual([previousHost]);
   });
 
   test("PanelBody renders BrowserPanel for browser activity", () => {

@@ -63,7 +63,9 @@ import {
   setRemoteMode,
   setSftpEntries,
   upsertSshTerminal,
+  type RemoteHostProfile,
   type RemoteViewState,
+  type SshTerminalSessionInfo,
 } from "../features/remote/remote-model";
 import {
   beginDatabaseQuery,
@@ -1143,6 +1145,107 @@ export async function refreshDatabaseProfilesRequest({
   }
 }
 
+type RefreshRemoteHostsRunContext = {
+  workspaceId: string;
+  workspaceRoot: string;
+  requestId: number;
+  hasRegisteredWorkspace: (workspaceId: string) => boolean;
+  getWorkspaceRoot: (workspaceId: string) => string | null;
+  isLatestRemoteHostsRequest: (
+    workspaceId: string,
+    requestId: number,
+  ) => boolean;
+  updateRemote: (
+    workspaceId: string,
+    update: (remote: RemoteViewState) => RemoteViewState,
+  ) => void;
+  listRemoteHosts: (workspaceRoot: string) => Promise<RemoteHostProfile[]>;
+  listSshTerminalSessions: (
+    workspaceId: string,
+  ) => Promise<SshTerminalSessionInfo[]>;
+};
+
+export async function refreshRemoteHostsRequest({
+  workspaceId,
+  workspaceRoot,
+  requestId,
+  hasRegisteredWorkspace,
+  getWorkspaceRoot,
+  isLatestRemoteHostsRequest,
+  updateRemote,
+  listRemoteHosts: listHosts,
+  listSshTerminalSessions: listSessions,
+}: RefreshRemoteHostsRunContext): Promise<void> {
+  updateRemote(workspaceId, (remote) => ({
+    ...remote,
+    loading: true,
+    error: null,
+  }));
+
+  try {
+    const [hosts, sessions] = await Promise.all([
+      listHosts(workspaceRoot),
+      listSessions(workspaceId),
+    ]);
+
+    if (!isLatestRemoteHostsRequest(workspaceId, requestId)) {
+      return;
+    }
+
+    if (
+      !hasRegisteredWorkspace(workspaceId) ||
+      getWorkspaceRoot(workspaceId) !== workspaceRoot
+    ) {
+      updateRemote(workspaceId, (remote) => ({
+        ...remote,
+        loading: false,
+        error: null,
+      }));
+      return;
+    }
+
+    updateRemote(workspaceId, (remote) => {
+      const resetSessions = replaceRemoteHosts(
+        {
+          ...remote,
+          sshSessions: [],
+          activeSshSessionId: null,
+          loading: false,
+          error: null,
+        },
+        hosts,
+      );
+
+      return sessions.reduce(
+        (nextRemote, session) => upsertSshTerminal(nextRemote, session),
+        resetSessions,
+      );
+    });
+  } catch (error) {
+    if (!isLatestRemoteHostsRequest(workspaceId, requestId)) {
+      return;
+    }
+
+    if (
+      !hasRegisteredWorkspace(workspaceId) ||
+      getWorkspaceRoot(workspaceId) !== workspaceRoot
+    ) {
+      updateRemote(workspaceId, (remote) => ({
+        ...remote,
+        loading: false,
+        error: null,
+      }));
+      return;
+    }
+
+    updateRemote(workspaceId, (remote) => ({
+      ...remote,
+      loading: false,
+      error: `Load remotes failed: ${terminalErrorMessage(error)}`,
+    }));
+  }
+}
+
 function databaseResultId(
   result: Pick<DatabaseQueryResult, "profile_id" | "history_id" | "executed_ms"> | null,
 ): string {
@@ -1661,13 +1764,42 @@ function knownWorkspaceIdForTerminal(sessionId: string): string | null {
   return match?.[0] ?? workspaceIdFromTerminalSessionId(sessionId);
 }
 
-function knownWorkspaceIdForSshTerminal(sessionId: string): string | null {
+export function remoteHostIdFromSshTerminalSessionId(
+  sessionId: string,
+): string | null {
+  const marker = ":ssh-";
+  const markerIndex = sessionId.indexOf(marker);
+  return markerIndex > 0 ? sessionId.slice(0, markerIndex) : null;
+}
+
+export function knownWorkspaceIdForSshTerminal(sessionId: string): string | null {
   const { views } = workspaceViewStore.getState();
-  const match = Object.entries(views).find(([, workspaceView]) =>
-    workspaceView.remote.sshSessions.some((session) => session.id === sessionId),
+  const registeredWorkspaceIds = new Set(
+    workspaceStore.getState().registry.workspaces.map((workspace) => workspace.id),
+  );
+  const sessionMatch = Object.entries(views).find(
+    ([workspaceId, workspaceView]) =>
+      registeredWorkspaceIds.has(workspaceId) &&
+      workspaceView.remote.sshSessions.some(
+        (session) => session.id === sessionId,
+      ),
+  );
+  if (sessionMatch) {
+    return sessionMatch[0];
+  }
+
+  const hostId = remoteHostIdFromSshTerminalSessionId(sessionId);
+  if (!hostId) {
+    return null;
+  }
+
+  const hostMatch = Object.entries(views).find(
+    ([workspaceId, workspaceView]) =>
+      registeredWorkspaceIds.has(workspaceId) &&
+      workspaceView.remote.hosts.some((host) => host.id === hostId),
   );
 
-  return match?.[0] ?? null;
+  return hostMatch?.[0] ?? null;
 }
 
 function knownWorkspaceIdForTaskRun(runId: string): string | null {
@@ -2110,6 +2242,7 @@ export function AppShell() {
   const databaseInspectProfileRequestRef = useRef<Record<string, number>>({});
   const databaseQueryRequestRef = useRef<Record<string, number>>({});
   const databaseExportRequestRef = useRef<Record<string, number>>({});
+  const remoteHostsLoadRef = useRef<Record<string, number>>({});
   const docsLoadRequestRef = useRef<DocsLoadRequestState>({});
   const agentSessionsLoadRef = useRef<Record<string, number>>({});
   const languageRefreshRequestRef = useRef<LanguageRefreshRequestState>({});
@@ -2431,25 +2564,17 @@ export function AppShell() {
 
       const workspaceId = knownWorkspaceIdForSshTerminal(event.session_id);
       if (workspaceId) {
-        workspaceViewStore
-          .getState()
-          .updateRemote(workspaceId, (remote) =>
-            appendSshTerminalOutput(remote, event.session_id, event.chunk),
-          );
-        return;
-      }
-
-      const fallbackWorkspaceId =
-        workspaceStore.getState().registry.active_workspace_id;
-      if (!fallbackWorkspaceId) {
-        return;
-      }
-
-      workspaceViewStore
-        .getState()
-        .updateRemote(fallbackWorkspaceId, (remote) =>
-          bufferSshTerminalOutput(remote, event.session_id, event.chunk),
+        const currentView = workspaceViewStore.getState().viewFor(workspaceId);
+        const hasSession = currentView.remote.sshSessions.some(
+          (session) => session.id === event.session_id,
         );
+
+        workspaceViewStore.getState().updateRemote(workspaceId, (remote) =>
+          hasSession
+            ? appendSshTerminalOutput(remote, event.session_id, event.chunk)
+            : bufferSshTerminalOutput(remote, event.session_id, event.chunk),
+        );
+      }
     });
     const exitUnlisten = listenSshTerminalExit((event) => {
       if (disposed) {
@@ -2458,25 +2583,17 @@ export function AppShell() {
 
       const workspaceId = knownWorkspaceIdForSshTerminal(event.session_id);
       if (workspaceId) {
-        workspaceViewStore
-          .getState()
-          .updateRemote(workspaceId, (remote) =>
-            markSshTerminalExited(remote, event.session_id),
-          );
-        return;
-      }
-
-      const fallbackWorkspaceId =
-        workspaceStore.getState().registry.active_workspace_id;
-      if (!fallbackWorkspaceId) {
-        return;
-      }
-
-      workspaceViewStore
-        .getState()
-        .updateRemote(fallbackWorkspaceId, (remote) =>
-          bufferSshTerminalExit(remote, event.session_id),
+        const currentView = workspaceViewStore.getState().viewFor(workspaceId);
+        const hasSession = currentView.remote.sshSessions.some(
+          (session) => session.id === event.session_id,
         );
+
+        workspaceViewStore.getState().updateRemote(workspaceId, (remote) =>
+          hasSession
+            ? markSshTerminalExited(remote, event.session_id)
+            : bufferSshTerminalExit(remote, event.session_id),
+        );
+      }
     });
 
     return () => {
@@ -4469,51 +4586,24 @@ export function AppShell() {
     workspaceId: string,
     workspaceRoot: string,
   ) {
-    updateRemote(workspaceId, (remote) => ({
-      ...remote,
-      loading: true,
-      error: null,
-    }));
+    const requestId = (remoteHostsLoadRef.current[workspaceId] ?? 0) + 1;
+    remoteHostsLoadRef.current = {
+      ...remoteHostsLoadRef.current,
+      [workspaceId]: requestId,
+    };
 
-    try {
-      const [hosts, sessions] = await Promise.all([
-        listRemoteHosts(workspaceRoot),
-        listSshTerminalSessions(workspaceId),
-      ]);
-      const currentWorkspace =
-        workspaceStore
-          .getState()
-          .registry.workspaces.find((workspace) => workspace.id === workspaceId) ??
-        null;
-
-      if (!currentWorkspace || currentWorkspace.path !== workspaceRoot) {
-        return;
-      }
-
-      updateRemote(workspaceId, (remote) => {
-        const resetSessions = replaceRemoteHosts(
-          {
-            ...remote,
-            sshSessions: [],
-            activeSshSessionId: null,
-            loading: false,
-            error: null,
-          },
-          hosts,
-        );
-
-        return sessions.reduce(
-          (nextRemote, session) => upsertSshTerminal(nextRemote, session),
-          resetSessions,
-        );
-      });
-    } catch (error) {
-      updateRemote(workspaceId, (remote) => ({
-        ...remote,
-        loading: false,
-        error: `Load remotes failed: ${terminalErrorMessage(error)}`,
-      }));
-    }
+    await refreshRemoteHostsRequest({
+      workspaceId,
+      workspaceRoot,
+      requestId,
+      hasRegisteredWorkspace,
+      getWorkspaceRoot,
+      isLatestRemoteHostsRequest: (currentWorkspaceId, currentRequestId) =>
+        remoteHostsLoadRef.current[currentWorkspaceId] === currentRequestId,
+      updateRemote,
+      listRemoteHosts,
+      listSshTerminalSessions,
+    });
   }
 
   function refreshRemoteHosts() {
