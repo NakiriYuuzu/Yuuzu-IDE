@@ -1016,6 +1016,15 @@ impl RemoteBackend for RusshRemoteBackend {
         let (reader, writer) = channel.split();
         let (sender, mut receiver) = mpsc::unbounded_channel::<TerminalWriteCommand>();
 
+        self.terminal_writers.lock().await.insert(
+            session_id.clone(),
+            RusshTerminalWriter {
+                sender,
+                host_id: profile.id.clone(),
+                name: format!("{}@{}", profile.username, profile.host),
+            },
+        );
+
         let sink = events.clone();
         let output_session_id = session_id.clone();
         let terminal_writers = self.terminal_writers.clone();
@@ -1080,16 +1089,6 @@ impl RemoteBackend for RusshRemoteBackend {
                 }
             }
         });
-
-        let mut terminal_writers = self.terminal_writers.lock().await;
-        terminal_writers.insert(
-            session_id.clone(),
-            RusshTerminalWriter {
-                sender,
-                host_id: profile.id.clone(),
-                name: format!("{}@{}", profile.username, profile.host),
-            },
-        );
 
         Ok(RemoteTerminalHandle {
             session_id,
@@ -1471,13 +1470,10 @@ impl RemoteState {
         &self,
         session_id: &str,
     ) -> Result<RemoteTerminalSessionInfo, String> {
-        let backend_info = self.backend.close_terminal(session_id).await?;
-        let mut sessions = self
+        let mut session = self
             .terminal_sessions
             .lock()
-            .map_err(|err| err.to_string())?;
-
-        let mut session = sessions
+            .map_err(|err| err.to_string())?
             .remove(session_id)
             .ok_or_else(|| format!("terminal session not found: {session_id}"))?;
         self.exited_terminal_sessions
@@ -1485,6 +1481,11 @@ impl RemoteState {
             .map_err(|err| err.to_string())?
             .remove(session_id);
 
+        if !session.running {
+            return Ok(session);
+        }
+
+        let backend_info = self.backend.close_terminal(session_id).await?;
         session.name = if backend_info.name.is_empty() {
             session.name
         } else {
@@ -2027,6 +2028,7 @@ mod runtime_tests {
     struct ExitCapturingBackend {
         events: Mutex<Option<Arc<dyn RemoteTerminalEventSink>>>,
         written: Mutex<Vec<(String, String)>>,
+        close_missing: bool,
     }
 
     #[async_trait::async_trait]
@@ -2069,6 +2071,23 @@ mod runtime_tests {
                 .map_err(|err| err.to_string())?
                 .push((session_id.to_string(), data.to_string()));
             Ok(())
+        }
+
+        async fn close_terminal(
+            &self,
+            session_id: &str,
+        ) -> Result<RemoteTerminalSessionInfo, String> {
+            if self.close_missing {
+                return Err(format!("terminal session not found: {session_id}"));
+            }
+
+            Ok(RemoteTerminalSessionInfo {
+                id: session_id.to_string(),
+                host_id: "host-1".to_string(),
+                workspace_id: String::new(),
+                name: "deploy@edge.example.com".to_string(),
+                running: false,
+            })
         }
     }
 
@@ -2304,6 +2323,53 @@ mod runtime_tests {
         assert!(
             backend.written.lock().expect("written").is_empty(),
             "stopped sessions should not write through to the backend"
+        );
+    }
+
+    #[tokio::test]
+    async fn close_ssh_terminal_removes_stopped_session_without_backend_writer() {
+        let backend = Arc::new(ExitCapturingBackend {
+            close_missing: true,
+            ..ExitCapturingBackend::default()
+        });
+        let state = RemoteState::new_with_backend(backend.clone());
+        let secrets = super::tests::MemoryRemoteSecretStore::default();
+        let session = state
+            .spawn_ssh_terminal(
+                "workspace",
+                &profile(),
+                &secrets,
+                Arc::new(NoopRemoteTerminalEventSink),
+                24,
+                80,
+            )
+            .await
+            .expect("spawn");
+        let events = backend
+            .events
+            .lock()
+            .expect("events")
+            .as_ref()
+            .expect("captured event sink")
+            .clone();
+        events.emit_exit(RemoteTerminalExitEvent {
+            session_id: session.id.clone(),
+            exit_code: Some(0),
+        });
+
+        let closed = state
+            .close_ssh_terminal(&session.id)
+            .await
+            .expect("close stopped session");
+
+        assert_eq!(closed.id, session.id);
+        assert!(!closed.running);
+        assert!(
+            state
+                .list_ssh_terminal_sessions("workspace")
+                .expect("sessions")
+                .is_empty(),
+            "closed stopped session should be removed from state"
         );
     }
 
