@@ -57,6 +57,7 @@ import {
   remoteTransferFileName,
   activeDebugLineForFile,
   activeDebugSessionForState,
+  applyDebugRefreshSnapshot,
   handleDebugConsoleEvent,
   handleDebugSessionEvent,
   runDebugCommandFromPalette,
@@ -1738,6 +1739,31 @@ describe("AppShell AppShell helpers", () => {
     const debug = workspaceViewStore.getState().viewFor(workspaceId).debug;
     expect(debug.sessions.map((item) => item.id)).toContain("session-first-snapshot");
     expect(debug.activeSessionId).toBeNull();
+  });
+
+  test("AppShell debug refresh preserves listener-active session missing from stale snapshot", () => {
+    const workspaceId = "debug-refresh-listener-race";
+    const workspaceRoot = "/repo-debug-refresh-listener-race";
+    const config = debugLaunchConfig({ workspace_root: workspaceRoot });
+    const listenerSession = debugSession({
+      id: "session-listener-active",
+      workspace_id: workspaceId,
+      workspace_root: workspaceRoot,
+      sequence: 7,
+    });
+    const state = {
+      ...replaceDebugLaunchConfigs(createDebugState(), [config]),
+      sessions: [listenerSession],
+      activeSessionId: listenerSession.id,
+      sessionSequenceById: { [listenerSession.id]: listenerSession.sequence },
+    };
+
+    const refreshed = applyDebugRefreshSnapshot(state, [config], []);
+
+    expect(refreshed.sessions.map((session) => session.id)).toContain(
+      listenerSession.id,
+    );
+    expect(refreshed.activeSessionId).toBe(listenerSession.id);
   });
 
   test("AppShell debug rail opens the Debug panel", async () => {

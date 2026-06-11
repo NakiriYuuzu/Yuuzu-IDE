@@ -1974,7 +1974,7 @@ export function applyDebugRefreshSnapshot(
   );
   const activeSessionId =
     previousActiveSessionId &&
-    sessions.some((session) => session.id === previousActiveSessionId)
+    refreshed.sessions.some((session) => session.id === previousActiveSessionId)
       ? previousActiveSessionId
       : null;
 
