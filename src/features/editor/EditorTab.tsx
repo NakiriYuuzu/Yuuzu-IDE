@@ -25,7 +25,17 @@ type EditorTabProps = {
   onCompletion: (line: number, character: number) => Promise<unknown>;
   onCodeActions: (line: number, character: number) => Promise<unknown>;
   onRename: (line: number, character: number, newName: string) => Promise<unknown>;
+  debugBreakpoints?: DebugEditorBreakpoint[];
+  activeDebugLine?: number | null;
+  onToggleBreakpoint?: (line: number) => void;
 };
+
+type DebugEditorBreakpoint = {
+  line: number;
+  verified: boolean;
+};
+
+const EMPTY_DEBUG_BREAKPOINTS: DebugEditorBreakpoint[] = [];
 
 type EditorIdentityInput = Pick<
   EditorTabProps,
@@ -386,6 +396,87 @@ export function normalizeLspCodeActionList<TUri>(
   return { actions };
 }
 
+export function debugBreakpointDecorations(
+  breakpoints: DebugEditorBreakpoint[],
+): Monaco.editor.IModelDeltaDecoration[] {
+  return breakpoints
+    .filter((breakpoint) => Number.isFinite(breakpoint.line) && breakpoint.line > 0)
+    .map((breakpoint) => ({
+      range: {
+        startLineNumber: breakpoint.line,
+        startColumn: 1,
+        endLineNumber: breakpoint.line,
+        endColumn: 1,
+      },
+      options: {
+        glyphMarginClassName: `debug-breakpoint ${
+          breakpoint.verified ? "verified" : "pending"
+        }`,
+      },
+    }));
+}
+
+export function activeDebugLineDecorations(
+  activeDebugLine: number | null | undefined,
+): Monaco.editor.IModelDeltaDecoration[] {
+  if (!activeDebugLine || activeDebugLine <= 0) {
+    return [];
+  }
+
+  return [
+    {
+      range: {
+        startLineNumber: activeDebugLine,
+        startColumn: 1,
+        endLineNumber: activeDebugLine,
+        endColumn: 1,
+      },
+      options: {
+        isWholeLine: true,
+        className: "debug-active-line",
+      },
+    },
+  ];
+}
+
+function debugDecorations(
+  debugBreakpoints: DebugEditorBreakpoint[],
+  activeDebugLine: number | null | undefined,
+): Monaco.editor.IModelDeltaDecoration[] {
+  return [
+    ...debugBreakpointDecorations(debugBreakpoints),
+    ...activeDebugLineDecorations(activeDebugLine),
+  ];
+}
+
+function shouldEnableDebugGlyphMargin(
+  debugBreakpoints: DebugEditorBreakpoint[] | undefined,
+  onToggleBreakpoint: ((line: number) => void) | undefined,
+): boolean {
+  return Boolean(onToggleBreakpoint || (debugBreakpoints?.length ?? 0) > 0);
+}
+
+function isGlyphMarginTarget(
+  monaco: typeof import("monaco-editor"),
+  target: Monaco.editor.IMouseTarget,
+): boolean {
+  const mouseTargetType = monaco.editor.MouseTargetType;
+  return target.type === (mouseTargetType?.GUTTER_GLYPH_MARGIN ?? 2);
+}
+
+function lineNumberFromMouseTarget(
+  target: Monaco.editor.IMouseTarget,
+): number | null {
+  const targetRecord = target as {
+    position?: { lineNumber?: unknown };
+    range?: { startLineNumber?: unknown };
+  };
+  const lineNumber =
+    targetRecord.position?.lineNumber ?? targetRecord.range?.startLineNumber;
+
+  return typeof lineNumber === "number" && lineNumber > 0 ? lineNumber : null;
+}
+
 export function EditorTab({
   workspaceId,
   filePath,
@@ -405,13 +496,20 @@ export function EditorTab({
   onCompletion,
   onCodeActions,
   onRename,
+  debugBreakpoints = EMPTY_DEBUG_BREAKPOINTS,
+  activeDebugLine = null,
+  onToggleBreakpoint,
 }: EditorTabProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const findInputRef = useRef<HTMLInputElement | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
+  const debugDecorationsRef =
+    useRef<Monaco.editor.IEditorDecorationsCollection | null>(null);
   const providerDisposablesRef = useRef<Monaco.IDisposable[]>([]);
   const diagnosticsRef = useRef(diagnostics);
+  const debugBreakpointsRef = useRef(debugBreakpoints);
+  const activeDebugLineRef = useRef(activeDebugLine);
   const previousFindFocusRef = useRef({
     findOpen: false,
     findFocusRequest,
@@ -426,6 +524,7 @@ export function EditorTab({
   const onCompletionRef = useRef(onCompletion);
   const onCodeActionsRef = useRef(onCodeActions);
   const onRenameRef = useRef(onRename);
+  const onToggleBreakpointRef = useRef(onToggleBreakpoint);
   const editorIdentity = createEditorIdentity({
     workspaceId,
     filePath,
@@ -444,6 +543,7 @@ export function EditorTab({
     onCompletionRef.current = onCompletion;
     onCodeActionsRef.current = onCodeActions;
     onRenameRef.current = onRename;
+    onToggleBreakpointRef.current = onToggleBreakpoint;
   }, [
     findQuery,
     onFindQueryChange,
@@ -455,7 +555,26 @@ export function EditorTab({
     onCompletion,
     onCodeActions,
     onRename,
+    onToggleBreakpoint,
   ]);
+
+  useEffect(() => {
+    debugBreakpointsRef.current = debugBreakpoints;
+    activeDebugLineRef.current = activeDebugLine;
+    const editor = editorRef.current;
+    if (!editor) {
+      return;
+    }
+    if (typeof editor.updateOptions === "function") {
+      editor.updateOptions({
+        glyphMargin: shouldEnableDebugGlyphMargin(
+          debugBreakpoints,
+          onToggleBreakpointRef.current,
+        ),
+      });
+    }
+    setDebugDecorations(editor);
+  }, [activeDebugLine, debugBreakpoints, editorIdentity, onToggleBreakpoint]);
 
   useEffect(() => {
     diagnosticsRef.current = diagnostics;
@@ -487,6 +606,23 @@ export function EditorTab({
     monacoRef.current.editor.setModelMarkers(model, "yuuzu-lsp", markers);
   }
 
+  function setDebugDecorations(
+    editor: Monaco.editor.IStandaloneCodeEditor | null,
+  ): void {
+    if (!editor || typeof editor.createDecorationsCollection !== "function") {
+      return;
+    }
+
+    const decorations = debugDecorations(
+      debugBreakpointsRef.current,
+      activeDebugLineRef.current,
+    );
+    const collection =
+      debugDecorationsRef.current ?? editor.createDecorationsCollection();
+    collection.set(decorations);
+    debugDecorationsRef.current = collection;
+  }
+
   function revealFirstFindMatch(query: string) {
     const editor = editorRef.current;
     const model = editor?.getModel();
@@ -504,7 +640,8 @@ export function EditorTab({
 
   useEffect(() => {
     let disposed = false;
-    let disposable: { dispose: () => void } | undefined;
+    let contentDisposable: { dispose: () => void } | undefined;
+    let mouseDisposable: { dispose: () => void } | undefined;
     const initialContent = content;
 
     void loadMonaco().then((monaco) => {
@@ -517,6 +654,10 @@ export function EditorTab({
         language,
         readOnly,
         automaticLayout: true,
+        glyphMargin: shouldEnableDebugGlyphMargin(
+          debugBreakpointsRef.current,
+          onToggleBreakpointRef.current,
+        ),
         minimap: { enabled: false },
         fontSize: 13,
       });
@@ -644,21 +785,36 @@ export function EditorTab({
       ];
 
       setEditorMarkers(editorRef.current);
+      setDebugDecorations(editorRef.current);
 
       const model = editorRef.current.getModel();
-      disposable = model?.onDidChangeContent(() => {
+      contentDisposable = model?.onDidChangeContent(() => {
         const next = editorRef.current?.getValue() ?? "";
         onContentChangeRef.current(next);
         onDirtyChangeRef.current(next !== initialContent);
       });
+      if (typeof editorRef.current.onMouseDown === "function") {
+        mouseDisposable = editorRef.current.onMouseDown((event) => {
+          if (!isGlyphMarginTarget(monaco, event.target)) {
+            return;
+          }
+          const lineNumber = lineNumberFromMouseTarget(event.target);
+          if (lineNumber) {
+            onToggleBreakpointRef.current?.(lineNumber);
+          }
+        });
+      }
       revealFirstFindMatch(findQueryRef.current);
     });
 
     return () => {
       disposed = true;
-      disposable?.dispose();
+      contentDisposable?.dispose();
+      mouseDisposable?.dispose();
       providerDisposablesRef.current.forEach((disposable) => disposable.dispose());
       providerDisposablesRef.current = [];
+      debugDecorationsRef.current?.clear();
+      debugDecorationsRef.current = null;
       editorRef.current?.dispose();
       editorRef.current = null;
       monacoRef.current = null;

@@ -2148,6 +2148,193 @@ button {
   box-shadow: 0 0 0 2px var(--yuzu-wash);
 }
 
+.debug-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+}
+
+.debug-panel-body {
+  padding: 4px 0 10px;
+}
+
+.debug-mode-tabs {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.debug-mode-tabs button {
+  height: 26px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--txt-dim);
+  background: var(--editor);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.debug-mode-tabs button:hover {
+  color: var(--txt);
+  background: var(--hover);
+}
+
+.debug-mode-tabs button.active {
+  color: var(--yuzu);
+  border-color: var(--yuzu-edge);
+  background: var(--yuzu-wash);
+}
+
+.debug-section {
+  min-width: 0;
+}
+
+.debug-section .section-label .meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--txt-faint);
+}
+
+.debug-section-body {
+  min-width: 0;
+}
+
+.debug-row {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+button.debug-row {
+  cursor: pointer;
+}
+
+.debug-row .badge2 {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.debug-value {
+  flex: 0 0 auto;
+  max-width: 96px;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--txt-dim);
+  font-size: 11px;
+}
+
+.debug-row-action {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  margin-left: 0;
+}
+
+.debug-row-action svg {
+  width: 13px;
+  height: 13px;
+}
+
+.debug-inline-form {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 3px 8px;
+}
+
+.debug-inline-form .input2 {
+  height: 26px;
+  font-size: 11.5px;
+}
+
+.debug-inline-form .iconbtn {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+}
+
+.debug-breakpoint-group {
+  min-width: 0;
+}
+
+.debug-source-row {
+  color: var(--txt-dim);
+}
+
+.debug-child-row {
+  padding-left: 22px;
+}
+
+.debug-console-preview,
+.terminal-shell {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.debug-console-preview {
+  max-height: 92px;
+  overflow: auto;
+  padding: 7px 10px;
+  color: var(--txt-dim);
+  background: var(--editor);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.debug-console-surface {
+  min-width: 0;
+}
+
+.terminal-shell {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  color: var(--txt-dim);
+  background: var(--editor);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.terminal-output {
+  tab-size: 2;
+}
+
+.debug-breakpoint {
+  width: 10px;
+  height: 10px;
+  margin-left: 4px;
+  border-radius: 50%;
+  background: var(--yuzu);
+}
+
+.debug-breakpoint.verified {
+  background: var(--yuzu);
+  border: 1px solid var(--yuzu);
+}
+
+.debug-breakpoint.pending {
+  background: transparent;
+  border: 1px solid var(--yuzu);
+}
+
+.debug-active-line {
+  background: color-mix(in srgb, var(--yuzu) 9%, transparent);
+}
+
 .terminal-surface {
   flex: 1;
   min-height: 0;

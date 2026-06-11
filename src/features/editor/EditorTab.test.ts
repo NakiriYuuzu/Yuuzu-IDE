@@ -12,7 +12,9 @@ mock.module("./load-monaco", () => ({
 
 const {
   EditorTab,
+  activeDebugLineDecorations,
   createEditorIdentity,
+  debugBreakpointDecorations,
   normalizeLspCodeActionList,
   normalizeLspCompletionList,
   normalizeLspLocations,
@@ -50,7 +52,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function fakeMonaco(markerCalls: unknown[][]) {
+function fakeMonaco(markerCalls: unknown[][], createCalls: unknown[] = []) {
   const model = {
     findMatches: () => [],
     getWordUntilPosition: () => ({ startColumn: 1, endColumn: 1 }),
@@ -67,7 +69,10 @@ function fakeMonaco(markerCalls: unknown[][]) {
 
   return {
     editor: {
-      create: () => editor,
+      create: (_host: unknown, options: unknown) => {
+        createCalls.push(options);
+        return editor;
+      },
       setModelMarkers: (_model: unknown, _owner: string, markers: unknown[]) => {
         markerCalls.push(markers);
       },
@@ -203,6 +208,38 @@ describe("shouldFocusFindInput", () => {
     expect(shouldFocusFindInput(true, 2, true, 1)).toBe(true);
     expect(shouldFocusFindInput(true, 2, true, 2)).toBe(false);
     expect(shouldFocusFindInput(true, 1, false, 1)).toBe(true);
+  });
+});
+
+describe("debug breakpoint helpers", () => {
+  test("maps breakpoint lines to Monaco glyph decorations", () => {
+    const decorations = debugBreakpointDecorations([
+      { line: 7, verified: true },
+      { line: 12, verified: false },
+    ]);
+
+    expect(decorations.map((item) => item.options.glyphMarginClassName)).toEqual([
+      "debug-breakpoint verified",
+      "debug-breakpoint pending",
+    ]);
+  });
+
+  test("maps active debug line to a Monaco line decoration", () => {
+    expect(activeDebugLineDecorations(8)).toEqual([
+      {
+        range: {
+          startLineNumber: 8,
+          startColumn: 1,
+          endLineNumber: 8,
+          endColumn: 1,
+        },
+        options: {
+          isWholeLine: true,
+          className: "debug-active-line",
+        },
+      },
+    ]);
+    expect(activeDebugLineDecorations(null)).toEqual([]);
   });
 });
 
@@ -394,6 +431,39 @@ describe("EditorTab Monaco marker lifecycle", () => {
     expect(markerCalls[markerCalls.length - 1]?.[0]).toEqual(
       expect.objectContaining({ message: "new diagnostic" }),
     );
+    root.unmount();
+    container.remove();
+    loadMonacoMock.mockReset();
+  });
+
+  test("enables glyph margin when debug breakpoint affordances are provided", async () => {
+    installDom();
+    const { createRoot } = await import("react-dom/client");
+    const { flushSync } = await import("react-dom");
+    const load = deferred<unknown>();
+    const markerCalls: unknown[][] = [];
+    const createCalls: unknown[] = [];
+    loadMonacoMock.mockReturnValueOnce(load.promise);
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    flushSync(() => {
+      root.render(
+        React.createElement(EditorTab, {
+          ...editorProps([]),
+          debugBreakpoints: [{ line: 7, verified: true }],
+          activeDebugLine: 7,
+          onToggleBreakpoint: () => {},
+        }),
+      );
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    load.resolve(fakeMonaco(markerCalls, createCalls));
+
+    await waitUntil(() => expect(createCalls.length).toBe(1));
+    expect(createCalls[0]).toEqual(expect.objectContaining({ glyphMargin: true }));
     root.unmount();
     container.remove();
     loadMonacoMock.mockReset();
