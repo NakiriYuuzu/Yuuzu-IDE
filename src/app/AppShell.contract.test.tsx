@@ -25,6 +25,8 @@ import {
   type DatabaseSchema,
   type DatabaseTable,
 } from "../features/database/database-model";
+import { SshTerminalSurface } from "../features/remote/SshTerminalSurface";
+import { createRemoteState } from "../features/remote/remote-model";
 import {
   collectAgentAvailableContext,
   activeLoadedFileForWorkspace,
@@ -53,7 +55,7 @@ import { workspaceViewStore } from "./workspace-view-state";
 
 ensureTestDom();
 
-const { cleanup, fireEvent, render } = await import("@testing-library/react");
+const { act, cleanup, fireEvent, render } = await import("@testing-library/react");
 
 function makeSession(id: string, path = "src/app/AppShell.tsx"): AgentSession {
   return {
@@ -160,6 +162,66 @@ afterEach(() => {
 });
 
 describe("AppShell AppShell helpers", () => {
+  test("SshTerminalSurface uses contract props and stopped session copy", async () => {
+    const onActivate = mock<(sessionId: string) => void>(() => {});
+    const onInput = mock<(sessionId: string, data: string) => void>(() => {});
+    const onNewTerminal = mock(() => {});
+    const onClose = mock<(sessionId: string) => void>(() => {});
+    const state = {
+      ...createRemoteState(),
+      sshSessions: [
+        {
+          id: "ssh-1",
+          host_id: "edge",
+          workspace_id: "workspace-a",
+          name: "edge",
+          running: true,
+        },
+        {
+          id: "ssh-2",
+          host_id: "edge",
+          workspace_id: "workspace-a",
+          name: "worker",
+          running: false,
+        },
+      ],
+      activeSshSessionId: "ssh-2",
+    };
+
+    let renderResult!: ReturnType<typeof render>;
+    await act(async () => {
+      renderResult = render(
+        <SshTerminalSurface
+          state={state}
+          output="boot"
+          onActivate={onActivate}
+          onInput={onInput}
+          onNewTerminal={onNewTerminal}
+          onClose={onClose}
+        />,
+      );
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const activeTab = renderResult.getByRole("tab", {
+      name: "worker stopped",
+    });
+    expect(activeTab.getAttribute("aria-selected")).toBe("true");
+
+    fireEvent.click(renderResult.getByRole("tab", { name: "edge" }));
+    expect(onActivate).toHaveBeenCalledWith("ssh-1");
+
+    fireEvent.click(renderResult.getByRole("button", { name: "New SSH terminal" }));
+    expect(onNewTerminal).toHaveBeenCalled();
+
+    fireEvent.click(
+      renderResult.getByRole("button", { name: "Close SSH terminal" }),
+    );
+    expect(onClose).toHaveBeenCalledWith("ssh-2");
+  });
+
   test("PanelBody renders BrowserPanel for browser activity", () => {
     const onBrowserOpenTarget = mock<(url: string) => void>(() => {});
     const state = {

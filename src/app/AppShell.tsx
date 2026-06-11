@@ -6494,17 +6494,16 @@ export function AppShell() {
               ) : surface === "ssh-terminal" ? (
                 <SshTerminalSurface
                   state={view.remote}
-                  activeSession={activeSshSession}
-                  activeOutput={activeSshOutput}
-                  onNewSession={() => void openSshForHost()}
-                  onSelectSession={(sessionId) =>
+                  output={activeSshOutput}
+                  onActivate={(sessionId) =>
                     updateRemote(activeWorkspaceId, (remote) => ({
                       ...remote,
                       activeSshSessionId: sessionId,
                     }))
                   }
-                  onCloseSession={(sessionId) => void closeSshById(sessionId)}
                   onInput={writeSshInput}
+                  onNewTerminal={() => void openSshForHost()}
+                  onClose={(sessionId) => void closeSshById(sessionId)}
                 />
               ) : surface === "sftp-browser" ? (
                 <div className="terminal-surface">
