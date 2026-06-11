@@ -1889,6 +1889,17 @@ function terminalErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export function remoteTransferFileName(
+  path: string,
+  fallback = "upload.bin",
+): string {
+  if (!path || /[\\/]$/.test(path)) {
+    return fallback;
+  }
+
+  return path.split(/[\\/]/).pop() || fallback;
+}
+
 function isMissingTerminalSessionError(error: unknown): boolean {
   return terminalErrorMessage(error).includes("missing terminal session");
 }
@@ -4960,7 +4971,7 @@ export function AppShell() {
 
     const localRelativePath = window.prompt(
       "Download to workspace path",
-      `downloads/${remotePath.split("/").pop() ?? "remote-file"}`,
+      `downloads/${remoteTransferFileName(remotePath, "remote-file")}`,
     );
     if (!localRelativePath) {
       return;
@@ -5001,7 +5012,7 @@ export function AppShell() {
       return;
     }
 
-    const fileName = localRelativePath.split("/").pop() ?? "upload.bin";
+    const fileName = remoteTransferFileName(localRelativePath);
     try {
       const transfer = await uploadSftpFile({
         workspaceRoot,

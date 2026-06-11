@@ -53,6 +53,7 @@ import {
   handleSshTerminalExitEvent,
   handleSshTerminalOutputEvent,
   knownWorkspaceIdForSshTerminal,
+  remoteTransferFileName,
   type BrowserCaptureRequestState,
   type BrowserValidationRequestState,
   type AgentAvailableContextSource,
@@ -196,6 +197,14 @@ afterEach(() => {
 });
 
 describe("AppShell AppShell helpers", () => {
+  test("remoteTransferFileName handles platform separators", () => {
+    expect(remoteTransferFileName("dist\\app.js")).toBe("app.js");
+    expect(remoteTransferFileName("dist/app.js")).toBe("app.js");
+    expect(remoteTransferFileName("")).toBe("upload.bin");
+    expect(remoteTransferFileName("dist/")).toBe("upload.bin");
+    expect(remoteTransferFileName("dist\\")).toBe("upload.bin");
+  });
+
   test("SshTerminalSurface uses contract props and stopped session copy", async () => {
     const onActivate = mock<(sessionId: string) => void>(() => {});
     const onInput = mock<(sessionId: string, data: string) => void>(() => {});
