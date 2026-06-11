@@ -597,6 +597,7 @@ impl AppState {
             .delete_profile(profile_id, &self.remote_secrets)
     }
 
+    #[allow(dead_code)] // Task 2 will consume this active-workspace guard for remote commands.
     pub fn remote_host_in_active_workspace(
         &self,
         profile_id: &str,
@@ -2110,6 +2111,77 @@ mod tests {
         assert!(result
             .expect_err("reject")
             .contains("remote host profile does not belong to workspace"));
+    }
+
+    #[test]
+    fn remote_host_in_active_workspace_checks_active_workspace() {
+        let config = tempfile::tempdir().expect("config");
+        let workspace_a = tempfile::tempdir().expect("workspace-a");
+        let workspace_b = tempfile::tempdir().expect("workspace-b");
+        let state = AppState::new(config.path()).expect("state");
+        state
+            .open_workspace_path(workspace_a.path().to_path_buf())
+            .expect("open workspace a");
+        state
+            .open_workspace_path(workspace_b.path().to_path_buf())
+            .expect("open workspace b");
+
+        let workspace_a_root = workspace_a
+            .path()
+            .canonicalize()
+            .expect("canonical workspace a")
+            .to_string_lossy()
+            .to_string();
+        let profile = state
+            .remote_profiles
+            .save_profile(
+                crate::remote::RemoteHostProfileInput {
+                    id: Some("host-a".to_string()),
+                    workspace_root: workspace_a_root,
+                    name: "edge".to_string(),
+                    host: "edge.example.com".to_string(),
+                    port: 22,
+                    username: "deploy".to_string(),
+                    auth_kind: crate::remote::RemoteAuthKind::Agent,
+                    password: None,
+                    key_path: None,
+                    key_passphrase: None,
+                    default_remote_path: "/var/www".to_string(),
+                    keepalive_seconds: 30,
+                    connect_timeout_seconds: 10,
+                },
+                &state.remote_secrets,
+                || Ok(crate::remote::remote_now_ms()),
+                crate::remote::new_remote_host_id,
+            )
+            .expect("profile");
+
+        state
+            .remote_host_in_active_workspace(&profile.id)
+            .expect("active workspace");
+
+        let registry = state.registry_snapshot().expect("registry");
+        let workspace_b_id = registry
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.path == workspace_b.path())
+            .map(|workspace| workspace.id.clone())
+            .expect("workspace b id");
+
+        state
+            .mutate_registry(|registry| {
+                if registry.switch_workspace(&workspace_b_id) {
+                    Ok(())
+                } else {
+                    Err(format!("workspace not found: {workspace_b_id}"))
+                }
+            })
+            .expect("switch workspace");
+
+        let err = state
+            .remote_host_in_active_workspace(&profile.id)
+            .expect_err("outside active workspace");
+        assert!(err.contains("does not belong to active workspace"));
     }
 
     #[test]

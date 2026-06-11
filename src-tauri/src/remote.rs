@@ -240,6 +240,19 @@ impl RemoteHostProfileStore {
                 secrets,
                 save_error,
             )?;
+        } else {
+            let current_secret_ids = remote_secret_ids(&profile);
+            let stale_secret_ids = previous_secret_ids
+                .into_iter()
+                .filter(|secret_id| !current_secret_ids.contains(secret_id))
+                .collect::<Vec<_>>();
+            for stale_secret_id in stale_secret_ids {
+                if let Err(secret_error) = secrets.delete_secret(&stale_secret_id) {
+                    return Err(format!(
+                        "failed to remove obsolete remote secret '{stale_secret_id}': {secret_error}"
+                    ));
+                }
+            }
         }
 
         Ok(profile)
@@ -425,13 +438,32 @@ fn restore_remote_secrets(
     secrets: &dyn RemoteSecretStore,
     save_error: String,
 ) -> Result<(), String> {
+    let mut restore_error: Option<(String, String)> = None;
     for secret_id in changed_secret_ids {
-        if let Some(previous_secret) = previous_secret_values.get(secret_id) {
-            secrets.set_secret(secret_id, previous_secret)?;
+        let result = if let Some(previous_secret) = previous_secret_values.get(secret_id) {
+            secrets.set_secret(secret_id, previous_secret)
         } else {
-            let _ = secrets.delete_secret(secret_id);
+            secrets.delete_secret(secret_id)
+        };
+
+        if let Err(secret_error) = result {
+            restore_error.get_or_insert_with(|| {
+                (
+                    secret_id.to_string(),
+                    if previous_secret_values.contains_key(secret_id) {
+                        format!("restore previous secret '{secret_id}': {secret_error}")
+                    } else {
+                        format!("remove newly created secret '{secret_id}': {secret_error}")
+                    },
+                )
+            });
         }
     }
+
+    if let Some((_, secret_error)) = restore_error {
+        return Err(format!("{save_error}; unable to {secret_error}"));
+    }
+
     Err(save_error)
 }
 
@@ -440,6 +472,12 @@ pub struct RemoteState;
 impl RemoteState {
     pub fn new() -> Self {
         Self
+    }
+}
+
+impl Default for RemoteState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -477,6 +515,48 @@ mod tests {
                 .lock()
                 .map_err(|err| err.to_string())?
                 .remove(secret_id);
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct FailingDeleteRemoteSecretStore {
+        values: Arc<Mutex<HashMap<String, String>>>,
+        fail_delete: bool,
+    }
+
+    impl FailingDeleteRemoteSecretStore {
+        fn with_fail_delete() -> Self {
+            Self {
+                values: Arc::new(Mutex::new(HashMap::new())),
+                fail_delete: true,
+            }
+        }
+    }
+
+    impl RemoteSecretStore for FailingDeleteRemoteSecretStore {
+        fn get_secret(&self, secret_id: &str) -> Result<String, String> {
+            self.values
+                .lock()
+                .map_err(|err| err.to_string())?
+                .get(secret_id)
+                .cloned()
+                .ok_or_else(|| format!("missing secret: {secret_id}"))
+        }
+
+        fn set_secret(&self, secret_id: &str, secret: &str) -> Result<(), String> {
+            self.values
+                .lock()
+                .map_err(|err| err.to_string())?
+                .insert(secret_id.to_string(), secret.to_string());
+            Ok(())
+        }
+
+        fn delete_secret(&self, _secret_id: &str) -> Result<(), String> {
+            if self.fail_delete {
+                return Err("forced secret delete failure".to_string());
+            }
+
             Ok(())
         }
     }
@@ -558,6 +638,63 @@ mod tests {
             .get_secret("remote-host:host-1:password")
             .expect_err("secret rolled back")
             .contains("missing secret"),);
+    }
+
+    #[test]
+    fn save_host_profile_password_to_agent_removes_old_secret() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = RemoteHostProfileStore::new(temp.path().join("remote-hosts.json"));
+        let secrets = MemoryRemoteSecretStore::default();
+
+        store
+            .save_profile(
+                remote_input("/repo"),
+                &secrets,
+                || Ok(7),
+                || "generated".to_string(),
+            )
+            .expect("save profile");
+
+        let mut input = remote_input("/repo");
+        input.auth_kind = RemoteAuthKind::Agent;
+        input.password = None;
+
+        store
+            .save_profile(input, &secrets, || Ok(8), || "generated".to_string())
+            .expect("change auth");
+
+        assert!(secrets.get_secret("remote-host:host-1:password").is_err());
+    }
+
+    #[test]
+    fn save_host_profile_reports_error_when_restoring_new_secret_delete_fails() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let parent = temp.path().join("blocked-parent");
+        std::fs::write(&parent, b"no-directory").expect("blocked directory");
+        let store = RemoteHostProfileStore::new(parent.join("remote-hosts.json"));
+        let secrets = FailingDeleteRemoteSecretStore::with_fail_delete();
+
+        let err = store
+            .save_profile(
+                remote_input("/repo"),
+                &secrets,
+                || Ok(7),
+                || "host-1".to_string(),
+            )
+            .expect_err("directory path cannot be overwritten by json");
+
+        assert!(err.contains("forced secret delete failure"), "{err}");
+        assert!(
+            err.contains("File exists") || err.contains("directory"),
+            "{}",
+            err
+        );
+        assert_eq!(
+            secrets
+                .get_secret("remote-host:host-1:password")
+                .expect("kept secret"),
+            "super-secret",
+        );
     }
 
     #[test]
