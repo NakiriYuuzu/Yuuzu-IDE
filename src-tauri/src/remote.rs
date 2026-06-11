@@ -1470,22 +1470,40 @@ impl RemoteState {
         &self,
         session_id: &str,
     ) -> Result<RemoteTerminalSessionInfo, String> {
+        let session = {
+            let mut sessions = self
+                .terminal_sessions
+                .lock()
+                .map_err(|err| err.to_string())?;
+            let session = sessions
+                .get(session_id)
+                .cloned()
+                .ok_or_else(|| format!("terminal session not found: {session_id}"))?;
+            if !session.running {
+                let session = sessions
+                    .remove(session_id)
+                    .ok_or_else(|| format!("terminal session not found: {session_id}"))?;
+                drop(sessions);
+                self.exited_terminal_sessions
+                    .lock()
+                    .map_err(|err| err.to_string())?
+                    .remove(session_id);
+                return Ok(session);
+            }
+            session
+        };
+
+        let backend_info = self.backend.close_terminal(session_id).await?;
         let mut session = self
             .terminal_sessions
             .lock()
             .map_err(|err| err.to_string())?
             .remove(session_id)
-            .ok_or_else(|| format!("terminal session not found: {session_id}"))?;
+            .unwrap_or(session);
         self.exited_terminal_sessions
             .lock()
             .map_err(|err| err.to_string())?
             .remove(session_id);
-
-        if !session.running {
-            return Ok(session);
-        }
-
-        let backend_info = self.backend.close_terminal(session_id).await?;
         session.name = if backend_info.name.is_empty() {
             session.name
         } else {
@@ -2370,6 +2388,43 @@ mod runtime_tests {
                 .expect("sessions")
                 .is_empty(),
             "closed stopped session should be removed from state"
+        );
+    }
+
+    #[tokio::test]
+    async fn close_ssh_terminal_keeps_running_session_when_backend_close_fails() {
+        let backend = Arc::new(ExitCapturingBackend {
+            close_missing: true,
+            ..ExitCapturingBackend::default()
+        });
+        let state = RemoteState::new_with_backend(backend);
+        let secrets = super::tests::MemoryRemoteSecretStore::default();
+        let session = state
+            .spawn_ssh_terminal(
+                "workspace",
+                &profile(),
+                &secrets,
+                Arc::new(NoopRemoteTerminalEventSink),
+                24,
+                80,
+            )
+            .await
+            .expect("spawn");
+
+        let err = state
+            .close_ssh_terminal(&session.id)
+            .await
+            .expect_err("backend close failure");
+
+        assert!(err.contains("terminal session not found"), "{err}");
+        let sessions = state
+            .list_ssh_terminal_sessions("workspace")
+            .expect("sessions");
+        assert!(
+            sessions
+                .iter()
+                .any(|item| item.id == session.id && item.running),
+            "running session should remain in state after backend close failure"
         );
     }
 
