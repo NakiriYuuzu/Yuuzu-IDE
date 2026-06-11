@@ -544,6 +544,9 @@ context.
 
 ### Node 10: Remote SSH And SFTP
 
+**Status:** completed and passed. Final results are recorded in
+`docs/architecture/node-10-remote-results.md`.
+
 **Goal:** support operational workflows without turning the IDE into a remote
 desktop.
 
@@ -698,8 +701,8 @@ stable.
 
 ## Current Priority
 
-Node 0, Node 1, Node 2, Node 3, Node 4, Node 5, Node 6, Node 7, Node 8, and
-Node 9 are complete. The next active priority is Node 10.
+Node 0, Node 1, Node 2, Node 3, Node 4, Node 5, Node 6, Node 7, Node 8,
+Node 9, and Node 10 are complete. The next active priority is Node 11.
 
 - Node 0 measurements keep Tauri 2 as the main route; Rust-native fallback
   research remains deferred.
@@ -731,3 +734,15 @@ Node 9 are complete. The next active priority is Node 10.
   files/docs/diffs/diagnostics/terminal output, transcript evidence, approval
   gates, prompt export, and app shell integration covered by Bun/Cargo tests,
   spec/code-quality reviews, Tauri debug build, and full test-isolation checks.
+- Node 8 verification keeps browser preview, dev server launching, screenshots,
+  per-workspace browser state, and browser-to-agent context covered by
+  Bun/Cargo tests, browser feature smoke, AppShell contract tests, Tauri debug
+  build, and regression coverage for docs panel test isolation.
+- Node 9 verification keeps database profiles, keyring-backed secrets, schema
+  inspection, query execution, bounded history, CSV export, read-only production
+  profiles, and mutating SQL confirmation covered by Bun/Cargo tests and
+  database-focused smoke.
+- Node 10 verification keeps SSH profiles, SSH terminal sessions, SFTP browsing
+  and transfers, remote command execution, visible connection failures, retry,
+  workspace routing, and transfer filename normalization covered by Bun/Cargo
+  tests, focused remote smoke, Tauri debug build, and spec/code-quality reviews.

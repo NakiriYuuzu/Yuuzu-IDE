@@ -960,3 +960,71 @@ Next decision:
 
 - Move from database tools to Node 10 Remote SSH And SFTP, using database, browser,
   agent, and docs context now available in the workbench.
+
+### Node 10: Remote SSH And SFTP
+
+Status: completed and passed.
+
+Node 10 finished Tasks 1-7 and records the final results in
+`docs/architecture/node-10-remote-results.md`.
+
+Key deliverables:
+
+- Workspace-scoped SSH host profiles with keyring-backed remote secrets and
+  host-specific defaults.
+- SSH terminal sessions, remote command execution, SFTP browsing, upload, and
+  download through Rust-owned remote runtime commands.
+- Remote workbench panel integrated with the activity rail, command palette,
+  workspace view state, connection health, retry, and transfer history.
+
+Important files:
+
+- `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`,
+  `src-tauri/src/remote.rs`, `src-tauri/src/commands.rs`,
+  `src-tauri/src/lib.rs`, `src/features/remote/remote-model.ts`,
+  `src/features/remote/remote-api.ts`,
+  `src/features/remote/RemotePanel.tsx`,
+  `src/app/AppShell.tsx`, `src/app/workspace-view-state.ts`,
+  `src/app/activity-rail.ts`, `src/app/command-palette-model.ts`,
+  `src/app/AppShell.contract.test.tsx`,
+  `src/app/workspace-view-state.test.ts`.
+
+Key commit milestones:
+
+- `ab84120`, `1c3fd92`, `712a237`, `9495aa9`, `a721bf3`, `3325a41`,
+  `0b92e6f`, `2f4a75f`.
+
+Verification outcomes:
+
+- `bun test`: PASS with 296 passed, 0 failed, 823 expect calls across 36 files.
+- `bun run build`: PASS with `tsc && vite build`; Vite chunk-size warnings only.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml`:
+  PASS with 261 passed, 0 failed, 1 ignored.
+- `. "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check`:
+  PASS.
+- `. "$HOME/.cargo/env" && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings`:
+  PASS.
+- `bun run tauri build --debug`: PASS with
+  `src-tauri/target/debug/bundle/macos/Yuuzu-IDE.app` and
+  `src-tauri/target/debug/bundle/dmg/Yuuzu-IDE_0.1.0_aarch64.dmg`.
+- `bun test src/features/remote/remote-model.test.ts src/features/remote/RemotePanel.test.tsx`:
+  PASS with 13 passed, 0 failed, 33 expect calls.
+- `bun test src/app/activity-rail.test.tsx src/app/command-palette-model.test.ts src/app/workspace-view-state.test.ts src/app/AppShell.contract.test.tsx`:
+  PASS with 75 passed, 0 failed, 245 expect calls.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml remote::tests`:
+  PASS with 8 passed, 0 failed.
+- `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml remote::runtime_tests`:
+  PASS with 12 passed, 0 failed.
+
+Residual risks:
+
+- Live SSH/SFTP verification depends on user-provided hosts, credentials, and
+  network conditions.
+- Full remote workspace editing and remote container orchestration remain
+  explicit non-goals for Node 10.
+
+Next decision:
+
+- Move from remote SSH and SFTP to Node 11 Debugging, using the established
+  workspace, terminal, language, browser, database, and remote workbench
+  surfaces as integration context.
