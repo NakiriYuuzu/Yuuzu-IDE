@@ -460,6 +460,70 @@ mod tests {
     }
 
     #[test]
+    fn workspace_child_for_write_creates_parent_directories_for_inside_target() {
+        let root = tempdir().expect("tempdir");
+        let target = Path::new("downloads/releases/app.js");
+        let canonical_root = root.path().canonicalize().expect("canonical root");
+
+        let result = super::workspace_child_for_write(root.path(), target).expect("write target");
+
+        assert_eq!(result, canonical_root.join(target));
+        assert!(
+            canonical_root.join("downloads/releases").is_dir(),
+            "missing parent directories should be created"
+        );
+        assert!(
+            !result.exists(),
+            "write target helper should not create the target file"
+        );
+    }
+
+    #[test]
+    fn workspace_child_for_write_canonicalizes_workspace_root() {
+        let root = tempdir().expect("tempdir");
+        fs::create_dir(root.path().join("nested")).expect("nested");
+        let noncanonical_root = root.path().join("nested/..");
+        let canonical_root = root.path().canonicalize().expect("canonical root");
+
+        let result = super::workspace_child_for_write(&noncanonical_root, Path::new("out/app.js"))
+            .expect("write target");
+
+        assert_eq!(result, canonical_root.join("out/app.js"));
+    }
+
+    #[test]
+    fn workspace_child_for_write_rejects_parent_directory_escape() {
+        let root = tempdir().expect("tempdir");
+        let canonical_root = root.path().canonicalize().expect("canonical root");
+        let outside_name = format!("escaped-write-{}.txt", std::process::id());
+        let outside = canonical_root
+            .parent()
+            .expect("tempdir parent")
+            .join(&outside_name);
+
+        let result = super::workspace_child_for_write(
+            root.path(),
+            Path::new(&format!("nested/../../{outside_name}")),
+        );
+
+        assert!(result.unwrap_err().contains("outside workspace"));
+        assert!(
+            !outside.exists(),
+            "outside write target should not be created"
+        );
+    }
+
+    #[test]
+    fn workspace_child_for_write_rejects_existing_directory_target() {
+        let root = tempdir().expect("tempdir");
+        fs::create_dir(root.path().join("downloads")).expect("downloads dir");
+
+        let result = super::workspace_child_for_write(root.path(), Path::new("downloads"));
+
+        assert!(result.unwrap_err().contains("not a regular file"));
+    }
+
+    #[test]
     fn workspace_child_for_existing_file_rejects_missing_or_outside_file() {
         let root = tempdir().expect("tempdir");
         let outside = tempdir().expect("outside");
@@ -474,6 +538,16 @@ mod tests {
 
         assert!(!missing.is_empty());
         assert!(escaped.contains("outside workspace"));
+    }
+
+    #[test]
+    fn workspace_child_for_existing_file_rejects_existing_directory() {
+        let root = tempdir().expect("tempdir");
+        fs::create_dir(root.path().join("dist")).expect("dist dir");
+
+        let result = super::workspace_child_for_existing_file(root.path(), Path::new("dist"));
+
+        assert!(result.unwrap_err().contains("not a regular file"));
     }
 
     #[test]
