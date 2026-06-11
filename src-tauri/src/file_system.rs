@@ -148,6 +148,33 @@ pub fn workspace_child_for_existing_dir(
     Ok(path)
 }
 
+pub fn workspace_child_for_write(workspace_root: &Path, path: &Path) -> Result<PathBuf, String> {
+    let path = workspace_child(workspace_root, path, PathResolution::LexicalContained)?;
+    if path.exists() {
+        let metadata = fs::metadata(&path).map_err(|err| err.to_string())?;
+        if !metadata.is_file() {
+            return Err(format!("not a regular file: {}", path.display()));
+        }
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    Ok(path)
+}
+
+pub fn workspace_child_for_existing_file(
+    workspace_root: &Path,
+    path: &Path,
+) -> Result<PathBuf, String> {
+    let path = workspace_child(workspace_root, path, PathResolution::CanonicalExisting)?;
+    let metadata = fs::metadata(&path).map_err(|err| err.to_string())?;
+    if !metadata.is_file() {
+        return Err(format!("not a regular file: {}", path.display()));
+    }
+
+    Ok(path)
+}
+
 fn create_unique_temp_file(path: &Path) -> Result<(fs::File, PathBuf), String> {
     let parent = path
         .parent()
@@ -412,6 +439,41 @@ mod tests {
         let result = super::workspace_child_for_existing_dir(root.path(), outside.path());
 
         assert!(result.unwrap_err().contains("outside workspace"));
+    }
+
+    #[test]
+    fn workspace_child_for_write_rejects_outside_workspace() {
+        let root = tempdir().expect("tempdir");
+        let outside = root
+            .path()
+            .parent()
+            .expect("tempdir parent")
+            .join("outside-write-target.txt");
+
+        let result = super::workspace_child_for_write(root.path(), &outside);
+
+        assert!(result.unwrap_err().contains("outside workspace"));
+        assert!(
+            !outside.exists(),
+            "outside write target should not be created"
+        );
+    }
+
+    #[test]
+    fn workspace_child_for_existing_file_rejects_missing_or_outside_file() {
+        let root = tempdir().expect("tempdir");
+        let outside = tempdir().expect("outside");
+        let outside_file = outside.path().join("secret.txt");
+        fs::write(&outside_file, "secret").expect("outside file");
+
+        let missing =
+            super::workspace_child_for_existing_file(root.path(), Path::new("missing.txt"))
+                .expect_err("missing file");
+        let escaped = super::workspace_child_for_existing_file(root.path(), &outside_file)
+            .expect_err("outside file");
+
+        assert!(!missing.is_empty());
+        assert!(escaped.contains("outside workspace"));
     }
 
     #[test]

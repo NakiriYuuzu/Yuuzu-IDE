@@ -2,7 +2,7 @@
 use rusqlite::Connection;
 use std::{
     path::{Component, Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 use tauri::{AppHandle, State};
@@ -1012,6 +1012,163 @@ pub fn delete_remote_host(
     profile_id: String,
 ) -> Result<(), String> {
     state.delete_remote_host(&workspace_root, &profile_id)
+}
+
+#[tauri::command]
+pub async fn connect_remote_host(
+    app_state: State<'_, AppState>,
+    remote_state: State<'_, crate::remote::RemoteState>,
+    profile_id: String,
+) -> Result<crate::remote::RemoteConnectionSnapshot, String> {
+    let profile = app_state.remote_host_in_active_workspace(&profile_id)?;
+    remote_state
+        .connect_host(&profile, &app_state.remote_secrets)
+        .await
+}
+
+#[tauri::command]
+pub async fn disconnect_remote_host(
+    remote_state: State<'_, crate::remote::RemoteState>,
+    profile_id: String,
+) -> Result<crate::remote::RemoteConnectionSnapshot, String> {
+    remote_state.disconnect_host(&profile_id).await
+}
+
+#[tauri::command]
+pub fn list_ssh_terminal_sessions(
+    remote_state: State<'_, crate::remote::RemoteState>,
+    workspace_id: String,
+) -> Result<Vec<crate::remote::RemoteTerminalSessionInfo>, String> {
+    remote_state.list_ssh_terminal_sessions(&workspace_id)
+}
+
+#[tauri::command]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Tauri command exposes the planned flat frontend API contract"
+)]
+pub async fn spawn_ssh_terminal(
+    app: AppHandle,
+    app_state: State<'_, AppState>,
+    remote_state: State<'_, crate::remote::RemoteState>,
+    workspace_id: String,
+    workspace_root: String,
+    profile_id: String,
+    rows: u16,
+    cols: u16,
+) -> Result<crate::remote::RemoteTerminalSessionInfo, String> {
+    let workspace_root = app_state.trusted_workspace_root(&workspace_root)?;
+    app_state.ensure_workspace_id_matches_root_path(&workspace_id, &workspace_root)?;
+    let profile = app_state.remote_host_in_active_workspace(&profile_id)?;
+    if profile.workspace_root != workspace_root.to_string_lossy() {
+        return Err("remote host profile does not belong to workspace".to_string());
+    }
+
+    remote_state
+        .spawn_ssh_terminal(
+            &workspace_id,
+            &profile,
+            &app_state.remote_secrets,
+            Arc::new(crate::remote::TauriRemoteTerminalEventSink::new(app)),
+            rows,
+            cols,
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn write_ssh_terminal(
+    remote_state: State<'_, crate::remote::RemoteState>,
+    session_id: String,
+    data: String,
+) -> Result<(), String> {
+    remote_state.write_ssh_terminal(&session_id, &data).await
+}
+
+#[tauri::command]
+pub async fn close_ssh_terminal(
+    remote_state: State<'_, crate::remote::RemoteState>,
+    session_id: String,
+) -> Result<crate::remote::RemoteTerminalSessionInfo, String> {
+    remote_state.close_ssh_terminal(&session_id).await
+}
+
+#[tauri::command]
+pub async fn run_remote_command(
+    app_state: State<'_, AppState>,
+    remote_state: State<'_, crate::remote::RemoteState>,
+    profile_id: String,
+    command: String,
+) -> Result<crate::remote::RemoteCommandResult, String> {
+    let profile = app_state.remote_host_in_active_workspace(&profile_id)?;
+    remote_state
+        .run_remote_command(&profile, &app_state.remote_secrets, &command)
+        .await
+}
+
+#[tauri::command]
+pub async fn list_sftp_directory(
+    app_state: State<'_, AppState>,
+    remote_state: State<'_, crate::remote::RemoteState>,
+    profile_id: String,
+    path: String,
+) -> Result<Vec<crate::remote::RemoteFileEntry>, String> {
+    let profile = app_state.remote_host_in_active_workspace(&profile_id)?;
+    remote_state
+        .list_sftp_directory(&profile, &app_state.remote_secrets, &path)
+        .await
+}
+
+#[tauri::command]
+pub async fn download_sftp_file(
+    app_state: State<'_, AppState>,
+    remote_state: State<'_, crate::remote::RemoteState>,
+    workspace_root: String,
+    profile_id: String,
+    remote_path: String,
+    local_relative_path: String,
+) -> Result<crate::remote::RemoteTransferResult, String> {
+    let workspace_root = app_state.trusted_workspace_root(&workspace_root)?;
+    let profile = app_state.remote_host_in_active_workspace(&profile_id)?;
+    if profile.workspace_root != workspace_root.to_string_lossy() {
+        return Err("remote host profile does not belong to workspace".to_string());
+    }
+
+    remote_state
+        .download_sftp_file(
+            &profile,
+            &app_state.remote_secrets,
+            &remote_path,
+            &workspace_root,
+            &local_relative_path,
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn upload_sftp_file(
+    app_state: State<'_, AppState>,
+    remote_state: State<'_, crate::remote::RemoteState>,
+    workspace_root: String,
+    profile_id: String,
+    local_relative_path: String,
+    remote_path: String,
+) -> Result<crate::remote::RemoteTransferResult, String> {
+    let workspace_root = app_state.trusted_workspace_root(&workspace_root)?;
+    let profile = app_state.remote_host_in_active_workspace(&profile_id)?;
+    if profile.workspace_root != workspace_root.to_string_lossy() {
+        return Err("remote host profile does not belong to workspace".to_string());
+    }
+
+    remote_state
+        .upload_sftp_file(
+            &profile,
+            &app_state.remote_secrets,
+            &workspace_root,
+            &local_relative_path,
+            &remote_path,
+        )
+        .await
 }
 
 #[tauri::command]
@@ -2043,6 +2200,46 @@ mod tests {
         fn assert_flat_signature(_command: FlatDeleteRemoteHostCommand) {}
 
         assert_flat_signature(super::delete_remote_host);
+    }
+
+    #[test]
+    fn spawn_ssh_terminal_preserves_flat_command_signature() {
+        fn assert_future<F>(_: F)
+        where
+            F: std::future::Future<
+                Output = Result<crate::remote::RemoteTerminalSessionInfo, String>,
+            >,
+        {
+        }
+
+        #[allow(dead_code)]
+        #[expect(
+            clippy::too_many_arguments,
+            reason = "signature probe intentionally mirrors the flat Tauri command contract"
+        )]
+        fn assert_flat_signature(
+            app: AppHandle,
+            app_state: State<'_, AppState>,
+            remote_state: State<'_, crate::remote::RemoteState>,
+            workspace_id: String,
+            workspace_root: String,
+            profile_id: String,
+            rows: u16,
+            cols: u16,
+        ) {
+            assert_future(super::spawn_ssh_terminal(
+                app,
+                app_state,
+                remote_state,
+                workspace_id,
+                workspace_root,
+                profile_id,
+                rows,
+                cols,
+            ));
+        }
+
+        let _ = assert_flat_signature;
     }
 
     #[test]
