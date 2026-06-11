@@ -988,9 +988,11 @@ git commit -m "feat: add remote host profiles"
 **Files:**
 - Modify: `src-tauri/src/remote.rs`
 - Modify: `src-tauri/src/commands.rs`
+- Modify: `src-tauri/src/file_system.rs`
 - Modify: `src-tauri/src/lib.rs`
 - Test: `src-tauri/src/remote.rs`
 - Test: `src-tauri/src/commands.rs`
+- Test: `src-tauri/src/file_system.rs`
 
 - [ ] **Step 1: Write failing runtime tests against a mock backend**
 
@@ -1199,6 +1201,8 @@ Expected: FAIL with unresolved `RemoteBackend`, `RemoteState::new_with_backend`,
 Add these runtime types to `src-tauri/src/remote.rs`:
 
 ```rust
+use tauri::Emitter;
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub enum RemoteConnectionStatus {
     Disconnected,
@@ -1266,6 +1270,52 @@ pub struct RemoteTransferResult {
     pub bytes: u64,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct RemoteTerminalOutputEvent {
+    pub session_id: String,
+    pub chunk: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RemoteTerminalExitEvent {
+    pub session_id: String,
+    pub exit_code: Option<u32>,
+}
+
+pub trait RemoteTerminalEventSink: Send + Sync {
+    fn emit_output(&self, event: RemoteTerminalOutputEvent);
+    fn emit_exit(&self, event: RemoteTerminalExitEvent);
+}
+
+#[derive(Clone, Default)]
+pub struct NoopRemoteTerminalEventSink;
+
+impl RemoteTerminalEventSink for NoopRemoteTerminalEventSink {
+    fn emit_output(&self, _event: RemoteTerminalOutputEvent) {}
+    fn emit_exit(&self, _event: RemoteTerminalExitEvent) {}
+}
+
+#[derive(Clone)]
+pub struct TauriRemoteTerminalEventSink {
+    app: tauri::AppHandle,
+}
+
+impl TauriRemoteTerminalEventSink {
+    pub fn new(app: tauri::AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+impl RemoteTerminalEventSink for TauriRemoteTerminalEventSink {
+    fn emit_output(&self, event: RemoteTerminalOutputEvent) {
+        let _ = self.app.emit("workspace://ssh-terminal-output", event);
+    }
+
+    fn emit_exit(&self, event: RemoteTerminalExitEvent) {
+        let _ = self.app.emit("workspace://ssh-terminal-exit", event);
+    }
+}
+
 #[async_trait::async_trait]
 pub trait RemoteBackend: Send + Sync {
     async fn connect(
@@ -1280,10 +1330,11 @@ pub trait RemoteBackend: Send + Sync {
         &self,
         profile: &RemoteHostProfile,
         secrets: &dyn RemoteSecretStore,
+        events: Arc<dyn RemoteTerminalEventSink>,
         rows: u16,
         cols: u16,
     ) -> Result<RemoteTerminalHandle, String> {
-        let _ = (profile, secrets, rows, cols);
+        let _ = (profile, secrets, events, rows, cols);
         Err("SSH terminal backend is unavailable".to_string())
     }
 
@@ -1422,12 +1473,13 @@ impl RemoteState {
         workspace_id: &str,
         profile: &RemoteHostProfile,
         secrets: &dyn RemoteSecretStore,
+        events: Arc<dyn RemoteTerminalEventSink>,
         rows: u16,
         cols: u16,
     ) -> Result<RemoteTerminalSessionInfo, String> {
         let handle = self
             .backend
-            .spawn_terminal(profile, secrets, rows.max(1), cols.max(1))
+            .spawn_terminal(profile, secrets, events, rows.max(1), cols.max(1))
             .await?;
         let session = RemoteTerminalSessionInfo {
             id: handle.session_id,
@@ -1522,7 +1574,15 @@ impl RemoteState {
 }
 ```
 
-If `workspace_child_for_write` or `workspace_child_for_existing_file` is not available in `src-tauri/src/file_system.rs`, add focused helpers there with tests that canonicalize the workspace root, reject `..` escaping, create parent directories for write targets, and require existing files for upload targets.
+`workspace_child_for_write` and `workspace_child_for_existing_file` are not present after Task 1. Add focused helpers in `src-tauri/src/file_system.rs` with tests that canonicalize the workspace root, reject `..` escaping, create parent directories for write targets, and require existing regular files for upload targets.
+
+The SSH terminal runtime must emit events compatible with Task 3's frontend API:
+
+- Output event name: `workspace://ssh-terminal-output`
+- Exit event name: `workspace://ssh-terminal-exit`
+- Payload structs: `RemoteTerminalOutputEvent` and `RemoteTerminalExitEvent` above
+
+Use a small `RemoteTerminalEventSink` abstraction so `RemoteState` and mock backend tests stay independent of Tauri. The Tauri command layer should wrap `AppHandle` in a sink implementation that calls `app.emit(...)`. The russh backend must call `emit_output` for `ChannelMsg::Data` and `ChannelMsg::ExtendedData`, and `emit_exit` when the SSH channel ends or reports `ExitStatus`.
 
 - [ ] **Step 4: Implement the russh backend**
 
@@ -1587,6 +1647,7 @@ impl RemoteBackend for RusshRemoteBackend {
         &self,
         profile: &RemoteHostProfile,
         secrets: &dyn RemoteSecretStore,
+        events: Arc<dyn RemoteTerminalEventSink>,
         rows: u16,
         cols: u16,
     ) -> Result<RemoteTerminalHandle, String> {
@@ -1603,16 +1664,33 @@ impl RemoteBackend for RusshRemoteBackend {
             .lock()
             .await
             .insert(session_id.clone(), write_half);
+        let output_session_id = session_id.clone();
         tokio::spawn(async move {
-            let mut stream = VecDeque::<Vec<u8>>::new();
+            let mut exit_code = None;
             while let Some(message) = read_half.wait().await {
-                if let russh::ChannelMsg::Data { data } = message {
-                    stream.push_back(data.to_vec());
-                    if stream.len() > 256 {
-                        stream.pop_front();
+                match message {
+                    russh::ChannelMsg::Data { data } => {
+                        events.emit_output(RemoteTerminalOutputEvent {
+                            session_id: output_session_id.clone(),
+                            chunk: String::from_utf8_lossy(&data).into_owned(),
+                        });
                     }
+                    russh::ChannelMsg::ExtendedData { data, .. } => {
+                        events.emit_output(RemoteTerminalOutputEvent {
+                            session_id: output_session_id.clone(),
+                            chunk: String::from_utf8_lossy(&data).into_owned(),
+                        });
+                    }
+                    russh::ChannelMsg::ExitStatus { exit_status } => {
+                        exit_code = Some(exit_status);
+                    }
+                    _ => {}
                 }
             }
+            events.emit_exit(RemoteTerminalExitEvent {
+                session_id: output_session_id,
+                exit_code,
+            });
         });
         Ok(RemoteTerminalHandle {
             session_id,
@@ -1925,6 +2003,7 @@ pub fn list_ssh_terminal_sessions(
 
 #[tauri::command]
 pub async fn spawn_ssh_terminal(
+    app: AppHandle,
     app_state: State<'_, AppState>,
     remote_state: State<'_, crate::remote::RemoteState>,
     workspace_id: String,
@@ -1940,7 +2019,14 @@ pub async fn spawn_ssh_terminal(
         return Err("remote host profile does not belong to workspace".to_string());
     }
     remote_state
-        .spawn_ssh_terminal(&workspace_id, &profile, &app_state.remote_secrets, rows, cols)
+        .spawn_ssh_terminal(
+            &workspace_id,
+            &profile,
+            &app_state.remote_secrets,
+            Arc::new(crate::remote::TauriRemoteTerminalEventSink::new(app)),
+            rows,
+            cols,
+        )
         .await
 }
 
@@ -2047,18 +2133,20 @@ Run:
 ```bash
 . "$HOME/.cargo/env"
 cargo test --manifest-path src-tauri/Cargo.toml remote::runtime_tests
+cargo test --manifest-path src-tauri/Cargo.toml file_system::tests::workspace_child_for_write_rejects_outside_workspace
+cargo test --manifest-path src-tauri/Cargo.toml file_system::tests::workspace_child_for_existing_file_rejects_missing_or_outside_file
 cargo test --manifest-path src-tauri/Cargo.toml commands::tests::spawn_ssh_terminal_preserves_flat_command_signature
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 ```
 
-Expected: tests PASS, formatting PASS, clippy PASS. If command signature tests are missing, add the same flat-signature pattern used for `spawn_terminal_session` and rerun.
+Expected: tests PASS, formatting PASS, clippy PASS. If command signature tests are missing, add the same flat-signature pattern used for `spawn_terminal_session` and rerun. `spawn_ssh_terminal_preserves_flat_command_signature` must include the leading `AppHandle` argument because `spawn_ssh_terminal` needs the app handle to emit SSH terminal events.
 
 - [ ] **Step 7: Commit Task 2**
 
 ```bash
 git status --short
-git add src-tauri/src/remote.rs src-tauri/src/commands.rs src-tauri/src/lib.rs src-tauri/Cargo.toml src-tauri/Cargo.lock
+git add src-tauri/src/remote.rs src-tauri/src/commands.rs src-tauri/src/file_system.rs src-tauri/src/lib.rs src-tauri/Cargo.toml src-tauri/Cargo.lock
 git commit -m "feat: add remote ssh and sftp runtime"
 ```
 
