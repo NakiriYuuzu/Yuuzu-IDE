@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-pub const DEBUG_LOG_LIMIT: usize = 500;
+pub const DEBUG_LOG_LIMIT: usize = 120_000;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum DebugAdapterKind {
