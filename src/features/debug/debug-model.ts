@@ -1,15 +1,14 @@
 export const MAX_DEBUG_CONSOLE = 120_000;
 
-export type DebugAdapterKind = "Lldb" | "Python" | "Custom" | string;
-export type DebugRequestKind = "Launch" | "Attach" | string;
+export type DebugAdapterKind = "Lldb" | "Python" | "Custom";
+export type DebugRequestKind = "Launch" | "Attach";
 export type DebugSessionStatus =
   | "Starting"
   | "Running"
   | "Stopped"
   | "Exited"
   | "Disconnected"
-  | "Failed"
-  | string;
+  | "Failed";
 
 export type DebugEnvVar = {
   key: string;
@@ -172,10 +171,12 @@ export function replaceDebugLaunchConfigs(
   state: DebugViewState,
   launchConfigs: DebugLaunchConfig[],
 ): DebugViewState {
+  const nextLaunchConfigs = launchConfigs.map(cloneDebugLaunchConfig);
+
   return {
     ...state,
-    launchConfigs,
-    activeConfigId: chooseActiveConfigId(state.activeConfigId, launchConfigs),
+    launchConfigs: nextLaunchConfigs,
+    activeConfigId: chooseActiveConfigId(state.activeConfigId, nextLaunchConfigs),
     error: null,
   };
 }
@@ -304,21 +305,41 @@ export function replaceDebugSessions(
   state: DebugViewState,
   sessions: DebugSessionInfo[],
 ): DebugViewState {
-  const sessionSequenceById = sessions.reduce<Record<string, number>>(
-    (sequences, session) => ({
-      ...sequences,
-      [session.id]: Math.max(
-        sequences[session.id] ?? Number.NEGATIVE_INFINITY,
-        session.sequence,
-      ),
-    }),
-    { ...state.sessionSequenceById },
+  const sessionSequenceById = { ...state.sessionSequenceById };
+  const sessionById = new Map(
+    state.sessions.map((session) => [session.id, cloneDebugSession(session)]),
   );
+
+  for (const session of sessions) {
+    const previousSequence = sessionSequenceById[session.id];
+    const existing = sessionById.get(session.id);
+    if (
+      (previousSequence !== undefined && session.sequence < previousSequence) ||
+      (existing && session.sequence < existing.sequence)
+    ) {
+      continue;
+    }
+
+    const nextSession = cloneDebugSession(session);
+    sessionById.set(nextSession.id, nextSession);
+    sessionSequenceById[nextSession.id] = Math.max(
+      previousSequence ?? Number.NEGATIVE_INFINITY,
+      nextSession.sequence,
+    );
+  }
+
+  const nextSessions = Array.from(sessionById.values());
+  for (const session of nextSessions) {
+    sessionSequenceById[session.id] = Math.max(
+      sessionSequenceById[session.id] ?? Number.NEGATIVE_INFINITY,
+      session.sequence,
+    );
+  }
 
   return {
     ...state,
-    sessions,
-    activeSessionId: chooseActiveSessionId(state.activeSessionId, sessions),
+    sessions: nextSessions,
+    activeSessionId: chooseActiveSessionId(state.activeSessionId, nextSessions),
     sessionSequenceById,
     error: null,
   };
@@ -458,7 +479,7 @@ export function appendDebugConsole(
   if (
     sequence !== undefined &&
     previousSequence !== undefined &&
-    sequence < previousSequence
+    sequence <= previousSequence
   ) {
     return state;
   }
@@ -513,6 +534,19 @@ function chooseActiveConfigId(
   }
 
   return launchConfigs[0]?.id ?? null;
+}
+
+function cloneDebugLaunchConfig(config: DebugLaunchConfig): DebugLaunchConfig {
+  return {
+    ...config,
+    args: [...config.args],
+    env: config.env.map((item) => ({ ...item })),
+    attach: config.attach ? { ...config.attach } : null,
+  };
+}
+
+function cloneDebugSession(session: DebugSessionInfo): DebugSessionInfo {
+  return { ...session };
 }
 
 function chooseActiveSessionId(

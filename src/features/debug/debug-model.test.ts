@@ -6,9 +6,14 @@ import {
   addDebugWatch,
   appendDebugConsole,
   createDebugState,
+  type DebugLaunchConfig,
+  type DebugLaunchConfigInput,
+  type DebugSessionEvent,
+  type DebugSessionInfo,
   markDebugSessionEvent,
   removeDebugWatch,
   replaceDebugLaunchConfigs,
+  replaceDebugSessions,
   setDebugBreakpoints,
   setDebugStack,
   storeDebugVariables,
@@ -37,6 +42,38 @@ describe("debug model", () => {
     ]);
 
     expect(state.activeConfigId).toBe("cfg-python");
+  });
+
+  test("clones launch configs so caller mutations do not mutate state", () => {
+    const config: DebugLaunchConfig = {
+      id: "cfg-python",
+      workspace_root: "/repo",
+      name: "Python",
+      adapter: "Python",
+      request: "Launch",
+      program: "app.py",
+      cwd: ".",
+      args: ["--port", "3000"],
+      env: [{ key: "RUST_LOG", value: "debug" }],
+      stop_on_entry: true,
+      attach: { pid: 42, host: "127.0.0.1", port: 5678 },
+      created_ms: 1,
+      updated_ms: 1,
+    };
+    const configs = [config];
+    const state = replaceDebugLaunchConfigs(createDebugState(), configs);
+
+    configs.push({ ...config, id: "cfg-other", name: "Other" });
+    config.name = "Mutated";
+    config.args.push("--mutated");
+    config.env[0].value = "trace";
+    config.attach!.host = "changed";
+
+    expect(state.launchConfigs).toHaveLength(1);
+    expect(state.launchConfigs[0].name).toBe("Python");
+    expect(state.launchConfigs[0].args).toEqual(["--port", "3000"]);
+    expect(state.launchConfigs[0].env[0].value).toBe("debug");
+    expect(state.launchConfigs[0].attach?.host).toBe("127.0.0.1");
   });
 
   test("toggles breakpoints per source path", () => {
@@ -74,6 +111,73 @@ describe("debug model", () => {
 
     expect(state.sessions[0].status).toBe("Disconnected");
     expect(state.sessionSequenceById["session-1"]).toBe(4);
+  });
+
+  test("replaceDebugSessions preserves newer listener sessions from stale snapshots", () => {
+    const current = replaceDebugSessions(createDebugState(), [
+      debugSession({
+        id: "session-1",
+        status: "Running",
+        sequence: 5,
+      }),
+      debugSession({
+        id: "session-2",
+        status: "Stopped",
+        sequence: 3,
+      }),
+    ]);
+    const staleSnapshot = replaceDebugSessions(current, [
+      debugSession({
+        id: "session-1",
+        status: "Stopped",
+        sequence: 4,
+      }),
+      debugSession({
+        id: "session-3",
+        status: "Running",
+        sequence: 1,
+      }),
+    ]);
+
+    expect(staleSnapshot.sessions.map((session) => session.id).sort()).toEqual([
+      "session-1",
+      "session-2",
+      "session-3",
+    ]);
+    expect(
+      staleSnapshot.sessions.find((session) => session.id === "session-1"),
+    ).toMatchObject({
+      status: "Running",
+      sequence: 5,
+    });
+    expect(
+      staleSnapshot.sessions.find((session) => session.id === "session-2"),
+    ).toMatchObject({
+      status: "Stopped",
+      sequence: 3,
+    });
+    expect(staleSnapshot.sessionSequenceById["session-1"]).toBe(5);
+  });
+
+  test("replaceDebugSessions clones sessions so caller mutations do not mutate state", () => {
+    const session = debugSession({
+      id: "session-1",
+      status: "Stopped",
+      sequence: 2,
+    });
+    const sessions = [session];
+    const state = replaceDebugSessions(createDebugState(), sessions);
+
+    sessions.push(debugSession({ id: "session-2", sequence: 1 }));
+    session.status = "Running";
+    session.sequence = 3;
+
+    expect(state.sessions).toHaveLength(1);
+    expect(state.sessions[0]).toMatchObject({
+      id: "session-1",
+      status: "Stopped",
+      sequence: 2,
+    });
   });
 
   test("late events for ignored sessions do not reactivate the session", () => {
@@ -188,4 +292,75 @@ describe("debug model", () => {
     expect(stale.consoleBySessionId["session-1"]).toBe("current");
     expect(stale.consoleSequenceById["session-1"]).toBe(5);
   });
+
+  test("ignores duplicate same-sequence console events", () => {
+    const current = appendDebugConsole(createDebugState(), {
+      session_id: "session-1",
+      workspace_id: "workspace",
+      workspace_root: "/repo",
+      sequence: 5,
+      chunk: "current",
+    });
+    const duplicate = appendDebugConsole(current, {
+      session_id: "session-1",
+      workspace_id: "workspace",
+      workspace_root: "/repo",
+      sequence: 5,
+      chunk: "duplicate",
+    });
+
+    expect(duplicate.consoleBySessionId["session-1"]).toBe("current");
+    expect(duplicate.consoleSequenceById["session-1"]).toBe(5);
+  });
+
+  test("debug command input types reject unsupported backend variants", () => {
+    const input: DebugLaunchConfigInput = {
+      workspace_root: "/repo",
+      name: "Python",
+      adapter: "Python",
+      request: "Launch",
+      program: "app.py",
+      cwd: ".",
+      args: [],
+      env: [],
+      stop_on_entry: true,
+      attach: null,
+    };
+    const event: DebugSessionEvent = {
+      session_id: "session-1",
+      workspace_id: "workspace",
+      workspace_root: "/repo",
+      sequence: 1,
+      status: "Running",
+      reason: null,
+    };
+
+    // @ts-expect-error Debug adapter command input must match backend variants.
+    input.adapter = "Node";
+    // @ts-expect-error Debug request command input must match backend variants.
+    input.request = "Restart";
+    // @ts-expect-error Debug session status must match backend variants.
+    event.status = "Paused";
+
+    expect(String(input.adapter)).toBe("Node");
+    expect(String(input.request)).toBe("Restart");
+    expect(String(event.status)).toBe("Paused");
+  });
 });
+
+function debugSession(overrides: Partial<DebugSessionInfo> = {}): DebugSessionInfo {
+  return {
+    id: "session-1",
+    workspace_id: "workspace",
+    workspace_root: "/repo",
+    config_id: "cfg-python",
+    name: "Python",
+    adapter: "Python",
+    status: "Running",
+    active_thread_id: null,
+    stopped_reason: null,
+    last_error: null,
+    sequence: 1,
+    ...overrides,
+  };
+}
