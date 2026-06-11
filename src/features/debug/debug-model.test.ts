@@ -76,6 +76,34 @@ describe("debug model", () => {
     expect(state.sessionSequenceById["session-1"]).toBe(4);
   });
 
+  test("late events for ignored sessions do not reactivate the session", () => {
+    const ignored = {
+      ...createDebugState(),
+      ignoredSessionIds: { "session-1": true as const },
+    };
+    const stopped = markDebugSessionEvent(ignored, {
+      session_id: "session-1",
+      workspace_id: "workspace",
+      workspace_root: "/repo",
+      sequence: 5,
+      status: "Stopped",
+      reason: "breakpoint",
+    });
+    const running = markDebugSessionEvent(stopped, {
+      session_id: "session-1",
+      workspace_id: "workspace",
+      workspace_root: "/repo",
+      sequence: 6,
+      status: "Running",
+      reason: null,
+    });
+
+    expect(running.sessions).toEqual([]);
+    expect(running.activeSessionId).toBeNull();
+    expect(running.sessionSequenceById["session-1"]).toBeUndefined();
+    expect(running.ignoredSessionIds["session-1"]).toBe(true);
+  });
+
   test("stores stack frames and variables by active session", () => {
     const state = storeDebugVariables(
       setDebugStack(createDebugState(), "session-1", [
