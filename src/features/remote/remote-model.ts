@@ -207,7 +207,7 @@ export function upsertSshTerminal(
   return {
     ...state,
     sshSessions: sessions,
-    activeSshSessionId: state.activeSshSessionId ?? session.id,
+    activeSshSessionId: session.id,
     sshOutputBySessionId: {
       ...state.sshOutputBySessionId,
       [session.id]: appendBoundedOutput(

@@ -72,6 +72,27 @@ describe("remote model", () => {
     expect(withOutput.pendingSshOutputBySessionId["edge:ssh-1"]).toBeUndefined();
   });
 
+  test("upserting a later SSH terminal makes it active", () => {
+    const state = upsertSshTerminal(
+      upsertSshTerminal(createRemoteState(), {
+        id: "edge:ssh-1",
+        host_id: "edge",
+        workspace_id: "workspace",
+        name: "deploy@edge",
+        running: true,
+      }),
+      {
+        id: "edge:ssh-2",
+        host_id: "edge",
+        workspace_id: "workspace",
+        name: "logs@edge",
+        running: true,
+      },
+    );
+
+    expect(state.activeSshSessionId).toBe("edge:ssh-2");
+  });
+
   test("terminal exit buffered before upsert marks later session stopped", () => {
     const buffered = bufferSshTerminalExit(createRemoteState(), "edge:ssh-1");
     const state = upsertSshTerminal(buffered, {
