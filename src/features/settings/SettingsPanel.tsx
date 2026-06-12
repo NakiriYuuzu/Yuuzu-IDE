@@ -97,6 +97,9 @@ function KeybindingsSettings({
         <span>Import</span>
         <span className="meta">Available after migration</span>
       </div>
+      {state.keybindingImportError ? (
+        <div className="panel-note">{state.keybindingImportError}</div>
+      ) : null}
       <div className="settings-keybinding-import">
         <textarea
           aria-label="Paste keybindings JSON"

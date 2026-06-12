@@ -28,6 +28,7 @@ export type SettingsViewState = {
   settings: AppSettings | null;
   activeCategory: SettingsCategory;
   keybindingImportDraft: string;
+  keybindingImportError: string | null;
   loading: boolean;
   saving: boolean;
   error: string | null;
@@ -69,6 +70,7 @@ export function createSettingsState(): SettingsViewState {
     settings: null,
     activeCategory: "recovery",
     keybindingImportDraft: "",
+    keybindingImportError: null,
     loading: false,
     saving: false,
     error: null,
@@ -105,6 +107,17 @@ export function setKeybindingImportDraft(
   return {
     ...state,
     keybindingImportDraft,
+    keybindingImportError: null,
+  };
+}
+
+export function setKeybindingImportError(
+  state: SettingsViewState,
+  keybindingImportError: string | null,
+): SettingsViewState {
+  return {
+    ...state,
+    keybindingImportError,
   };
 }
 

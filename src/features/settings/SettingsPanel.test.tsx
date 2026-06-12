@@ -138,6 +138,7 @@ describe("SettingsPanel", () => {
         state={{
           ...selectSettingsCategory(loadedSettingsState(), "keybindings"),
           keybindingImportDraft: "[{}]",
+          keybindingImportError: "Invalid VS Code keybindings JSON",
         }}
         recoveryState={createRecoveryState()}
         diagnosticsState={createDiagnosticsState()}
@@ -161,5 +162,6 @@ describe("SettingsPanel", () => {
       }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(result.getByText("Available after migration")).toBeTruthy();
+    expect(result.getByText("Invalid VS Code keybindings JSON")).toBeTruthy();
   });
 });

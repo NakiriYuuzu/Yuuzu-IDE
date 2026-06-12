@@ -5,6 +5,8 @@ import { describe, expect, test } from "bun:test";
 import {
   createSettingsState,
   selectSettingsCategory,
+  setKeybindingImportDraft,
+  setKeybindingImportError,
   storeSettings,
   type AppSettings,
 } from "./settings-model";
@@ -32,5 +34,27 @@ describe("settings model", () => {
     expect(state.activeCategory).toBe("diagnostics");
     expect(state.loading).toBe(false);
     expect(state.error).toBeNull();
+  });
+
+  test("stores scoped keybinding import error without overwriting global error", () => {
+    const state = createSettingsState();
+
+    expect(state.keybindingImportError).toBeNull();
+
+    const withImportError = setKeybindingImportError(
+      { ...state, error: "Settings failed" },
+      "Import is available after migration",
+    );
+
+    expect(withImportError.keybindingImportError).toBe(
+      "Import is available after migration",
+    );
+    expect(withImportError.error).toBe("Settings failed");
+
+    const withDraft = setKeybindingImportDraft(withImportError, "[{}]");
+
+    expect(withDraft.keybindingImportDraft).toBe("[{}]");
+    expect(withDraft.keybindingImportError).toBeNull();
+    expect(withDraft.error).toBe("Settings failed");
   });
 });
