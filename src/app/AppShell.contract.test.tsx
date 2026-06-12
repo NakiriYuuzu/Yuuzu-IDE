@@ -503,6 +503,7 @@ type AppShellTauriMockOptions = {
   settings?: AppSettingsInput;
   settingsResponses?: Array<AppSettingsInput | Promise<AppSettingsInput>>;
   importKeybindingsResponse?: AppSettingsInput | Promise<AppSettingsInput>;
+  importKeybindingsResponses?: Array<AppSettingsInput | Promise<AppSettingsInput>>;
   importKeybindingsError?: unknown;
   metricSnapshot?: AppMetricSnapshot;
   metricSnapshotResponses?: Array<AppMetricSnapshot | Promise<AppMetricSnapshot>>;
@@ -559,6 +560,9 @@ function installAppShellTauriMock(options: AppShellTauriMockOptions) {
     ...(options.recordExtensionPerformanceResponses ?? []),
   ];
   const settingsResponses = [...(options.settingsResponses ?? [])];
+  const importKeybindingsResponses = [
+    ...(options.importKeybindingsResponses ?? []),
+  ];
   const metricSnapshotResponses = [...(options.metricSnapshotResponses ?? [])];
   const diagnosticEventsResponses = [
     ...(options.diagnosticEventsResponses ?? []),
@@ -642,6 +646,9 @@ function installAppShellTauriMock(options: AppShellTauriMockOptions) {
         case "save_settings":
           return args.settings;
         case "import_keybindings": {
+          if (importKeybindingsResponses.length > 0) {
+            return importKeybindingsResponses.shift();
+          }
           if (options.importKeybindingsError) {
             throw options.importKeybindingsError;
           }
@@ -2482,6 +2489,94 @@ describe("AppShell AppShell helpers", () => {
     expect(settingsState.keybindingImportError).toBe(
       "Invalid VS Code keybindings JSON",
     );
+  });
+
+  test("AppShell ignores stale keybinding import failures after newer success", async () => {
+    const workspaceId = "settings-import-keybindings-stale";
+    const workspaceRoot = "/repo-settings-import-keybindings-stale";
+    const olderImport = createDeferred<AppSettingsInput>();
+    const newerImport = createDeferred<AppSettingsInput>();
+    installAppShellTauriMock({
+      workspaceId,
+      workspaceRoot,
+      importKeybindingsResponses: [olderImport.promise, newerImport.promise],
+    });
+    resetWorkspaceBootstrapForTests();
+    window.localStorage.clear();
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: workspaceId,
+      workspaces: [
+        {
+          id: workspaceId,
+          path: workspaceRoot,
+          name: workspaceId,
+          pinned: false,
+        },
+      ],
+    });
+
+    let renderResult: ReturnType<typeof render>;
+    await act(async () => {
+      renderResult = render(<AppShell />);
+    });
+    await flushAppShellEffects();
+
+    fireEvent.click(
+      renderResult!.getByRole("button", { name: /Search or run a command/ }),
+    );
+    fireEvent.click(
+      renderResult!.getByRole("button", { name: /Keybindings: Import/ }),
+    );
+    fireEvent.input(renderResult!.getByLabelText("Paste keybindings JSON"), {
+      target: {
+        value:
+          '[{"key":"cmd+s","command":"workbench.action.files.save"}]',
+      },
+    });
+    fireEvent.click(
+      renderResult!.getByRole("button", { name: "Import keybindings" }),
+    );
+    fireEvent.input(renderResult!.getByLabelText("Paste keybindings JSON"), {
+      target: {
+        value:
+          '[{"key":"ctrl+`","command":"workbench.action.terminal.new"}]',
+      },
+    });
+    fireEvent.click(
+      renderResult!.getByRole("button", { name: "Import keybindings" }),
+    );
+    await flushAppShellEffects();
+
+    newerImport.resolve({
+      schema_version: 2,
+      density: "compact",
+      color_theme: "dark",
+      accent_color: "yuzu",
+      update_channel: "manual",
+      keybindings: [
+        {
+          command_id: "new-terminal",
+          key: "ctrl+`",
+          source: "vscode",
+        },
+      ],
+    });
+    await flushAppShellEffects();
+
+    olderImport.reject(new Error("Older import failed"));
+    await flushAppShellEffects();
+
+    const settingsState = workspaceViewStore
+      .getState()
+      .viewFor(workspaceId).settings;
+    expect(settingsState.settings?.keybindings).toEqual([
+      {
+        command_id: "new-terminal",
+        key: "ctrl+`",
+        source: "vscode",
+      },
+    ]);
+    expect(settingsState.keybindingImportError).toBeNull();
   });
 
   test("AppShell ignores stale diagnostics refresh responses", async () => {

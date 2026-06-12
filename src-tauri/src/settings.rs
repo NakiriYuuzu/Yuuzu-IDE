@@ -6,6 +6,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct AppSettings {
@@ -48,6 +49,56 @@ impl AppSettings {
         self.schema_version = default_schema_version();
         self
     }
+}
+
+fn app_settings_from_value(value: Value) -> Result<AppSettings, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "settings JSON must be an object".to_string())?;
+    let mut settings = AppSettings::default();
+
+    if let Some(density) = object.get("density").and_then(Value::as_str) {
+        settings.density = density.to_string();
+    }
+    if let Some(color_theme) = object.get("color_theme").and_then(Value::as_str) {
+        settings.color_theme = color_theme.to_string();
+    }
+    if let Some(accent_color) = object.get("accent_color").and_then(Value::as_str) {
+        settings.accent_color = accent_color.to_string();
+    }
+    if let Some(update_channel) = object.get("update_channel").and_then(Value::as_str) {
+        settings.update_channel = update_channel.to_string();
+    }
+    if let Some(keybindings) = object.get("keybindings").and_then(Value::as_array) {
+        settings.keybindings = keybindings
+            .iter()
+            .filter_map(keybinding_from_value)
+            .collect();
+    }
+
+    Ok(settings.normalized())
+}
+
+fn keybinding_from_value(value: &Value) -> Option<KeybindingSetting> {
+    let object = value.as_object()?;
+    let command_id = object
+        .get("command_id")
+        .or_else(|| object.get("command"))
+        .and_then(Value::as_str)?;
+    let key = object.get("key").and_then(Value::as_str)?;
+    if command_id.is_empty() || key.is_empty() {
+        return None;
+    }
+
+    Some(KeybindingSetting {
+        command_id: command_id.to_string(),
+        key: key.to_string(),
+        source: object
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or("manual")
+            .to_string(),
+    })
 }
 
 fn default_schema_version() -> u32 {
@@ -127,8 +178,8 @@ impl SettingsStore {
         }
 
         let value = fs::read_to_string(&self.path).map_err(|err| err.to_string())?;
-        let settings: AppSettings = serde_json::from_str(&value).map_err(|err| err.to_string())?;
-        Ok(settings.normalized())
+        let value: Value = serde_json::from_str(&value).map_err(|err| err.to_string())?;
+        app_settings_from_value(value)
     }
 
     pub fn save(&self, settings: &AppSettings) -> Result<(), String> {
@@ -267,6 +318,46 @@ mod tests {
         assert_eq!(loaded.accent_color, "yuzu");
         assert_eq!(loaded.update_channel, "manual");
         assert!(loaded.keybindings.is_empty());
+    }
+
+    #[test]
+    fn settings_store_migrates_legacy_keybinding_shapes() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "schema_version": 1,
+                "density": "compact",
+                "color_theme": "dark",
+                "keybindings": [
+                    {"command":"save-file","key":"cmd+s"},
+                    {"command_id":"new-terminal","key":"ctrl+`"},
+                    null,
+                    {"command":123}
+                ]
+            }"#,
+        )
+        .expect("write legacy settings");
+
+        let loaded = SettingsStore::new(path).load().expect("load settings");
+
+        assert_eq!(loaded.schema_version, 2);
+        assert_eq!(
+            loaded.keybindings,
+            vec![
+                KeybindingSetting {
+                    command_id: "save-file".to_string(),
+                    key: "cmd+s".to_string(),
+                    source: "manual".to_string(),
+                },
+                KeybindingSetting {
+                    command_id: "new-terminal".to_string(),
+                    key: "ctrl+`".to_string(),
+                    source: "manual".to_string(),
+                },
+            ]
+        );
     }
 
     #[test]

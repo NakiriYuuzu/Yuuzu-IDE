@@ -579,12 +579,11 @@ impl AppState {
             return Err(format!("unsupported keybinding import source: {source}"));
         }
 
-        let current = {
-            let settings = self.settings.lock().map_err(|err| err.to_string())?;
-            settings.clone()
-        };
-        let imported = import_vscode_keybindings(current, &content)?;
-        self.save_settings(imported)
+        let mut current = self.settings.lock().map_err(|err| err.to_string())?;
+        let imported = import_vscode_keybindings(current.clone(), &content)?;
+        self.settings_store.save(&imported)?;
+        *current = imported.clone();
+        Ok(imported)
     }
 
     pub fn open_workspace_path(&self, path: PathBuf) -> Result<WorkspaceRegistry, String> {
@@ -2670,7 +2669,7 @@ mod tests {
     }
 
     #[test]
-    fn app_state_imports_vscode_keybindings_and_persists_settings() {
+    fn app_state_import_keybindings_imports_vscode_shortcuts() {
         let temp = tempdir().expect("temp dir");
         let state = AppState::new(temp.path()).expect("state");
 
@@ -2696,7 +2695,7 @@ mod tests {
     }
 
     #[test]
-    fn app_state_rejects_unsupported_keybinding_import_source() {
+    fn app_state_import_keybindings_rejects_unsupported_source() {
         let temp = tempdir().expect("temp dir");
         let state = AppState::new(temp.path()).expect("state");
         let original = state.settings_snapshot().expect("settings");
@@ -2708,6 +2707,42 @@ mod tests {
             "unsupported keybinding import source: jetbrains"
         );
         assert_eq!(state.settings_snapshot().expect("settings"), original);
+    }
+
+    #[test]
+    fn app_state_import_keybindings_preserves_concurrent_settings_save() {
+        let temp = tempdir().expect("temp dir");
+        let state = std::sync::Arc::new(AppState::new(temp.path()).expect("state"));
+        let import_state = std::sync::Arc::clone(&state);
+        let content = format!(
+            "[{}]",
+            std::iter::repeat(r#"{"key":"cmd+x","command":"unknown.command"}"#)
+                .take(120_000)
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+
+        let import_thread = std::thread::spawn(move || {
+            import_state
+                .import_keybindings("vscode", content)
+                .expect("import keybindings")
+        });
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let changed = settings("comfortable", "light");
+
+        state
+            .save_settings(changed.clone())
+            .expect("save concurrent settings");
+        import_thread.join().expect("join import thread");
+
+        let loaded = state.settings_snapshot().expect("settings");
+        assert_eq!(loaded.density, changed.density);
+        assert_eq!(loaded.color_theme, changed.color_theme);
+
+        let reloaded = AppState::new(temp.path()).expect("reload");
+        let persisted = reloaded.settings_snapshot().expect("settings");
+        assert_eq!(persisted.density, changed.density);
+        assert_eq!(persisted.color_theme, changed.color_theme);
     }
 
     #[test]

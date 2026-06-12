@@ -2697,6 +2697,7 @@ export function AppShell() {
   const recoveryLoadRequestRef = useRef<Record<string, number>>({});
   const recoverySaveEpochRef = useRef<Record<string, number>>({});
   const settingsLoadRequestRef = useRef<Record<string, number>>({});
+  const keybindingImportRequestRef = useRef<Record<string, number>>({});
   const settingsLoadedWorkspaceRef = useRef<Set<string>>(new Set());
   const diagnosticsRefreshRequestRef = useRef<Record<string, number>>({});
   const diagnosticsStartupEventRef = useRef(false);
@@ -7626,6 +7627,9 @@ export function AppShell() {
     const content =
       workspaceViewStore.getState().viewFor(workspaceId).settings
         .keybindingImportDraft;
+    const requestId =
+      (keybindingImportRequestRef.current[workspaceId] ?? 0) + 1;
+    keybindingImportRequestRef.current[workspaceId] = requestId;
 
     try {
       const imported = await importKeybindings({
@@ -7633,7 +7637,10 @@ export function AppShell() {
         content,
       });
 
-      if (!hasRegisteredWorkspace(workspaceId)) {
+      if (
+        keybindingImportRequestRef.current[workspaceId] !== requestId ||
+        !hasRegisteredWorkspace(workspaceId)
+      ) {
         return;
       }
 
@@ -7643,7 +7650,10 @@ export function AppShell() {
         keybindingImportError: null,
       }));
     } catch (error) {
-      if (!hasRegisteredWorkspace(workspaceId)) {
+      if (
+        keybindingImportRequestRef.current[workspaceId] !== requestId ||
+        !hasRegisteredWorkspace(workspaceId)
+      ) {
         return;
       }
 
