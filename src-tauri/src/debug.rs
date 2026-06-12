@@ -1527,6 +1527,20 @@ mod real_adapter {
         evaluate_results: HashMap<String, DebugVariable>,
     }
 
+    #[derive(Clone, Debug)]
+    struct CapturedDapScopeVariables {
+        frame_id: i64,
+        scope: DebugScope,
+        variables: Vec<DebugVariable>,
+    }
+
+    #[derive(Clone, Debug)]
+    struct MaterializedDapVariables {
+        scopes_by_frame: HashMap<i64, Vec<DebugScope>>,
+        variables_by_reference: HashMap<i64, Vec<DebugVariable>>,
+        evaluate_results: HashMap<String, DebugVariable>,
+    }
+
     #[cfg(test)]
     pub(super) fn require_debug_smoke() {
         assert_eq!(
@@ -1750,31 +1764,27 @@ mod real_adapter {
             .and_then(Value::as_i64)
             .ok_or_else(|| format!("stopped event missing threadId: {stopped_body}"))?;
         let stack = client.stack_trace(thread_id)?;
-        let mut scopes_by_frame = HashMap::new();
-        let mut variables_by_reference = HashMap::new();
-        let mut evaluate_results = HashMap::new();
+        let mut captured_variables = Vec::new();
         for frame in &stack {
             for scope in client.scopes(frame.id)? {
                 let variables = client.variables(scope.variables_reference)?;
-                for variable in &variables {
-                    evaluate_results.insert(variable.name.clone(), variable.clone());
-                }
-                variables_by_reference.insert(scope.variables_reference, variables);
-                scopes_by_frame
-                    .entry(frame.id)
-                    .or_insert_with(Vec::new)
-                    .push(scope);
+                captured_variables.push(CapturedDapScopeVariables {
+                    frame_id: frame.id,
+                    scope,
+                    variables,
+                });
             }
         }
+        let materialized = materialize_captured_dap_variables(captured_variables);
 
         client.disconnect()?;
         Ok(RealDapLaunchResult {
             thread_id,
             stopped_reason,
             stack,
-            scopes_by_frame,
-            variables_by_reference,
-            evaluate_results,
+            scopes_by_frame: materialized.scopes_by_frame,
+            variables_by_reference: materialized.variables_by_reference,
+            evaluate_results: materialized.evaluate_results,
         })
     }
 
@@ -2077,6 +2087,67 @@ mod real_adapter {
         }
     }
 
+    fn materialize_captured_dap_variables(
+        captured_variables: Vec<CapturedDapScopeVariables>,
+    ) -> MaterializedDapVariables {
+        let mut next_reference = 1;
+        let mut child_references_by_frame_and_raw = HashMap::new();
+        let mut scopes_by_frame: HashMap<i64, Vec<DebugScope>> = HashMap::new();
+        let mut variables_by_reference = HashMap::new();
+        let mut evaluate_results = HashMap::new();
+
+        for capture in captured_variables {
+            let frame_id = capture.frame_id;
+            let mut scope = capture.scope;
+            if scope.variables_reference != 0 {
+                let synthetic_reference = next_synthetic_variables_reference(&mut next_reference);
+                let variables = remap_captured_variable_references(
+                    frame_id,
+                    capture.variables,
+                    &mut child_references_by_frame_and_raw,
+                    &mut next_reference,
+                );
+                for variable in &variables {
+                    evaluate_results.insert(variable.name.clone(), variable.clone());
+                }
+                scope.variables_reference = synthetic_reference;
+                variables_by_reference.insert(synthetic_reference, variables);
+            }
+            scopes_by_frame.entry(frame_id).or_default().push(scope);
+        }
+
+        MaterializedDapVariables {
+            scopes_by_frame,
+            variables_by_reference,
+            evaluate_results,
+        }
+    }
+
+    fn remap_captured_variable_references(
+        frame_id: i64,
+        variables: Vec<DebugVariable>,
+        child_references_by_frame_and_raw: &mut HashMap<(i64, i64), i64>,
+        next_reference: &mut i64,
+    ) -> Vec<DebugVariable> {
+        variables
+            .into_iter()
+            .map(|mut variable| {
+                if variable.variables_reference != 0 {
+                    variable.variables_reference = *child_references_by_frame_and_raw
+                        .entry((frame_id, variable.variables_reference))
+                        .or_insert_with(|| next_synthetic_variables_reference(next_reference));
+                }
+                variable
+            })
+            .collect()
+    }
+
+    fn next_synthetic_variables_reference(next_reference: &mut i64) -> i64 {
+        let reference = *next_reference;
+        *next_reference += 1;
+        reference
+    }
+
     fn adapter_command_for(
         request: &DebugStartSessionRequest,
         override_command: Option<&(DebugAdapterKind, String)>,
@@ -2321,6 +2392,78 @@ mod real_adapter {
         use std::path::Path;
 
         #[test]
+        fn real_dap_launch_keeps_duplicate_scope_references_per_frame() {
+            let temp = tempfile::tempdir().expect("tempdir");
+            std::fs::write(temp.path().join("debuggee"), "fixture\n").expect("debuggee");
+            let adapter = temp.path().join("fake-dap.py");
+            std::fs::write(&adapter, fake_duplicate_reference_dap_adapter()).expect("fake adapter");
+            let request = DebugStartSessionRequest {
+                workspace_id: "workspace-a".to_string(),
+                workspace_root: temp.path().to_string_lossy().into_owned(),
+                config: DebugLaunchConfig {
+                    id: "cfg-real".to_string(),
+                    workspace_root: temp.path().to_string_lossy().into_owned(),
+                    name: "Real Adapter".to_string(),
+                    adapter: DebugAdapterKind::Lldb,
+                    request: DebugRequestKind::Launch,
+                    program: "debuggee".to_string(),
+                    cwd: ".".to_string(),
+                    args: Vec::new(),
+                    env: Vec::new(),
+                    stop_on_entry: false,
+                    attach: None,
+                    created_ms: 1,
+                    updated_ms: 1,
+                },
+            };
+
+            let launch = run_real_dap_launch(
+                &request,
+                "python3".to_string(),
+                vec![adapter.to_string_lossy().into_owned()],
+                vec![RealDapBreakpoint {
+                    source_path: "debuggee".to_string(),
+                    line: 6,
+                }],
+            )
+            .expect("real dap launch");
+
+            let main_scope = launch
+                .scopes_by_frame
+                .get(&524_288)
+                .and_then(|scopes| scopes.iter().find(|scope| scope.name == "Locals"))
+                .expect("main locals");
+            let start_scope = launch
+                .scopes_by_frame
+                .get(&524_289)
+                .and_then(|scopes| scopes.iter().find(|scope| scope.name == "Locals"))
+                .expect("start locals");
+            let main_variables = launch
+                .variables_by_reference
+                .get(&main_scope.variables_reference)
+                .expect("main variables");
+            let start_variables = launch
+                .variables_by_reference
+                .get(&start_scope.variables_reference)
+                .expect("start variables");
+
+            assert!(
+                main_variables
+                    .iter()
+                    .any(|variable| variable.name == "counter" && variable.value == "3"),
+                "main frame Locals should keep counter even when a later frame reuses raw variablesReference"
+            );
+            assert!(
+                start_variables.is_empty(),
+                "start frame Locals should keep its own empty variable list"
+            );
+            assert_ne!(
+                main_scope.variables_reference, start_scope.variables_reference,
+                "duplicate raw variablesReference values should be remapped per frame scope"
+            );
+        }
+
+        #[test]
         fn resolve_workspace_path_rejects_parent_absolute_and_symlink_escape() {
             let root = tempfile::tempdir().expect("root");
             let workspace = root.path().join("workspace");
@@ -2392,6 +2535,90 @@ mod real_adapter {
                     updated_ms: 1,
                 },
             }
+        }
+
+        fn fake_duplicate_reference_dap_adapter() -> &'static str {
+            r#"
+import json
+import sys
+
+last_frame_id = None
+
+def read_message():
+    header = b""
+    while not header.endswith(b"\r\n\r\n"):
+        chunk = sys.stdin.buffer.read(1)
+        if not chunk:
+            sys.exit(0)
+        header += chunk
+    length = None
+    for line in header.decode("ascii").split("\r\n"):
+        if line.lower().startswith("content-length:"):
+            length = int(line.split(":", 1)[1].strip())
+            break
+    if length is None:
+        sys.exit(1)
+    return json.loads(sys.stdin.buffer.read(length).decode("utf-8"))
+
+def send_message(message):
+    body = json.dumps(message, separators=(",", ":")).encode("utf-8")
+    sys.stdout.buffer.write(b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n\r\n" + body)
+    sys.stdout.buffer.flush()
+
+def send_response(request, body=None):
+    send_message({
+        "seq": 0,
+        "type": "response",
+        "request_seq": request["seq"],
+        "success": True,
+        "command": request["command"],
+        "body": body or {},
+    })
+
+def send_event(name, body=None):
+    send_message({
+        "seq": 0,
+        "type": "event",
+        "event": name,
+        "body": body or {},
+    })
+
+while True:
+    request = read_message()
+    command = request.get("command")
+    if command == "initialize":
+        send_response(request, {"supportsConfigurationDoneRequest": True})
+    elif command == "launch":
+        send_response(request)
+        send_event("initialized")
+    elif command == "setBreakpoints":
+        send_response(request, {"breakpoints": [{"verified": True, "line": 6}]})
+    elif command == "setExceptionBreakpoints":
+        send_response(request)
+    elif command == "configurationDone":
+        send_response(request)
+        send_event("stopped", {"reason": "breakpoint", "threadId": 7})
+    elif command == "stackTrace":
+        send_response(request, {"stackFrames": [
+            {"id": 524288, "name": "main", "source": {"path": "debuggee"}, "line": 6, "column": 1},
+            {"id": 524289, "name": "start", "source": {"path": "debuggee"}, "line": 1, "column": 1},
+        ]})
+    elif command == "scopes":
+        last_frame_id = request.get("arguments", {}).get("frameId")
+        send_response(request, {"scopes": [
+            {"name": "Locals", "variablesReference": 1, "expensive": False},
+        ]})
+    elif command == "variables":
+        variables = []
+        if last_frame_id == 524288:
+            variables = [{"name": "counter", "value": "3", "type": "int", "variablesReference": 0}]
+        send_response(request, {"variables": variables})
+    elif command == "disconnect":
+        send_response(request)
+        sys.exit(0)
+    else:
+        send_response(request)
+"#
         }
 
         fn create_dir_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
