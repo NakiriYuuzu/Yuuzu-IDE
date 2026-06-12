@@ -1139,14 +1139,14 @@ Node 12 records final evidence in `docs/architecture/node-12-extension-results.m
 
 ### Node 13: Hardening, Packaging, And Daily Driver Readiness
 
-Status: implementation complete; acceptance blocked by verification failures.
+Status: completed and passed.
 
 Node 13 records final evidence in
 `docs/architecture/node-13-hardening-results.md`. The native recovery,
 diagnostics, metrics, Settings dashboard, settings migration, keybinding import,
 manual update strategy, personal setup docs, and current-host debug packaging
-scope are implemented. Final daily-driver acceptance is not complete because
-the full verification run exposed two blockers.
+scope are implemented. The final verification sequence passes on the current
+macOS host.
 
 Completed progress:
 
@@ -1160,14 +1160,15 @@ Completed progress:
 - Task 5 added settings migration, manual update policy fields, VS Code
   keybinding import, scoped import errors, and migration hardening.
 - Task 6 added personal setup docs, update strategy docs, this progress entry,
-  roadmap status, debug package evidence, and exact verification blockers.
+  roadmap status, debug package evidence, and final verification evidence.
+- The blocker-fix follow-up preserved real `EditorTab` exports across the
+  AppShell contract test mock and replaced the clippy-blocked manual repeat in
+  the Rust keybinding import stress test.
 
 Verification outcomes:
 
-- `bun test`: FAIL with 399 pass, 12 fail, 1256 `expect()` calls, and 411 tests
-  across 47 files. All failures are in
-  `src/features/editor/EditorTab.test.ts`; helper imports resolve to
-  `undefined`, and two Monaco marker/glyph lifecycle checks fail.
+- `bun test`: PASS with 411 passed, 0 failed, 1175 `expect()` calls across 47
+  files.
 - `bun run build`: PASS with `tsc && vite build`; Vite chunk-size warnings are
   present.
 - `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml`:
@@ -1176,8 +1177,7 @@ Verification outcomes:
 - `. "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check`:
   PASS.
 - `. "$HOME/.cargo/env" && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings`:
-  FAIL at `src-tauri/src/commands.rs:2719` on `clippy::manual-repeat-n` for
-  `std::iter::repeat(...).take(120_000)`.
+  PASS.
 - `bun run tauri build --debug`: PASS and produced
   `src-tauri/target/debug/yuuzu-ide`,
   `src-tauri/target/debug/bundle/macos/Yuuzu-IDE.app`, and
@@ -1186,20 +1186,8 @@ Verification outcomes:
   and no matches.
 - `git diff --check`: PASS with exit 0 and no output.
 
-Blockers:
-
-- Frontend test blocker: `bun test` fails in
-  `src/features/editor/EditorTab.test.ts`; source-level diagnosis is needed
-  before Node 13 can be accepted.
-- Rust lint blocker: clippy fails in `src-tauri/src/commands.rs:2719`; the fix
-  requires changing source code, which Task 6 intentionally did not do.
-
 Decisions:
 
-- Do not call Node 13 daily-driver ready until the two blockers above are
-  fixed and the full verification sequence passes.
-- Keep Task 6 limited to documentation and verification evidence; no source
-  code was changed in this task.
 - Treat the macOS debug app and DMG as current-host packaging evidence only.
 
 Residual risks:
