@@ -2689,7 +2689,9 @@ export function AppShell() {
   const extensionPendingToggleRef = useRef<Record<string, number>>({});
   const recoveryLoadRequestRef = useRef<Record<string, number>>({});
   const recoverySaveEpochRef = useRef<Record<string, number>>({});
-  const settingsLoadedRef = useRef(false);
+  const settingsLoadRequestRef = useRef<Record<string, number>>({});
+  const settingsLoadedWorkspaceRef = useRef<Set<string>>(new Set());
+  const diagnosticsRefreshRequestRef = useRef<Record<string, number>>({});
   const diagnosticsStartupEventRef = useRef(false);
   const docsLoadRequestRef = useRef<DocsLoadRequestState>({});
   const agentSessionsLoadRef = useRef<Record<string, number>>({});
@@ -2929,12 +2931,18 @@ export function AppShell() {
   }, [activeWorkspaceId]);
 
   useEffect(() => {
-    if (settingsLoadedRef.current || !activeWorkspaceId) {
+    if (
+      !activeWorkspaceId ||
+      settingsLoadedWorkspaceRef.current.has(activeWorkspaceId)
+    ) {
       return;
     }
 
-    settingsLoadedRef.current = true;
-    updateSettings(activeWorkspaceId, (settings) => ({
+    const workspaceId = activeWorkspaceId;
+    const requestId = (settingsLoadRequestRef.current[workspaceId] ?? 0) + 1;
+    settingsLoadRequestRef.current[workspaceId] = requestId;
+
+    updateSettings(workspaceId, (settings) => ({
       ...settings,
       loading: true,
       error: null,
@@ -2942,12 +2950,25 @@ export function AppShell() {
 
     void loadSettings()
       .then((settings) => {
-        updateSettings(activeWorkspaceId, (state) =>
-          storeSettings(state, settings),
-        );
+        if (
+          settingsLoadRequestRef.current[workspaceId] !== requestId ||
+          !hasRegisteredWorkspace(workspaceId)
+        ) {
+          return;
+        }
+
+        settingsLoadedWorkspaceRef.current.add(workspaceId);
+        updateSettings(workspaceId, (state) => storeSettings(state, settings));
       })
       .catch((error) => {
-        updateSettings(activeWorkspaceId, (state) =>
+        if (
+          settingsLoadRequestRef.current[workspaceId] !== requestId ||
+          !hasRegisteredWorkspace(workspaceId)
+        ) {
+          return;
+        }
+
+        updateSettings(workspaceId, (state) =>
           setSettingsError(state, String(error)),
         );
       });
@@ -3645,6 +3666,10 @@ export function AppShell() {
   }
 
   async function refreshDiagnosticsForWorkspace(workspaceId: string) {
+    const requestId =
+      (diagnosticsRefreshRequestRef.current[workspaceId] ?? 0) + 1;
+    diagnosticsRefreshRequestRef.current[workspaceId] = requestId;
+
     updateDiagnostics(workspaceId, (diagnostics) => ({
       ...diagnostics,
       loading: true,
@@ -3664,7 +3689,10 @@ export function AppShell() {
         listDiagnosticEvents({ limit: 50 }),
       ]);
 
-      if (!hasRegisteredWorkspace(workspaceId)) {
+      if (
+        diagnosticsRefreshRequestRef.current[workspaceId] !== requestId ||
+        !hasRegisteredWorkspace(workspaceId)
+      ) {
         return;
       }
 
@@ -3681,6 +3709,13 @@ export function AppShell() {
         }).catch(() => {});
       }
     } catch (error) {
+      if (
+        diagnosticsRefreshRequestRef.current[workspaceId] !== requestId ||
+        !hasRegisteredWorkspace(workspaceId)
+      ) {
+        return;
+      }
+
       updateDiagnostics(workspaceId, (diagnostics) => ({
         ...diagnostics,
         loading: false,
@@ -7556,7 +7591,10 @@ export function AppShell() {
     );
   }
 
-  function openSettingsCategory(category: SettingsCategory) {
+  function openSettingsCategory(
+    category: SettingsCategory,
+    options: { refresh?: boolean } = {},
+  ) {
     updateSettings(activeWorkspaceId, (settings) =>
       selectSettingsCategory(settings, category),
     );
@@ -7564,6 +7602,7 @@ export function AppShell() {
     setPanelOpen(true);
 
     if (
+      (options.refresh ?? true) &&
       (category === "diagnostics" || category === "performance") &&
       activeWorkspaceId
     ) {
@@ -7644,7 +7683,7 @@ export function AppShell() {
         openSettingsCategory("diagnostics");
         break;
       case "refresh-diagnostics":
-        openSettingsCategory("diagnostics");
+        openSettingsCategory("diagnostics", { refresh: false });
         if (activeWorkspaceId) {
           void refreshDiagnosticsForWorkspace(activeWorkspaceId);
         }

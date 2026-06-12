@@ -501,8 +501,13 @@ type AppShellTauriMockOptions = {
   textFiles?: Record<string, TextFileRead>;
   recoveryBackups?: UnsavedBackup[];
   settings?: AppSettingsInput;
+  settingsResponses?: Array<AppSettingsInput | Promise<AppSettingsInput>>;
   metricSnapshot?: AppMetricSnapshot;
+  metricSnapshotResponses?: Array<AppMetricSnapshot | Promise<AppMetricSnapshot>>;
   diagnosticEvents?: DiagnosticEvent[];
+  diagnosticEventsResponses?: Array<
+    DiagnosticEvent[] | Promise<DiagnosticEvent[]>
+  >;
   listUnsavedBackupsResponses?: Array<
     UnsavedBackup[] | Promise<UnsavedBackup[]>
   >;
@@ -550,6 +555,11 @@ function installAppShellTauriMock(options: AppShellTauriMockOptions) {
   ];
   const recordExtensionPerformanceResponses = [
     ...(options.recordExtensionPerformanceResponses ?? []),
+  ];
+  const settingsResponses = [...(options.settingsResponses ?? [])];
+  const metricSnapshotResponses = [...(options.metricSnapshotResponses ?? [])];
+  const diagnosticEventsResponses = [
+    ...(options.diagnosticEventsResponses ?? []),
   ];
   const saveUnsavedBackupResponses = [
     ...(options.saveUnsavedBackupResponses ?? []),
@@ -613,6 +623,10 @@ function installAppShellTauriMock(options: AppShellTauriMockOptions) {
         case "scan_directory":
           return [];
         case "load_settings":
+          if (settingsResponses.length > 0) {
+            return settingsResponses.shift();
+          }
+
           return (
             options.settings ?? {
               schema_version: 2,
@@ -626,6 +640,10 @@ function installAppShellTauriMock(options: AppShellTauriMockOptions) {
         case "save_settings":
           return args.settings;
         case "metric_snapshot":
+          if (metricSnapshotResponses.length > 0) {
+            return metricSnapshotResponses.shift();
+          }
+
           return (
             options.metricSnapshot ?? {
               timestamp_ms: 1,
@@ -641,6 +659,10 @@ function installAppShellTauriMock(options: AppShellTauriMockOptions) {
             }
           );
         case "list_diagnostic_events":
+          if (diagnosticEventsResponses.length > 0) {
+            return diagnosticEventsResponses.shift();
+          }
+
           return options.diagnosticEvents ?? [];
         case "append_diagnostic_event":
           return {
@@ -2179,6 +2201,217 @@ describe("AppShell AppShell helpers", () => {
           call.command === "list_diagnostic_events" && call.args.limit === 50,
       ),
     ).toBe(true);
+  });
+
+  test("AppShell loads settings per workspace and ignores stale switch responses", async () => {
+    const workspaceA = "settings-load-a";
+    const workspaceB = "settings-load-b";
+    const workspaceRootA = "/repo-settings-load-a";
+    const workspaceRootB = "/repo-settings-load-b";
+    const firstSettingsLoad = createDeferred<AppSettingsInput>();
+    const secondSettingsLoad = createDeferred<AppSettingsInput>();
+    const tauri = installAppShellTauriMock({
+      workspaceId: workspaceA,
+      workspaceRoot: workspaceRootA,
+      settingsResponses: [firstSettingsLoad.promise, secondSettingsLoad.promise],
+    });
+    resetWorkspaceBootstrapForTests();
+    window.localStorage.clear();
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: workspaceA,
+      workspaces: [
+        {
+          id: workspaceA,
+          path: workspaceRootA,
+          name: workspaceA,
+          pinned: false,
+        },
+        {
+          id: workspaceB,
+          path: workspaceRootB,
+          name: workspaceB,
+          pinned: false,
+        },
+      ],
+    });
+
+    await act(async () => {
+      render(<AppShell />);
+    });
+    await flushAppShellEffects();
+
+    expect(
+      tauri.invokeCalls.filter((call) => call.command === "load_settings"),
+    ).toHaveLength(1);
+
+    await act(async () => {
+      workspaceStore.getState().setRegistry({
+        active_workspace_id: workspaceB,
+        workspaces: [
+          {
+            id: workspaceA,
+            path: workspaceRootA,
+            name: workspaceA,
+            pinned: false,
+          },
+          {
+            id: workspaceB,
+            path: workspaceRootB,
+            name: workspaceB,
+            pinned: false,
+          },
+        ],
+      });
+    });
+    await flushAppShellEffects();
+
+    expect(
+      tauri.invokeCalls.filter((call) => call.command === "load_settings"),
+    ).toHaveLength(2);
+
+    secondSettingsLoad.resolve({
+      schema_version: 2,
+      density: "comfortable",
+      color_theme: "light",
+      accent_color: "yuzu",
+      update_channel: "manual",
+      keybindings: [],
+    });
+    await flushAppShellEffects();
+
+    expect(
+      workspaceViewStore.getState().viewFor(workspaceB).settings.settings
+        ?.density,
+    ).toBe("comfortable");
+
+    firstSettingsLoad.resolve({
+      schema_version: 2,
+      density: "compact",
+      color_theme: "dark",
+      accent_color: "yuzu",
+      update_channel: "manual",
+      keybindings: [],
+    });
+    await flushAppShellEffects();
+
+    expect(
+      workspaceViewStore.getState().viewFor(workspaceB).settings.settings
+        ?.density,
+    ).toBe("comfortable");
+  });
+
+  test("AppShell ignores stale diagnostics refresh responses", async () => {
+    const workspaceId = "diagnostics-stale-refresh";
+    const workspaceRoot = "/repo-diagnostics-stale-refresh";
+    const olderMetric = createDeferred<AppMetricSnapshot>();
+    const newerMetric = createDeferred<AppMetricSnapshot>();
+    const olderEvents = createDeferred<DiagnosticEvent[]>();
+    const newerEvents = createDeferred<DiagnosticEvent[]>();
+    const tauri = installAppShellTauriMock({
+      workspaceId,
+      workspaceRoot,
+      metricSnapshotResponses: [olderMetric.promise, newerMetric.promise],
+      diagnosticEventsResponses: [olderEvents.promise, newerEvents.promise],
+    });
+    resetWorkspaceBootstrapForTests();
+    window.localStorage.clear();
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: workspaceId,
+      workspaces: [
+        {
+          id: workspaceId,
+          path: workspaceRoot,
+          name: workspaceId,
+          pinned: false,
+        },
+      ],
+    });
+    workspaceViewStore.getState().updateView(workspaceId, {
+      activeActivity: "settings",
+      panelOpen: true,
+      surface: "empty",
+    });
+    workspaceViewStore.getState().updateSettings(workspaceId, (settings) =>
+      selectSettingsCategory(settings, "diagnostics"),
+    );
+
+    let renderResult!: ReturnType<typeof render>;
+    await act(async () => {
+      renderResult = render(<AppShell />);
+    });
+    await flushAppShellEffects();
+
+    expect(
+      tauri.invokeCalls.filter((call) => call.command === "metric_snapshot"),
+    ).toHaveLength(1);
+
+    fireEvent.click(renderResult.getByRole("button", { name: "Performance" }));
+    await flushAppShellEffects();
+
+    expect(
+      tauri.invokeCalls.filter((call) => call.command === "metric_snapshot"),
+    ).toHaveLength(2);
+
+    newerMetric.resolve({
+      timestamp_ms: 2,
+      process_id: 200,
+      memory_bytes: 209_715_200,
+      uptime_ms: 240_000,
+      workspace_count: 1,
+      active_workspace_id: workspaceId,
+      docs_index_entries: 20,
+      file_tree_entries: 0,
+    });
+    newerEvents.resolve([
+      {
+        id: "newer-event",
+        timestamp_ms: 2,
+        level: "info",
+        source: "frontend",
+        message: "newer diagnostics",
+      },
+    ]);
+    await flushAppShellEffects();
+
+    expect(
+      workspaceViewStore.getState().viewFor(workspaceId).diagnostics.metric
+        ?.process_id,
+    ).toBe(200);
+    expect(
+      workspaceViewStore.getState().viewFor(workspaceId).diagnostics.events[0]
+        ?.message,
+    ).toBe("newer diagnostics");
+
+    olderMetric.resolve({
+      timestamp_ms: 1,
+      process_id: 100,
+      memory_bytes: 104_857_600,
+      uptime_ms: 120_000,
+      workspace_count: 1,
+      active_workspace_id: workspaceId,
+      docs_index_entries: 10,
+      file_tree_entries: 0,
+    });
+    olderEvents.resolve([
+      {
+        id: "older-event",
+        timestamp_ms: 1,
+        level: "info",
+        source: "frontend",
+        message: "older diagnostics",
+      },
+    ]);
+    await flushAppShellEffects();
+
+    expect(
+      workspaceViewStore.getState().viewFor(workspaceId).diagnostics.metric
+        ?.process_id,
+    ).toBe(200);
+    expect(
+      workspaceViewStore.getState().viewFor(workspaceId).diagnostics.events[0]
+        ?.message,
+    ).toBe("newer diagnostics");
+    expect(renderResult.getByText("mem 200.0 MB")).toBeTruthy();
   });
 
   test("AppShell command palette opens recovery and keybinding settings categories", async () => {
