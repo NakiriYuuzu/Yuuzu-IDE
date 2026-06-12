@@ -15,6 +15,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const DEFAULT_LSP_REQUEST_TIMEOUT_MS: u64 = 10_000;
+const INTERACTIVE_LSP_REQUEST_TIMEOUT_MS: u64 = 2_000;
+
+fn request_timeout_for_method(method: &str) -> Duration {
+    match method {
+        "textDocument/hover" | "textDocument/completion" => {
+            Duration::from_millis(INTERACTIVE_LSP_REQUEST_TIMEOUT_MS)
+        }
+        _ => Duration::from_millis(DEFAULT_LSP_REQUEST_TIMEOUT_MS),
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum LanguageId {
@@ -1212,7 +1222,7 @@ impl LanguageServerManager {
                 .ok_or_else(|| "language server transport not running".to_string())?;
             transport.request(
                 request_payload(method, id, params),
-                Duration::from_millis(DEFAULT_LSP_REQUEST_TIMEOUT_MS),
+                request_timeout_for_method(method),
             )?
         };
 
@@ -2045,8 +2055,9 @@ impl LanguageServerManager {
     }
 }
 
+#[derive(Clone)]
 pub struct LspState {
-    manager: Mutex<LanguageServerManager>,
+    manager: Arc<Mutex<LanguageServerManager>>,
 }
 
 impl Default for LspState {
@@ -2058,14 +2069,14 @@ impl Default for LspState {
 impl LspState {
     pub fn new() -> Self {
         Self {
-            manager: Mutex::new(LanguageServerManager::new()),
+            manager: Arc::new(Mutex::new(LanguageServerManager::new())),
         }
     }
 
     #[cfg(test)]
     pub fn new_for_tests() -> Self {
         Self {
-            manager: Mutex::new(LanguageServerManager::default_for_tests()),
+            manager: Arc::new(Mutex::new(LanguageServerManager::default_for_tests())),
         }
     }
 
@@ -2264,6 +2275,36 @@ fn current_unix_millis() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interactive_lsp_requests_use_a_short_timeout() {
+        assert_eq!(
+            request_timeout_for_method("textDocument/hover"),
+            Duration::from_millis(INTERACTIVE_LSP_REQUEST_TIMEOUT_MS)
+        );
+        assert_eq!(
+            request_timeout_for_method("textDocument/completion"),
+            Duration::from_millis(INTERACTIVE_LSP_REQUEST_TIMEOUT_MS)
+        );
+    }
+
+    #[test]
+    fn non_interactive_lsp_requests_keep_the_default_timeout() {
+        for method in [
+            "textDocument/definition",
+            "textDocument/references",
+            "textDocument/codeAction",
+            "textDocument/documentSymbol",
+            "textDocument/rename",
+            "initialize",
+        ] {
+            assert_eq!(
+                request_timeout_for_method(method),
+                Duration::from_millis(DEFAULT_LSP_REQUEST_TIMEOUT_MS),
+                "{method} must keep the default timeout"
+            );
+        }
+    }
 
     #[test]
     fn detects_supported_languages_from_workspace_paths() {

@@ -22,6 +22,18 @@ use crate::workspace_store::WorkspaceRegistryStore;
 
 const MAX_METRIC_INDEX_ENTRIES: usize = 1_000_000;
 
+/// Run blocking work on the dedicated blocking pool so async commands never
+/// stall the UI thread or starve the async runtime.
+async fn run_blocking<T, F>(task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|err| err.to_string())?
+}
+
 pub struct AppState {
     registry: Mutex<WorkspaceRegistry>,
     registry_store: WorkspaceRegistryStore,
@@ -242,257 +254,9 @@ impl AppState {
         }))
     }
 
-    pub fn lsp_server_status(
-        &self,
-        lsp_state: &crate::lsp::LspState,
-        workspace_root: &str,
-    ) -> Result<Vec<crate::lsp::LanguageServerStatus>, String> {
-        let (workspace_id, workspace_root) = self.lsp_workspace_identity(workspace_root)?;
-
-        Ok(lsp_state.statuses(workspace_id, workspace_root))
-    }
-
     fn lsp_workspace_identity(&self, workspace_root: &str) -> Result<(String, String), String> {
         let workspace_root = self.trusted_workspace_root(workspace_root)?;
         self.workspace_identity(&workspace_root)
-    }
-
-    pub fn lsp_open_document(
-        &self,
-        lsp_state: &crate::lsp::LspState,
-        workspace_root: &str,
-        workspace_id: &str,
-        path: String,
-        content: String,
-    ) -> Result<crate::lsp::LanguageServerStatus, String> {
-        let (resolved_workspace_id, resolved_workspace_root) =
-            self.lsp_workspace_identity(workspace_root)?;
-        let path = normalize_lsp_document_path(&path)?;
-        let _ = workspace_id;
-        lsp_state.open_document(
-            resolved_workspace_id,
-            resolved_workspace_root,
-            path,
-            content,
-        )
-    }
-
-    pub fn lsp_close_document(
-        &self,
-        lsp_state: &crate::lsp::LspState,
-        workspace_root: &str,
-        workspace_id: &str,
-        path: String,
-    ) -> Result<crate::lsp::LanguageServerStatus, String> {
-        let (resolved_workspace_id, resolved_workspace_root) =
-            self.lsp_workspace_identity(workspace_root)?;
-        let path = normalize_lsp_document_path(&path)?;
-        let _ = workspace_id;
-        lsp_state.close_document(resolved_workspace_id, resolved_workspace_root, path)
-    }
-
-    pub fn lsp_document_diagnostics(
-        &self,
-        lsp_state: &crate::lsp::LspState,
-        workspace_root: &str,
-        workspace_id: &str,
-        path: String,
-    ) -> Result<Vec<crate::lsp::LspDiagnostic>, String> {
-        let (resolved_workspace_id, resolved_workspace_root) =
-            self.lsp_workspace_identity(workspace_root)?;
-        let path = normalize_lsp_document_path(&path)?;
-        let _ = workspace_id;
-        Ok(lsp_state.document_diagnostics(&resolved_workspace_id, &resolved_workspace_root, &path))
-    }
-
-    pub fn lsp_workspace_diagnostics(
-        &self,
-        lsp_state: &crate::lsp::LspState,
-        workspace_root: &str,
-        workspace_id: &str,
-    ) -> Result<Vec<crate::lsp::LspDiagnostic>, String> {
-        let (resolved_workspace_id, resolved_workspace_root) =
-            self.lsp_workspace_identity(workspace_root)?;
-        let _ = workspace_id;
-        Ok(lsp_state.workspace_diagnostics(&resolved_workspace_id, &resolved_workspace_root))
-    }
-
-    pub fn lsp_hover(
-        &self,
-        lsp_state: &crate::lsp::LspState,
-        workspace_root: &str,
-        workspace_id: &str,
-        path: String,
-        line: u32,
-        character: u32,
-    ) -> Result<serde_json::Value, String> {
-        let (resolved_workspace_id, resolved_workspace_root) =
-            self.lsp_workspace_identity(workspace_root)?;
-        let path = normalize_lsp_document_path(&path)?;
-        let _ = workspace_id;
-        lsp_state.hover(
-            resolved_workspace_id,
-            resolved_workspace_root,
-            path,
-            line,
-            character,
-        )
-    }
-
-    pub fn lsp_definition(
-        &self,
-        lsp_state: &crate::lsp::LspState,
-        workspace_root: &str,
-        workspace_id: &str,
-        path: String,
-        line: u32,
-        character: u32,
-    ) -> Result<Vec<serde_json::Value>, String> {
-        let (resolved_workspace_id, resolved_workspace_root) =
-            self.lsp_workspace_identity(workspace_root)?;
-        let path = normalize_lsp_document_path(&path)?;
-        let _ = workspace_id;
-        lsp_state.definition(
-            resolved_workspace_id,
-            resolved_workspace_root,
-            path,
-            line,
-            character,
-        )
-    }
-
-    pub fn lsp_references(
-        &self,
-        lsp_state: &crate::lsp::LspState,
-        workspace_root: &str,
-        workspace_id: &str,
-        path: String,
-        line: u32,
-        character: u32,
-    ) -> Result<Vec<serde_json::Value>, String> {
-        let (resolved_workspace_id, resolved_workspace_root) =
-            self.lsp_workspace_identity(workspace_root)?;
-        let path = normalize_lsp_document_path(&path)?;
-        let _ = workspace_id;
-        lsp_state.references(
-            resolved_workspace_id,
-            resolved_workspace_root,
-            path,
-            line,
-            character,
-        )
-    }
-
-    pub fn lsp_completion(
-        &self,
-        lsp_state: &crate::lsp::LspState,
-        workspace_root: &str,
-        workspace_id: &str,
-        path: String,
-        line: u32,
-        character: u32,
-    ) -> Result<serde_json::Value, String> {
-        let (resolved_workspace_id, resolved_workspace_root) =
-            self.lsp_workspace_identity(workspace_root)?;
-        let path = normalize_lsp_document_path(&path)?;
-        let _ = workspace_id;
-        lsp_state.completion(
-            resolved_workspace_id,
-            resolved_workspace_root,
-            path,
-            line,
-            character,
-        )
-    }
-
-    pub fn lsp_code_actions(
-        &self,
-        lsp_state: &crate::lsp::LspState,
-        workspace_root: &str,
-        workspace_id: &str,
-        path: String,
-        line: u32,
-        character: u32,
-    ) -> Result<Vec<serde_json::Value>, String> {
-        let (resolved_workspace_id, resolved_workspace_root) =
-            self.lsp_workspace_identity(workspace_root)?;
-        let path = normalize_lsp_document_path(&path)?;
-        let _ = workspace_id;
-        lsp_state.code_actions(
-            resolved_workspace_id,
-            resolved_workspace_root,
-            path,
-            line,
-            character,
-        )
-    }
-
-    pub fn lsp_symbols(
-        &self,
-        lsp_state: &crate::lsp::LspState,
-        workspace_root: &str,
-        workspace_id: &str,
-    ) -> Result<Vec<serde_json::Value>, String> {
-        let (resolved_workspace_id, resolved_workspace_root) =
-            self.lsp_workspace_identity(workspace_root)?;
-        let _ = workspace_id;
-        lsp_state.symbols(resolved_workspace_id, resolved_workspace_root)
-    }
-
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Tauri command exposes the planned flat frontend API contract"
-    )]
-    pub fn lsp_rename(
-        &self,
-        lsp_state: &crate::lsp::LspState,
-        workspace_root: &str,
-        workspace_id: &str,
-        path: String,
-        line: u32,
-        character: u32,
-        new_name: String,
-    ) -> Result<serde_json::Value, String> {
-        let (resolved_workspace_id, resolved_workspace_root) =
-            self.lsp_workspace_identity(workspace_root)?;
-        let path = normalize_lsp_document_path(&path)?;
-        let _ = workspace_id;
-        lsp_state.rename(
-            resolved_workspace_id,
-            resolved_workspace_root,
-            path,
-            line,
-            character,
-            new_name,
-        )
-    }
-
-    pub fn lsp_restart_server(
-        &self,
-        lsp_state: &crate::lsp::LspState,
-        workspace_root: &str,
-        workspace_id: &str,
-        path: String,
-    ) -> Result<crate::lsp::LanguageServerStatus, String> {
-        let (resolved_workspace_id, resolved_workspace_root) =
-            self.lsp_workspace_identity(workspace_root)?;
-        let path = normalize_lsp_document_path(&path)?;
-        let _ = workspace_id;
-        let language = crate::lsp::detect_language(&path)
-            .ok_or_else(|| "unsupported file type".to_string())?;
-        lsp_state.restart_server(resolved_workspace_id, resolved_workspace_root, language)
-    }
-
-    pub fn lsp_server_logs(
-        &self,
-        lsp_state: &crate::lsp::LspState,
-        workspace_root: &str,
-        workspace_id: &str,
-    ) -> Result<Vec<String>, String> {
-        let (resolved_workspace_id, resolved_workspace_root) =
-            self.lsp_workspace_identity(workspace_root)?;
-        let _ = workspace_id;
-        Ok(lsp_state.server_logs(resolved_workspace_id, resolved_workspace_root))
     }
 
     fn active_workspace_root(&self) -> Result<PathBuf, String> {
@@ -1161,15 +925,6 @@ impl AppState {
     ) -> Result<crate::browser_preview::BrowserUrl, String> {
         crate::browser_preview::normalize_browser_url(value)
     }
-
-    pub fn capture_browser_preview(
-        &self,
-        workspace_root: &str,
-        request: crate::browser_preview::BrowserCaptureRequest,
-    ) -> Result<crate::browser_preview::BrowserScreenshot, String> {
-        let workspace_root = self.trusted_workspace_root(workspace_root)?;
-        crate::browser_preview::capture_preview(workspace_root.to_string_lossy(), request)
-    }
 }
 
 #[tauri::command]
@@ -1309,50 +1064,49 @@ pub fn list_diagnostic_events(
 }
 
 #[tauri::command]
-pub fn scan_workspace(
+pub async fn scan_workspace(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<Vec<FileTreeEntry>, String> {
-    scan_workspace_root(state.inner(), &path)
-}
-
-fn scan_workspace_root(state: &AppState, path: &str) -> Result<Vec<FileTreeEntry>, String> {
-    let workspace_root = state.trusted_workspace_root(path)?;
-    workspace_scan::scan_top_level(&workspace_root)
+    let workspace_root = state.trusted_workspace_root(&path)?;
+    run_blocking(move || workspace_scan::scan_top_level(&workspace_root)).await
 }
 
 #[tauri::command]
-pub fn scan_directory(
+pub async fn scan_directory(
     state: State<'_, AppState>,
     workspace_root: String,
     path: String,
 ) -> Result<Vec<FileTreeEntry>, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    workspace_scan::scan_directory(&workspace_root, Path::new(&path))
+    run_blocking(move || workspace_scan::scan_directory(&workspace_root, Path::new(&path))).await
 }
 
 #[tauri::command]
-pub fn search_workspace(
+pub async fn search_workspace(
     state: State<'_, AppState>,
     workspace_root: String,
     query: String,
 ) -> Result<WorkspaceSearchResult, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    crate::search::search_workspace(
-        &workspace_root,
-        &query,
-        100,
-        file_system::EDITABLE_TEXT_LIMIT_BYTES,
-    )
+    run_blocking(move || {
+        crate::search::search_workspace(
+            &workspace_root,
+            &query,
+            100,
+            file_system::EDITABLE_TEXT_LIMIT_BYTES,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn docs_index(
+pub async fn docs_index(
     state: State<'_, AppState>,
     workspace_root: String,
 ) -> Result<Vec<crate::docs::DocIndexEntry>, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    crate::docs::index_docs(&workspace_root)
+    run_blocking(move || crate::docs::index_docs(&workspace_root)).await
 }
 
 #[tauri::command]
@@ -1366,13 +1120,16 @@ pub fn docs_preview(
 }
 
 #[tauri::command]
-pub fn docs_search(
+pub async fn docs_search(
     state: State<'_, AppState>,
     workspace_root: String,
     query: String,
 ) -> Result<crate::docs::DocSearchResult, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    crate::docs::search_docs(&workspace_root, &query, crate::docs::MAX_DOC_SEARCH_RESULTS)
+    run_blocking(move || {
+        crate::docs::search_docs(&workspace_root, &query, crate::docs::MAX_DOC_SEARCH_RESULTS)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -1944,67 +1701,71 @@ pub fn browser_validate_url(
 }
 
 #[tauri::command]
-pub fn browser_capture_preview(
+pub async fn browser_capture_preview(
     state: State<'_, AppState>,
     workspace_root: String,
     request: crate::browser_preview::BrowserCaptureRequest,
 ) -> Result<crate::browser_preview::BrowserScreenshot, String> {
-    state.capture_browser_preview(&workspace_root, request)
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || {
+        crate::browser_preview::capture_preview(workspace_root.to_string_lossy(), request)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn git_status(
+pub async fn git_status(
     state: State<'_, AppState>,
     workspace_root: String,
 ) -> Result<crate::git::GitRepositoryStatus, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    crate::git::repository_status(&workspace_root)
+    run_blocking(move || crate::git::repository_status(&workspace_root)).await
 }
 
 #[tauri::command]
-pub fn git_diff_file(
+pub async fn git_diff_file(
     state: State<'_, AppState>,
     workspace_root: String,
     path: String,
     staged: bool,
 ) -> Result<crate::git::GitDiff, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    crate::git::diff_file(&workspace_root, &path, staged)
+    run_blocking(move || crate::git::diff_file(&workspace_root, &path, staged)).await
 }
 
 #[tauri::command]
-pub fn git_stage_paths(
+pub async fn git_stage_paths(
     state: State<'_, AppState>,
     workspace_root: String,
     paths: Vec<String>,
 ) -> Result<crate::git::GitRepositoryStatus, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    crate::git::stage_paths(&workspace_root, &paths)
+    run_blocking(move || crate::git::stage_paths(&workspace_root, &paths)).await
 }
 
 #[tauri::command]
-pub fn git_unstage_paths(
+pub async fn git_unstage_paths(
     state: State<'_, AppState>,
     workspace_root: String,
     paths: Vec<String>,
 ) -> Result<crate::git::GitRepositoryStatus, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    crate::git::unstage_paths(&workspace_root, &paths)
+    run_blocking(move || crate::git::unstage_paths(&workspace_root, &paths)).await
 }
 
 #[tauri::command]
-pub fn git_discard_paths(
+pub async fn git_discard_paths(
     state: State<'_, AppState>,
     workspace_root: String,
     paths: Vec<String>,
     confirmation: String,
 ) -> Result<crate::git::GitRepositoryStatus, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    crate::git::discard_paths(&workspace_root, &paths, &confirmation)
+    run_blocking(move || crate::git::discard_paths(&workspace_root, &paths, &confirmation)).await
 }
 
 #[tauri::command]
-pub fn git_commit(
+pub async fn git_commit(
     state: State<'_, AppState>,
     workspace_root: String,
     message: String,
@@ -2012,18 +1773,18 @@ pub fn git_commit(
     push_after: bool,
 ) -> Result<crate::git::GitRepositoryStatus, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    crate::git::commit(&workspace_root, &message, amend, push_after)
+    run_blocking(move || crate::git::commit(&workspace_root, &message, amend, push_after)).await
 }
 
 #[tauri::command]
-pub fn git_stash(
+pub async fn git_stash(
     state: State<'_, AppState>,
     workspace_root: String,
     message: String,
     include_untracked: bool,
 ) -> Result<crate::git::GitRepositoryStatus, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    crate::git::stash(&workspace_root, &message, include_untracked)
+    run_blocking(move || crate::git::stash(&workspace_root, &message, include_untracked)).await
 }
 
 #[tauri::command]
@@ -2036,82 +1797,82 @@ pub fn git_list_branches(
 }
 
 #[tauri::command]
-pub fn git_create_branch(
+pub async fn git_create_branch(
     state: State<'_, AppState>,
     workspace_root: String,
     name: String,
 ) -> Result<Vec<crate::git::GitBranch>, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    crate::git::create_branch(&workspace_root, &name)
+    run_blocking(move || crate::git::create_branch(&workspace_root, &name)).await
 }
 
 #[tauri::command]
-pub fn git_checkout_branch(
+pub async fn git_checkout_branch(
     state: State<'_, AppState>,
     workspace_root: String,
     name: String,
     confirmation: String,
 ) -> Result<crate::git::GitRepositoryStatus, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    crate::git::checkout_branch(&workspace_root, &name, &confirmation)
+    run_blocking(move || crate::git::checkout_branch(&workspace_root, &name, &confirmation)).await
 }
 
 #[tauri::command]
-pub fn git_fetch(
+pub async fn git_fetch(
     state: State<'_, AppState>,
     workspace_root: String,
 ) -> Result<crate::git::GitRepositoryStatus, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    crate::git::fetch(&workspace_root)
+    run_blocking(move || crate::git::fetch(&workspace_root)).await
 }
 
 #[tauri::command]
-pub fn git_pull(
+pub async fn git_pull(
     state: State<'_, AppState>,
     workspace_root: String,
 ) -> Result<crate::git::GitRepositoryStatus, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    crate::git::pull(&workspace_root)
+    run_blocking(move || crate::git::pull(&workspace_root)).await
 }
 
 #[tauri::command]
-pub fn git_push(
+pub async fn git_push(
     state: State<'_, AppState>,
     workspace_root: String,
 ) -> Result<crate::git::GitRepositoryStatus, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    crate::git::push(&workspace_root)
+    run_blocking(move || crate::git::push(&workspace_root)).await
 }
 
 #[tauri::command]
-pub fn git_commit_graph(
+pub async fn git_commit_graph(
     state: State<'_, AppState>,
     workspace_root: String,
     limit: usize,
 ) -> Result<Vec<crate::git::GitCommitSummary>, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    crate::git::commit_graph(&workspace_root, limit)
+    run_blocking(move || crate::git::commit_graph(&workspace_root, limit)).await
 }
 
 #[tauri::command]
-pub fn git_reset_hard(
+pub async fn git_reset_hard(
     state: State<'_, AppState>,
     workspace_root: String,
     confirmation: String,
 ) -> Result<crate::git::GitRepositoryStatus, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    crate::git::reset_hard(&workspace_root, &confirmation)
+    run_blocking(move || crate::git::reset_hard(&workspace_root, &confirmation)).await
 }
 
 #[tauri::command]
-pub fn git_rebase_onto(
+pub async fn git_rebase_onto(
     state: State<'_, AppState>,
     workspace_root: String,
     target: String,
     confirmation: String,
 ) -> Result<crate::git::GitRepositoryStatus, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    crate::git::rebase_onto(&workspace_root, &target, &confirmation)
+    run_blocking(move || crate::git::rebase_onto(&workspace_root, &target, &confirmation)).await
 }
 
 #[tauri::command]
@@ -2208,7 +1969,7 @@ pub fn list_workspace_tasks(
     clippy::too_many_arguments,
     reason = "Tauri command exposes the planned flat frontend API contract"
 )]
-pub fn run_workspace_task(
+pub async fn run_workspace_task(
     app: AppHandle,
     app_state: State<'_, AppState>,
     task_state: State<'_, TaskState>,
@@ -2222,7 +1983,8 @@ pub fn run_workspace_task(
     let workspace_id =
         app_state.ensure_workspace_id_matches_root_path(&workspace_id, &workspace_root)?;
     let cwd = file_system::workspace_child_for_existing_dir(&workspace_root, Path::new(&cwd))?;
-    task_state.run_task(app, workspace_id, label, command, cwd)
+    let tasks = task_state.inner().clone();
+    run_blocking(move || tasks.run_task(app, workspace_id, label, command, cwd)).await
 }
 
 #[tauri::command]
@@ -2248,21 +2010,24 @@ pub fn metric_snapshot(
 }
 
 #[tauri::command]
-pub fn read_text_file(
+pub async fn read_text_file(
     state: State<'_, AppState>,
     workspace_root: String,
     path: String,
 ) -> Result<TextFileRead, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    file_system::read_text_file(
-        &workspace_root,
-        Path::new(&path),
-        file_system::EDITABLE_TEXT_LIMIT_BYTES,
-    )
+    run_blocking(move || {
+        file_system::read_text_file(
+            &workspace_root,
+            Path::new(&path),
+            file_system::EDITABLE_TEXT_LIMIT_BYTES,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn write_text_file(
+pub async fn write_text_file(
     state: State<'_, AppState>,
     workspace_root: String,
     path: String,
@@ -2270,12 +2035,15 @@ pub fn write_text_file(
     expected_version: Option<FileVersion>,
 ) -> Result<FileOperationResult, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
-    file_system::write_text_file(
-        &workspace_root,
-        Path::new(&path),
-        &content,
-        expected_version,
-    )
+    run_blocking(move || {
+        file_system::write_text_file(
+            &workspace_root,
+            Path::new(&path),
+            &content,
+            expected_version,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
@@ -2342,16 +2110,18 @@ fn current_time_ms() -> Result<u64, String> {
 }
 
 #[tauri::command]
-pub fn lsp_server_status(
+pub async fn lsp_server_status(
     state: State<'_, AppState>,
     lsp_state: State<'_, crate::lsp::LspState>,
     workspace_root: String,
 ) -> Result<Vec<crate::lsp::LanguageServerStatus>, String> {
-    state.lsp_server_status(&lsp_state, &workspace_root)
+    let (workspace_id, workspace_root) = state.lsp_workspace_identity(&workspace_root)?;
+    let lsp = lsp_state.inner().clone();
+    run_blocking(move || Ok(lsp.statuses(workspace_id, workspace_root))).await
 }
 
 #[tauri::command]
-pub fn lsp_open_document(
+pub async fn lsp_open_document(
     state: State<'_, AppState>,
     lsp_state: State<'_, crate::lsp::LspState>,
     workspace_root: String,
@@ -2359,43 +2129,58 @@ pub fn lsp_open_document(
     path: String,
     content: String,
 ) -> Result<crate::lsp::LanguageServerStatus, String> {
-    state.lsp_open_document(&lsp_state, &workspace_root, &workspace_id, path, content)
+    let _ = workspace_id;
+    let (workspace_id, workspace_root) = state.lsp_workspace_identity(&workspace_root)?;
+    let path = normalize_lsp_document_path(&path)?;
+    let lsp = lsp_state.inner().clone();
+    run_blocking(move || lsp.open_document(workspace_id, workspace_root, path, content)).await
 }
 
 #[tauri::command]
-pub fn lsp_close_document(
+pub async fn lsp_close_document(
     state: State<'_, AppState>,
     lsp_state: State<'_, crate::lsp::LspState>,
     workspace_root: String,
     workspace_id: String,
     path: String,
 ) -> Result<crate::lsp::LanguageServerStatus, String> {
-    state.lsp_close_document(&lsp_state, &workspace_root, &workspace_id, path)
+    let _ = workspace_id;
+    let (workspace_id, workspace_root) = state.lsp_workspace_identity(&workspace_root)?;
+    let path = normalize_lsp_document_path(&path)?;
+    let lsp = lsp_state.inner().clone();
+    run_blocking(move || lsp.close_document(workspace_id, workspace_root, path)).await
 }
 
 #[tauri::command]
-pub fn lsp_document_diagnostics(
+pub async fn lsp_document_diagnostics(
     state: State<'_, AppState>,
     lsp_state: State<'_, crate::lsp::LspState>,
     workspace_root: String,
     workspace_id: String,
     path: String,
 ) -> Result<Vec<crate::lsp::LspDiagnostic>, String> {
-    state.lsp_document_diagnostics(&lsp_state, &workspace_root, &workspace_id, path)
+    let _ = workspace_id;
+    let (workspace_id, workspace_root) = state.lsp_workspace_identity(&workspace_root)?;
+    let path = normalize_lsp_document_path(&path)?;
+    let lsp = lsp_state.inner().clone();
+    run_blocking(move || Ok(lsp.document_diagnostics(&workspace_id, &workspace_root, &path))).await
 }
 
 #[tauri::command]
-pub fn lsp_workspace_diagnostics(
+pub async fn lsp_workspace_diagnostics(
     state: State<'_, AppState>,
     lsp_state: State<'_, crate::lsp::LspState>,
     workspace_root: String,
     workspace_id: String,
 ) -> Result<Vec<crate::lsp::LspDiagnostic>, String> {
-    state.lsp_workspace_diagnostics(&lsp_state, &workspace_root, &workspace_id)
+    let _ = workspace_id;
+    let (workspace_id, workspace_root) = state.lsp_workspace_identity(&workspace_root)?;
+    let lsp = lsp_state.inner().clone();
+    run_blocking(move || Ok(lsp.workspace_diagnostics(&workspace_id, &workspace_root))).await
 }
 
 #[tauri::command]
-pub fn lsp_hover(
+pub async fn lsp_hover(
     state: State<'_, AppState>,
     lsp_state: State<'_, crate::lsp::LspState>,
     workspace_root: String,
@@ -2404,18 +2189,15 @@ pub fn lsp_hover(
     _line: u32,
     _character: u32,
 ) -> Result<serde_json::Value, String> {
-    state.lsp_hover(
-        &lsp_state,
-        &workspace_root,
-        &workspace_id,
-        path,
-        _line,
-        _character,
-    )
+    let _ = workspace_id;
+    let (workspace_id, workspace_root) = state.lsp_workspace_identity(&workspace_root)?;
+    let path = normalize_lsp_document_path(&path)?;
+    let lsp = lsp_state.inner().clone();
+    run_blocking(move || lsp.hover(workspace_id, workspace_root, path, _line, _character)).await
 }
 
 #[tauri::command]
-pub fn lsp_definition(
+pub async fn lsp_definition(
     state: State<'_, AppState>,
     lsp_state: State<'_, crate::lsp::LspState>,
     workspace_root: String,
@@ -2424,18 +2206,16 @@ pub fn lsp_definition(
     _line: u32,
     _character: u32,
 ) -> Result<Vec<serde_json::Value>, String> {
-    state.lsp_definition(
-        &lsp_state,
-        &workspace_root,
-        &workspace_id,
-        path,
-        _line,
-        _character,
-    )
+    let _ = workspace_id;
+    let (workspace_id, workspace_root) = state.lsp_workspace_identity(&workspace_root)?;
+    let path = normalize_lsp_document_path(&path)?;
+    let lsp = lsp_state.inner().clone();
+    run_blocking(move || lsp.definition(workspace_id, workspace_root, path, _line, _character))
+        .await
 }
 
 #[tauri::command]
-pub fn lsp_references(
+pub async fn lsp_references(
     state: State<'_, AppState>,
     lsp_state: State<'_, crate::lsp::LspState>,
     workspace_root: String,
@@ -2444,18 +2224,16 @@ pub fn lsp_references(
     _line: u32,
     _character: u32,
 ) -> Result<Vec<serde_json::Value>, String> {
-    state.lsp_references(
-        &lsp_state,
-        &workspace_root,
-        &workspace_id,
-        path,
-        _line,
-        _character,
-    )
+    let _ = workspace_id;
+    let (workspace_id, workspace_root) = state.lsp_workspace_identity(&workspace_root)?;
+    let path = normalize_lsp_document_path(&path)?;
+    let lsp = lsp_state.inner().clone();
+    run_blocking(move || lsp.references(workspace_id, workspace_root, path, _line, _character))
+        .await
 }
 
 #[tauri::command]
-pub fn lsp_completion(
+pub async fn lsp_completion(
     state: State<'_, AppState>,
     lsp_state: State<'_, crate::lsp::LspState>,
     workspace_root: String,
@@ -2464,18 +2242,16 @@ pub fn lsp_completion(
     _line: u32,
     _character: u32,
 ) -> Result<serde_json::Value, String> {
-    state.lsp_completion(
-        &lsp_state,
-        &workspace_root,
-        &workspace_id,
-        path,
-        _line,
-        _character,
-    )
+    let _ = workspace_id;
+    let (workspace_id, workspace_root) = state.lsp_workspace_identity(&workspace_root)?;
+    let path = normalize_lsp_document_path(&path)?;
+    let lsp = lsp_state.inner().clone();
+    run_blocking(move || lsp.completion(workspace_id, workspace_root, path, _line, _character))
+        .await
 }
 
 #[tauri::command]
-pub fn lsp_code_actions(
+pub async fn lsp_code_actions(
     state: State<'_, AppState>,
     lsp_state: State<'_, crate::lsp::LspState>,
     workspace_root: String,
@@ -2484,24 +2260,25 @@ pub fn lsp_code_actions(
     _line: u32,
     _character: u32,
 ) -> Result<Vec<serde_json::Value>, String> {
-    state.lsp_code_actions(
-        &lsp_state,
-        &workspace_root,
-        &workspace_id,
-        path,
-        _line,
-        _character,
-    )
+    let _ = workspace_id;
+    let (workspace_id, workspace_root) = state.lsp_workspace_identity(&workspace_root)?;
+    let path = normalize_lsp_document_path(&path)?;
+    let lsp = lsp_state.inner().clone();
+    run_blocking(move || lsp.code_actions(workspace_id, workspace_root, path, _line, _character))
+        .await
 }
 
 #[tauri::command]
-pub fn lsp_symbols(
+pub async fn lsp_symbols(
     state: State<'_, AppState>,
     lsp_state: State<'_, crate::lsp::LspState>,
     workspace_root: String,
     workspace_id: String,
 ) -> Result<Vec<serde_json::Value>, String> {
-    state.lsp_symbols(&lsp_state, &workspace_root, &workspace_id)
+    let _ = workspace_id;
+    let (workspace_id, workspace_root) = state.lsp_workspace_identity(&workspace_root)?;
+    let lsp = lsp_state.inner().clone();
+    run_blocking(move || lsp.symbols(workspace_id, workspace_root)).await
 }
 
 #[tauri::command]
@@ -2509,7 +2286,7 @@ pub fn lsp_symbols(
     clippy::too_many_arguments,
     reason = "Tauri command exposes the planned flat frontend API contract"
 )]
-pub fn lsp_rename(
+pub async fn lsp_rename(
     state: State<'_, AppState>,
     lsp_state: State<'_, crate::lsp::LspState>,
     workspace_root: String,
@@ -2519,36 +2296,51 @@ pub fn lsp_rename(
     _character: u32,
     new_name: String,
 ) -> Result<serde_json::Value, String> {
-    state.lsp_rename(
-        &lsp_state,
-        &workspace_root,
-        &workspace_id,
-        path,
-        _line,
-        _character,
-        new_name,
-    )
+    let _ = workspace_id;
+    let (workspace_id, workspace_root) = state.lsp_workspace_identity(&workspace_root)?;
+    let path = normalize_lsp_document_path(&path)?;
+    let lsp = lsp_state.inner().clone();
+    run_blocking(move || {
+        lsp.rename(
+            workspace_id,
+            workspace_root,
+            path,
+            _line,
+            _character,
+            new_name,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn lsp_restart_server(
+pub async fn lsp_restart_server(
     state: State<'_, AppState>,
     lsp_state: State<'_, crate::lsp::LspState>,
     workspace_root: String,
     workspace_id: String,
     path: String,
 ) -> Result<crate::lsp::LanguageServerStatus, String> {
-    state.lsp_restart_server(&lsp_state, &workspace_root, &workspace_id, path)
+    let _ = workspace_id;
+    let (workspace_id, workspace_root) = state.lsp_workspace_identity(&workspace_root)?;
+    let path = normalize_lsp_document_path(&path)?;
+    let language =
+        crate::lsp::detect_language(&path).ok_or_else(|| "unsupported file type".to_string())?;
+    let lsp = lsp_state.inner().clone();
+    run_blocking(move || lsp.restart_server(workspace_id, workspace_root, language)).await
 }
 
 #[tauri::command]
-pub fn lsp_server_logs(
+pub async fn lsp_server_logs(
     state: State<'_, AppState>,
     lsp_state: State<'_, crate::lsp::LspState>,
     workspace_root: String,
     workspace_id: String,
 ) -> Result<Vec<String>, String> {
-    state.lsp_server_logs(&lsp_state, &workspace_root, &workspace_id)
+    let _ = workspace_id;
+    let (workspace_id, workspace_root) = state.lsp_workspace_identity(&workspace_root)?;
+    let lsp = lsp_state.inner().clone();
+    run_blocking(move || Ok(lsp.server_logs(workspace_id, workspace_root))).await
 }
 
 #[cfg(test)]
@@ -2890,7 +2682,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_workspace_root_uses_trusted_canonical_root() {
+    fn workspace_scan_uses_trusted_canonical_root() {
         let config = tempdir().expect("config dir");
         let state = AppState::new(config.path()).expect("state");
         let workspace_path = config.path().join("project-a");
@@ -2903,9 +2695,10 @@ mod tests {
             .expect("open workspace");
 
         let lexical_workspace = workspace_path.join(".");
-        let entries =
-            super::scan_workspace_root(&state, lexical_workspace.to_str().expect("workspace path"))
-                .expect("scan workspace");
+        let trusted_root = state
+            .trusted_workspace_root(lexical_workspace.to_str().expect("workspace path"))
+            .expect("trusted root");
+        let entries = workspace_scan::scan_top_level(&trusted_root).expect("scan workspace");
 
         assert_eq!(entries.len(), 1);
         assert_eq!(
@@ -2915,18 +2708,6 @@ mod tests {
                 .expect("canonical")
                 .join("src"),
         );
-    }
-
-    #[test]
-    fn scan_workspace_root_rejects_unregistered_workspace() {
-        let config = tempdir().expect("config dir");
-        let unregistered = tempdir().expect("unregistered workspace");
-        let state = AppState::new(config.path()).expect("state");
-
-        let result =
-            super::scan_workspace_root(&state, unregistered.path().to_str().expect("path"));
-
-        assert!(result.unwrap_err().contains("workspace not registered"));
     }
 
     #[test]
@@ -2996,8 +2777,9 @@ mod tests {
 
     #[test]
     fn run_workspace_task_preserves_flat_command_signature() {
-        type FlatRunWorkspaceTaskCommand =
-            for<'app_state, 'task_state> fn(
+        fn assert_flat_signature<F>(_command: F)
+        where
+            F: for<'app_state, 'task_state> AsyncFn(
                 AppHandle,
                 State<'app_state, AppState>,
                 State<'task_state, crate::tasks::TaskState>,
@@ -3006,9 +2788,10 @@ mod tests {
                 String,
                 String,
                 String,
-            ) -> Result<crate::tasks::TaskRun, String>;
-
-        fn assert_flat_signature(_command: FlatRunWorkspaceTaskCommand) {}
+            )
+                -> Result<crate::tasks::TaskRun, String>,
+        {
+        }
 
         assert_flat_signature(super::run_workspace_task);
     }
@@ -4134,42 +3917,22 @@ mod tests {
     }
 
     #[test]
-    fn capture_browser_preview_rejects_unregistered_workspace_before_capture() {
-        let config = tempdir().expect("config dir");
-        let unregistered = tempdir().expect("unregistered workspace");
-        let state = AppState::new(config.path()).expect("state");
-
-        let result = state.capture_browser_preview(
-            unregistered.path().to_str().expect("unregistered path"),
-            crate::browser_preview::BrowserCaptureRequest {
-                url: "localhost:5173".to_string(),
-                title: "local".to_string(),
-                bounds: crate::browser_preview::BrowserCaptureBounds {
-                    x: 0,
-                    y: 0,
-                    width: 10,
-                    height: 10,
-                },
-            },
-        );
-
-        assert!(result.unwrap_err().contains("workspace not registered"));
-    }
-
-    #[test]
     fn lsp_open_document_preserves_flat_command_signature() {
-        type FlatOpenDocumentCommand =
-            for<'app_state, 'lsp_state> fn(
+        fn assert_flat_signature<F>(_command: F)
+        where
+            F: for<'app_state, 'lsp_state> AsyncFn(
                 State<'app_state, AppState>,
                 State<'lsp_state, crate::lsp::LspState>,
                 String,
                 String,
                 String,
                 String,
-            )
-                -> Result<crate::lsp::LanguageServerStatus, String>;
-
-        fn assert_flat_signature(_command: FlatOpenDocumentCommand) {}
+            ) -> Result<
+                crate::lsp::LanguageServerStatus,
+                String,
+            >,
+        {
+        }
 
         assert_flat_signature(super::lsp_open_document);
     }
@@ -4269,13 +4032,10 @@ mod tests {
     fn lsp_status_rejects_unregistered_workspace() {
         let config = tempfile::tempdir().expect("config dir");
         let state = AppState::new(config.path()).expect("state");
-        let lsp_state = crate::lsp::LspState::new_for_tests();
         let unregistered_workspace = tempfile::tempdir().expect("unregistered workspace");
 
-        let result = state.lsp_server_status(
-            &lsp_state,
-            unregistered_workspace.path().to_str().expect("path"),
-        );
+        let result =
+            state.lsp_workspace_identity(unregistered_workspace.path().to_str().expect("path"));
 
         assert!(result.unwrap_err().contains("workspace not registered"));
     }
@@ -4287,22 +4047,18 @@ mod tests {
         let lsp_state = crate::lsp::LspState::new_for_tests();
         let workspace = tempfile::tempdir().expect("workspace");
         let workspace_root = workspace.path().to_str().expect("workspace path");
-        let registry = state
+        state
             .open_workspace_path(workspace.path().to_path_buf())
             .expect("open workspace");
-        let workspace_id = registry.active_workspace_id.expect("active workspace");
-        let trusted_root = state
-            .trusted_workspace_root(workspace_root)
-            .expect("trusted root")
-            .to_string_lossy()
-            .to_string();
+        let (workspace_id, trusted_root) = state
+            .lsp_workspace_identity(workspace_root)
+            .expect("workspace identity");
 
-        state
-            .lsp_open_document(
-                &lsp_state,
-                workspace_root,
-                &workspace_id,
-                "src/main.rs".to_string(),
+        lsp_state
+            .open_document(
+                workspace_id.clone(),
+                trusted_root.clone(),
+                normalize_lsp_document_path("src/main.rs").expect("path"),
                 "fn main() {}".to_string(),
             )
             .expect("open document");
@@ -4312,12 +4068,11 @@ mod tests {
             crate::lsp::ServerState::Stopped
         );
 
-        state
-            .lsp_hover(
-                &lsp_state,
-                workspace_root,
-                &workspace_id,
-                "src/main.rs".to_string(),
+        lsp_state
+            .hover(
+                workspace_id.clone(),
+                trusted_root.clone(),
+                normalize_lsp_document_path("src/main.rs").expect("path"),
                 0,
                 1,
             )
@@ -4330,208 +4085,30 @@ mod tests {
     }
 
     #[test]
-    fn all_lsp_commands_reject_unregistered_workspaces() {
+    fn lsp_commands_share_the_unregistered_workspace_gate() {
         let config = tempfile::tempdir().expect("config dir");
         let state = AppState::new(config.path()).expect("state");
-        let lsp_state = crate::lsp::LspState::new_for_tests();
         let unregistered_workspace = tempfile::tempdir().expect("unregistered workspace");
         let workspace_root = unregistered_workspace.path().to_str().expect("path");
-        let workspace_id = "workspace";
 
-        let results = [
-            (
-                "status",
-                state
-                    .lsp_server_status(&lsp_state, workspace_root)
-                    .map(|_| ()),
-            ),
-            (
-                "open",
-                state
-                    .lsp_open_document(
-                        &lsp_state,
-                        workspace_root,
-                        workspace_id,
-                        "src/main.rs".to_string(),
-                        "fn main() {}".to_string(),
-                    )
-                    .map(|_| ()),
-            ),
-            (
-                "close",
-                state
-                    .lsp_close_document(
-                        &lsp_state,
-                        workspace_root,
-                        workspace_id,
-                        "src/main.rs".to_string(),
-                    )
-                    .map(|_| ()),
-            ),
-            (
-                "document diagnostics",
-                state
-                    .lsp_document_diagnostics(
-                        &lsp_state,
-                        workspace_root,
-                        workspace_id,
-                        "src/main.rs".to_string(),
-                    )
-                    .map(|_| ()),
-            ),
-            (
-                "workspace diagnostics",
-                state
-                    .lsp_workspace_diagnostics(&lsp_state, workspace_root, workspace_id)
-                    .map(|_| ()),
-            ),
-            (
-                "hover",
-                state
-                    .lsp_hover(
-                        &lsp_state,
-                        workspace_root,
-                        workspace_id,
-                        "src/main.rs".to_string(),
-                        1,
-                        1,
-                    )
-                    .map(|_| ()),
-            ),
-            (
-                "definition",
-                state
-                    .lsp_definition(
-                        &lsp_state,
-                        workspace_root,
-                        workspace_id,
-                        "src/main.rs".to_string(),
-                        1,
-                        1,
-                    )
-                    .map(|_| ()),
-            ),
-            (
-                "references",
-                state
-                    .lsp_references(
-                        &lsp_state,
-                        workspace_root,
-                        workspace_id,
-                        "src/main.rs".to_string(),
-                        1,
-                        1,
-                    )
-                    .map(|_| ()),
-            ),
-            (
-                "completion",
-                state
-                    .lsp_completion(
-                        &lsp_state,
-                        workspace_root,
-                        workspace_id,
-                        "src/main.rs".to_string(),
-                        1,
-                        1,
-                    )
-                    .map(|_| ()),
-            ),
-            (
-                "code actions",
-                state
-                    .lsp_code_actions(
-                        &lsp_state,
-                        workspace_root,
-                        workspace_id,
-                        "src/main.rs".to_string(),
-                        1,
-                        1,
-                    )
-                    .map(|_| ()),
-            ),
-            (
-                "symbols",
-                state
-                    .lsp_symbols(&lsp_state, workspace_root, workspace_id)
-                    .map(|_| ()),
-            ),
-            (
-                "rename",
-                state
-                    .lsp_rename(
-                        &lsp_state,
-                        workspace_root,
-                        workspace_id,
-                        "src/main.rs".to_string(),
-                        1,
-                        1,
-                        "renamed".to_string(),
-                    )
-                    .map(|_| ()),
-            ),
-            (
-                "restart",
-                state
-                    .lsp_restart_server(
-                        &lsp_state,
-                        workspace_root,
-                        workspace_id,
-                        "src/main.rs".to_string(),
-                    )
-                    .map(|_| ()),
-            ),
-            (
-                "logs",
-                state
-                    .lsp_server_logs(&lsp_state, workspace_root, workspace_id)
-                    .map(|_| ()),
-            ),
-        ];
+        // Every lsp_* command resolves its workspace through
+        // lsp_workspace_identity before touching the language server state.
+        let result = state.lsp_workspace_identity(workspace_root);
 
-        for (name, result) in results {
-            assert!(
-                result
-                    .expect_err("command should reject unregistered workspace")
-                    .contains("workspace not registered"),
-                "{name} did not reject unregistered workspace"
-            );
-        }
+        assert!(result
+            .expect_err("identity gate should reject unregistered workspace")
+            .contains("workspace not registered"));
     }
 
     #[test]
-    fn lsp_open_document_rejects_paths_that_escape_workspace() {
-        let config = tempfile::tempdir().expect("config dir");
-        let state = AppState::new(config.path()).expect("state");
-        let lsp_state = crate::lsp::LspState::new_for_tests();
-        let workspace = config.path().join("project-a");
-        std::fs::create_dir_all(workspace.join("src")).expect("workspace");
-        state
-            .open_workspace_path(workspace.clone())
-            .expect("open workspace");
-        let workspace_root = workspace
-            .canonicalize()
-            .expect("canonical")
-            .to_string_lossy()
-            .to_string();
-
+    fn lsp_document_paths_that_escape_workspace_are_rejected() {
         for path in ["../outside.rs", "/tmp/outside.rs", "src/../main.rs"] {
-            let result = state.lsp_open_document(
-                &lsp_state,
-                &workspace_root,
-                "project-a",
-                path.to_string(),
-                "fn main() {}".to_string(),
-            );
+            let result = normalize_lsp_document_path(path);
 
             assert!(result
                 .expect_err("path should be rejected")
                 .contains("document path escapes workspace"));
         }
-        assert!(state
-            .lsp_server_status(&lsp_state, &workspace_root)
-            .expect("status")
-            .is_empty());
     }
 
     #[test]

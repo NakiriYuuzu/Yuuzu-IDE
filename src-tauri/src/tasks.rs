@@ -254,6 +254,7 @@ impl TaskProcess {
     }
 }
 
+#[derive(Clone)]
 pub struct TaskState {
     registry: Arc<Mutex<TaskRunRegistry>>,
     processes: Arc<Mutex<HashMap<String, TaskProcess>>>,
