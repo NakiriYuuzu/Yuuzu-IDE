@@ -6576,7 +6576,7 @@ export function AppShell() {
         sessionId: event.session_id,
         threadId,
       });
-      if (!isCurrentDebugSessionSequence(workspaceId, event)) {
+      if (!isCurrentDebugStoppedRefresh(workspaceId, event)) {
         return;
       }
 
@@ -6606,7 +6606,7 @@ export function AppShell() {
           continue;
         }
 
-        if (!isCurrentDebugSessionSequence(workspaceId, event)) {
+        if (!isCurrentDebugStoppedRefresh(workspaceId, event)) {
           return;
         }
 
@@ -6624,7 +6624,7 @@ export function AppShell() {
               sessionId: event.session_id,
               variablesReference: scope.variables_reference,
             });
-            if (!isCurrentDebugSessionSequence(workspaceId, event)) {
+            if (!isCurrentDebugStoppedRefresh(workspaceId, event)) {
               return;
             }
             variablesByReference[scope.variables_reference] = variables;
@@ -6634,7 +6634,7 @@ export function AppShell() {
         }
       }
 
-      if (!isCurrentDebugSessionSequence(workspaceId, event)) {
+      if (!isCurrentDebugStoppedRefresh(workspaceId, event)) {
         return;
       }
 
@@ -6652,12 +6652,16 @@ export function AppShell() {
     }
   }
 
-  function isCurrentDebugSessionSequence(
+  function isCurrentDebugStoppedRefresh(
     workspaceId: string,
     event: DebugSessionEvent,
   ) {
     const debug = workspaceViewStore.getState().viewFor(workspaceId).debug;
-    return debug.sessionSequenceById[event.session_id] === event.sequence;
+    return (
+      hasRegisteredWorkspace(workspaceId) &&
+      getWorkspaceRoot(workspaceId) === event.workspace_root &&
+      debug.sessionSequenceById[event.session_id] === event.sequence
+    );
   }
 
   function runCommand(id: string) {

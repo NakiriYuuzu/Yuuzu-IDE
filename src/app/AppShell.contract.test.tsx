@@ -1988,6 +1988,78 @@ describe("AppShell AppShell helpers", () => {
     expect(debug.variablesByReference[`${sessionId}:100`]).toBeUndefined();
   });
 
+  test("AppShell drops stopped stack refresh when workspace root changes before stack resolves", async () => {
+    const workspaceId = "debug-stopped-root-switch";
+    const workspaceRoot = "/repo-debug-stopped-root-switch";
+    const sessionId = "session-root-switch";
+    const stackFrames = createDeferred<DebugStackFrame[]>();
+    const { tauri } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot,
+      debugStackFrames: stackFrames.promise,
+      debugScopesByFrameId: {
+        7: [{ name: "Locals", variables_reference: 100, expensive: false }],
+      },
+      debugVariablesByReference: {
+        100: [
+          {
+            name: "counter",
+            value: "3",
+            type: "int",
+            variables_reference: 0,
+          },
+        ],
+      },
+    });
+
+    await act(async () => {
+      tauri.emit("workspace://debug-stopped", {
+        session_id: sessionId,
+        workspace_id: workspaceId,
+        workspace_root: workspaceRoot,
+        sequence: 2,
+        status: "Stopped",
+        reason: "breakpoint",
+        thread_id: 11,
+        active_thread_id: 11,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    await act(async () => {
+      workspaceStore.getState().setRegistry({
+        active_workspace_id: workspaceId,
+        workspaces: [
+          {
+            id: workspaceId,
+            path: `${workspaceRoot}-switched`,
+            name: workspaceId,
+            pinned: false,
+          },
+        ],
+      });
+      stackFrames.resolve([
+        {
+          id: 7,
+          name: "main",
+          source_path: "src/app.py",
+          line: 12,
+          column: 1,
+        },
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await flushAppShellEffects();
+
+    const debug = workspaceViewStore.getState().viewFor(workspaceId).debug;
+    expect(debug.sessionSequenceById[sessionId]).toBe(2);
+    expect(debug.stackBySessionId[sessionId]).toBeUndefined();
+    expect(
+      tauri.invokeCalls.filter((call) => call.command === "debug_scopes"),
+    ).toHaveLength(0);
+    expect(debug.variablesByReference[`${sessionId}:100`]).toBeUndefined();
+  });
+
   test("AppShell replaces stale session variables when a newer stopped refresh has missing variables", async () => {
     const workspaceId = "debug-stopped-replace-variables";
     const workspaceRoot = "/repo-debug-stopped-replace-variables";
