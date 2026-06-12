@@ -3781,3 +3781,51 @@ button.debug-row {
     border-bottom: 1px solid var(--line);
   }
 }
+
+.extension-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.extension-row,
+.extension-contribution-row {
+  align-items: center;
+  min-height: 34px;
+}
+
+.extension-row-main,
+.extension-contribution-main {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.extension-row-title,
+.extension-contribution-title {
+  color: var(--txt);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.extension-row-sub,
+.extension-contribution-sub {
+  color: var(--txt-faint);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.extension-detail {
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}
+
+.extension-slow {
+  color: var(--yuzu);
+}
