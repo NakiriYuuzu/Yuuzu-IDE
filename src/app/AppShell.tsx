@@ -37,7 +37,9 @@ import {
   continueDebugSession,
   disconnectDebugSession,
   evaluateDebugExpression,
+  getDebugScopes,
   getDebugStackTrace,
+  getDebugVariables,
   listDebugLaunchConfigs,
   listDebugSessions,
   listenDebugConsole,
@@ -64,7 +66,9 @@ import {
   setDebugBreakpoints,
   setDebugError,
   setDebugMode,
+  setDebugScopes,
   setDebugStack,
+  storeDebugVariables,
   toggleDebugBreakpoint,
   updateDebugWatchResult,
   type DebugLaunchConfig,
@@ -6574,17 +6578,74 @@ export function AppShell() {
         sessionId: event.session_id,
         threadId,
       });
-      const debug = workspaceViewStore.getState().viewFor(workspaceId).debug;
-      if (debug.sessionSequenceById[event.session_id] !== event.sequence) {
+      if (!isCurrentDebugSessionSequence(workspaceId, event)) {
         return;
       }
 
       updateDebug(workspaceId, (state) =>
         setDebugStack(state, event.session_id, frames),
       );
+
+      for (const frame of frames) {
+        let scopes: Awaited<ReturnType<typeof getDebugScopes>>;
+        try {
+          scopes = await getDebugScopes({
+            workspaceId,
+            workspaceRoot: event.workspace_root,
+            sessionId: event.session_id,
+            frameId: frame.id,
+          });
+        } catch {
+          continue;
+        }
+
+        if (!isCurrentDebugSessionSequence(workspaceId, event)) {
+          return;
+        }
+
+        updateDebug(workspaceId, (state) =>
+          setDebugScopes(state, event.session_id, frame.id, scopes),
+        );
+
+        for (const scope of scopes) {
+          if (scope.variables_reference === 0) {
+            continue;
+          }
+
+          try {
+            const variables = await getDebugVariables({
+              workspaceId,
+              workspaceRoot: event.workspace_root,
+              sessionId: event.session_id,
+              variablesReference: scope.variables_reference,
+            });
+            if (!isCurrentDebugSessionSequence(workspaceId, event)) {
+              return;
+            }
+            updateDebug(workspaceId, (state) =>
+              storeDebugVariables(
+                state,
+                event.session_id,
+                scope.variables_reference,
+                variables,
+              ),
+            );
+          } catch {
+            // Variable refresh is best-effort per scope.
+          }
+        }
+      }
     } catch {
       // Stack refresh is best-effort; session event state remains authoritative.
     }
+  }
+
+  function isCurrentDebugSessionSequence(
+    workspaceId: string,
+    event: DebugSessionEvent,
+  ) {
+    const debug = workspaceViewStore.getState().viewFor(workspaceId).debug;
+    return debug.sessionSequenceById[event.session_id] === event.sequence;
   }
 
   function runCommand(id: string) {
