@@ -2314,6 +2314,80 @@ describe("AppShell AppShell helpers", () => {
     expect(renderResult.getByLabelText("Disable Debug Tools")).toBeTruthy();
   });
 
+  test("AppShell ignores stale cross-extension toggle snapshots for the same workspace", async () => {
+    const workspaceId = "extensions-toggle-cross-stale";
+    const workspaceRoot = "/repo-extensions-toggle-cross-stale";
+    const alphaResponse = createDeferred<ExtensionWorkspaceStatus[]>();
+    const betaResponse = createDeferred<ExtensionWorkspaceStatus[]>();
+    const { renderResult } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot,
+      extensionStatuses: [
+        extensionStatus({
+          id: "yuuzu.alpha-tools",
+          name: "Alpha Tools",
+          enabled: true,
+        }),
+        extensionStatus({
+          id: "yuuzu.beta-tools",
+          name: "Beta Tools",
+          enabled: true,
+        }),
+      ],
+      setExtensionEnabledResponses: [alphaResponse.promise, betaResponse.promise],
+    });
+
+    fireEvent.click(renderResult.getByRole("button", { name: "Extensions" }));
+    await flushAppShellEffects();
+
+    fireEvent.click(renderResult.getByLabelText("Disable Alpha Tools"));
+    expect(renderResult.getByLabelText("Enable Alpha Tools")).toBeTruthy();
+
+    fireEvent.click(renderResult.getByLabelText("Disable Beta Tools"));
+    expect(renderResult.getByLabelText("Enable Beta Tools")).toBeTruthy();
+
+    await act(async () => {
+      betaResponse.resolve([
+        extensionStatus({
+          id: "yuuzu.alpha-tools",
+          name: "Alpha Tools",
+          enabled: false,
+        }),
+        extensionStatus({
+          id: "yuuzu.beta-tools",
+          name: "Beta Tools",
+          enabled: false,
+        }),
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await flushAppShellEffects();
+
+    await act(async () => {
+      alphaResponse.resolve([
+        extensionStatus({
+          id: "yuuzu.alpha-tools",
+          name: "Alpha Tools",
+          enabled: false,
+        }),
+        extensionStatus({
+          id: "yuuzu.beta-tools",
+          name: "Beta Tools",
+          enabled: true,
+        }),
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await flushAppShellEffects();
+
+    const extension = workspaceViewStore.getState().viewFor(workspaceId).extension;
+    const beta = extension.statuses.find(
+      (status) => status.manifest.id === "yuuzu.beta-tools",
+    );
+    expect(beta?.enabled).toBe(false);
+    expect(renderResult.getByLabelText("Enable Beta Tools")).toBeTruthy();
+  });
+
   test("AppShell stopped listener loads live scopes and variables for DebugPanel", async () => {
     const workspaceId = "debug-stopped-variables";
     const workspaceRoot = "/repo-debug-stopped-variables";
