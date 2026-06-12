@@ -25,6 +25,7 @@ pub struct AppState {
     registry_store: WorkspaceRegistryStore,
     settings: Mutex<AppSettings>,
     settings_store: SettingsStore,
+    recovery_store: crate::recovery::RecoveryStore,
     docs_store: crate::docs::ContextPackStore,
     agent_store: crate::agent::AgentSessionStore,
     database_profiles: crate::database::DatabaseProfileStore,
@@ -43,6 +44,8 @@ impl AppState {
         let registry = registry_store.load()?;
         let settings_store = SettingsStore::new(config_dir.as_ref().join("settings.json"));
         let settings = settings_store.load()?;
+        let recovery_store =
+            crate::recovery::RecoveryStore::new(config_dir.as_ref().join("unsaved-backups"));
         let docs_store =
             crate::docs::ContextPackStore::new(config_dir.as_ref().join("context-packs.json"));
         let agent_store =
@@ -69,6 +72,7 @@ impl AppState {
             registry_store,
             settings: Mutex::new(settings),
             settings_store,
+            recovery_store,
             docs_store,
             agent_store,
             database_profiles,
@@ -149,6 +153,55 @@ impl AppState {
         } else {
             Err("workspace id does not match workspace root".to_string())
         }
+    }
+
+    pub fn save_unsaved_backup(
+        &self,
+        workspace_root: &str,
+        workspace_id: &str,
+        path: String,
+        content: String,
+        version: Option<FileVersion>,
+    ) -> Result<crate::recovery::UnsavedBackup, String> {
+        let workspace_root = self.trusted_workspace_root(workspace_root)?;
+        self.ensure_workspace_id_matches_root_path(workspace_id, &workspace_root)?;
+
+        self.recovery_store
+            .save_backup(crate::recovery::UnsavedBackup {
+                id: String::new(),
+                workspace_id: workspace_id.to_string(),
+                workspace_root: workspace_root.to_string_lossy().to_string(),
+                path,
+                content,
+                version,
+                updated_ms: current_time_ms()?,
+            })
+    }
+
+    pub fn list_unsaved_backups(
+        &self,
+        workspace_root: &str,
+        workspace_id: &str,
+    ) -> Result<Vec<crate::recovery::UnsavedBackup>, String> {
+        let workspace_root = self.trusted_workspace_root(workspace_root)?;
+        self.ensure_workspace_id_matches_root_path(workspace_id, &workspace_root)?;
+        self.recovery_store
+            .list_backups(workspace_id, &workspace_root.to_string_lossy())
+    }
+
+    pub fn discard_unsaved_backup(
+        &self,
+        workspace_root: &str,
+        workspace_id: &str,
+        backup_id: String,
+    ) -> Result<(), String> {
+        let workspace_root = self.trusted_workspace_root(workspace_root)?;
+        self.ensure_workspace_id_matches_root_path(workspace_id, &workspace_root)?;
+        self.recovery_store.discard_backup(
+            workspace_id,
+            &workspace_root.to_string_lossy(),
+            &backup_id,
+        )
     }
 
     pub fn lsp_server_status(
@@ -1146,6 +1199,37 @@ pub fn pin_workspace(
             Err(format!("workspace not found: {id}"))
         }
     })
+}
+
+#[tauri::command]
+pub fn save_unsaved_backup(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    workspace_id: String,
+    path: String,
+    content: String,
+    version: Option<FileVersion>,
+) -> Result<crate::recovery::UnsavedBackup, String> {
+    state.save_unsaved_backup(&workspace_root, &workspace_id, path, content, version)
+}
+
+#[tauri::command]
+pub fn list_unsaved_backups(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    workspace_id: String,
+) -> Result<Vec<crate::recovery::UnsavedBackup>, String> {
+    state.list_unsaved_backups(&workspace_root, &workspace_id)
+}
+
+#[tauri::command]
+pub fn discard_unsaved_backup(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    workspace_id: String,
+    backup_id: String,
+) -> Result<(), String> {
+    state.discard_unsaved_backup(&workspace_root, &workspace_id, backup_id)
 }
 
 #[tauri::command]
@@ -2522,6 +2606,46 @@ mod tests {
                 .workspaces
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn app_state_saves_and_lists_unsaved_backups_for_registered_workspace() {
+        let (_config, state, workspace_a, _workspace_b, workspace_a_id, _workspace_b_id) =
+            app_state_with_two_workspaces();
+
+        let saved = state
+            .save_unsaved_backup(
+                &workspace_a.to_string_lossy(),
+                &workspace_a_id,
+                "src/main.ts".to_string(),
+                "dirty text".to_string(),
+                None,
+            )
+            .expect("save backup");
+
+        let listed = state
+            .list_unsaved_backups(&workspace_a.to_string_lossy(), &workspace_a_id)
+            .expect("list backups");
+        assert_eq!(listed, vec![saved]);
+    }
+
+    #[test]
+    fn app_state_rejects_unsaved_backup_when_workspace_id_does_not_match_root() {
+        let (_config, state, workspace_a, _workspace_b, _workspace_a_id, workspace_b_id) =
+            app_state_with_two_workspaces();
+
+        let result = state.save_unsaved_backup(
+            &workspace_a.to_string_lossy(),
+            &workspace_b_id,
+            "src/main.ts".to_string(),
+            "dirty text".to_string(),
+            None,
+        );
+
+        assert_eq!(
+            result.expect_err("workspace mismatch"),
+            "workspace id does not match workspace root"
         );
     }
 

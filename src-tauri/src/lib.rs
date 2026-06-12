@@ -11,6 +11,7 @@ pub mod git;
 pub mod lsp;
 mod metrics;
 mod pty;
+mod recovery;
 pub mod remote;
 mod search;
 mod settings;
@@ -48,6 +49,9 @@ pub fn run() {
             commands::open_workspace_path,
             commands::remove_workspace,
             commands::pin_workspace,
+            commands::save_unsaved_backup,
+            commands::list_unsaved_backups,
+            commands::discard_unsaved_backup,
             commands::scan_workspace,
             commands::scan_directory,
             commands::search_workspace,
