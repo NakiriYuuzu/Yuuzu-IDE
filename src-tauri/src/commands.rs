@@ -11,7 +11,7 @@ use tauri::{AppHandle, State};
 use crate::extensions::{ExtensionPerformanceSample, ExtensionWorkspaceStatus};
 use crate::file_system::{self, FileOperationResult, FileVersion, TextFileRead};
 use crate::file_watcher::{FileWatcherState, WatchWorkspaceHandle};
-use crate::metrics::{snapshot, AppMetricSnapshot};
+use crate::metrics::{snapshot, AppMetricInput, AppMetricSnapshot};
 use crate::search::WorkspaceSearchResult;
 use crate::settings::{AppSettings, SettingsStore};
 use crate::tasks::{TaskRun, TaskState, WorkspaceTask};
@@ -20,12 +20,16 @@ use crate::workspace::{Workspace, WorkspaceRegistry};
 use crate::workspace_scan::{self, FileTreeEntry};
 use crate::workspace_store::WorkspaceRegistryStore;
 
+const MAX_METRIC_INDEX_ENTRIES: usize = 1_000_000;
+
 pub struct AppState {
     registry: Mutex<WorkspaceRegistry>,
     registry_store: WorkspaceRegistryStore,
     settings: Mutex<AppSettings>,
     settings_store: SettingsStore,
     recovery_store: crate::recovery::RecoveryStore,
+    diagnostics_store: crate::diagnostics::DiagnosticsStore,
+    started_ms: u128,
     docs_store: crate::docs::ContextPackStore,
     agent_store: crate::agent::AgentSessionStore,
     database_profiles: crate::database::DatabaseProfileStore,
@@ -46,6 +50,9 @@ impl AppState {
         let settings = settings_store.load()?;
         let recovery_store =
             crate::recovery::RecoveryStore::new(config_dir.as_ref().join("unsaved-backups"));
+        let diagnostics_store = crate::diagnostics::DiagnosticsStore::new(
+            config_dir.as_ref().join("diagnostics.jsonl"),
+        );
         let docs_store =
             crate::docs::ContextPackStore::new(config_dir.as_ref().join("context-packs.json"));
         let agent_store =
@@ -73,6 +80,8 @@ impl AppState {
             settings: Mutex::new(settings),
             settings_store,
             recovery_store,
+            diagnostics_store,
+            started_ms: crate::metrics::current_time_ms(),
             docs_store,
             agent_store,
             database_profiles,
@@ -202,6 +211,35 @@ impl AppState {
             &workspace_root.to_string_lossy(),
             &backup_id,
         )
+    }
+
+    pub fn append_diagnostic_event(
+        &self,
+        event: crate::diagnostics::DiagnosticEventInput,
+    ) -> Result<crate::diagnostics::DiagnosticEvent, String> {
+        self.diagnostics_store.append(event)
+    }
+
+    pub fn list_diagnostic_events(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<crate::diagnostics::DiagnosticEvent>, String> {
+        self.diagnostics_store.list(limit)
+    }
+
+    pub fn metric_snapshot(
+        &self,
+        docs_index_entries: usize,
+        file_tree_entries: usize,
+    ) -> Result<AppMetricSnapshot, String> {
+        let registry = self.registry.lock().map_err(|err| err.to_string())?;
+        Ok(snapshot(AppMetricInput {
+            started_ms: self.started_ms,
+            workspace_count: registry.workspaces.len(),
+            active_workspace_id: registry.active_workspace_id.clone(),
+            docs_index_entries: docs_index_entries.min(MAX_METRIC_INDEX_ENTRIES),
+            file_tree_entries: file_tree_entries.min(MAX_METRIC_INDEX_ENTRIES),
+        }))
     }
 
     pub fn lsp_server_status(
@@ -1233,6 +1271,22 @@ pub fn discard_unsaved_backup(
 }
 
 #[tauri::command]
+pub fn append_diagnostic_event(
+    state: State<'_, AppState>,
+    event: crate::diagnostics::DiagnosticEventInput,
+) -> Result<crate::diagnostics::DiagnosticEvent, String> {
+    state.append_diagnostic_event(event)
+}
+
+#[tauri::command]
+pub fn list_diagnostic_events(
+    state: State<'_, AppState>,
+    limit: usize,
+) -> Result<Vec<crate::diagnostics::DiagnosticEvent>, String> {
+    state.list_diagnostic_events(limit)
+}
+
+#[tauri::command]
 pub fn scan_workspace(
     state: State<'_, AppState>,
     path: String,
@@ -2153,8 +2207,12 @@ pub fn list_task_runs(
 }
 
 #[tauri::command]
-pub fn metric_snapshot() -> Result<AppMetricSnapshot, String> {
-    Ok(snapshot())
+pub fn metric_snapshot(
+    state: State<'_, AppState>,
+    docs_index_entries: usize,
+    file_tree_entries: usize,
+) -> Result<AppMetricSnapshot, String> {
+    state.metric_snapshot(docs_index_entries, file_tree_entries)
 }
 
 #[tauri::command]
@@ -2647,6 +2705,51 @@ mod tests {
             result.expect_err("workspace mismatch"),
             "workspace id does not match workspace root"
         );
+    }
+
+    #[test]
+    fn app_state_records_diagnostic_events_newest_first() {
+        let temp = tempdir().expect("temp dir");
+        let state = AppState::new(temp.path()).expect("state");
+
+        state
+            .append_diagnostic_event(crate::diagnostics::DiagnosticEventInput {
+                level: "info".to_string(),
+                source: "startup".to_string(),
+                message: "visible shell".to_string(),
+            })
+            .expect("append startup");
+        state
+            .append_diagnostic_event(crate::diagnostics::DiagnosticEventInput {
+                level: "warn".to_string(),
+                source: "indexing".to_string(),
+                message: "large workspace".to_string(),
+            })
+            .expect("append indexing");
+
+        let events = state.list_diagnostic_events(10).expect("list events");
+
+        assert_eq!(events[0].source, "indexing");
+        assert_eq!(events[1].source, "startup");
+    }
+
+    #[test]
+    fn metric_snapshot_reports_registry_counts_and_clamped_index_counts() {
+        let (_config, state, _workspace_a, _workspace_b, workspace_a_id, _workspace_b_id) =
+            app_state_with_two_workspaces();
+
+        let snapshot = state
+            .metric_snapshot(usize::MAX, 1_000_001)
+            .expect("snapshot");
+
+        assert!(snapshot.uptime_ms <= crate::metrics::current_time_ms());
+        assert_eq!(snapshot.workspace_count, 2);
+        assert_eq!(
+            snapshot.active_workspace_id.as_deref(),
+            Some(workspace_a_id.as_str())
+        );
+        assert_eq!(snapshot.docs_index_entries, 1_000_000);
+        assert_eq!(snapshot.file_tree_entries, 1_000_000);
     }
 
     #[test]

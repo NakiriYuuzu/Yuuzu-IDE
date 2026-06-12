@@ -3,6 +3,7 @@ pub mod browser_preview;
 mod commands;
 pub mod database;
 pub mod debug;
+mod diagnostics;
 pub mod docs;
 pub mod extensions;
 mod file_system;
@@ -52,6 +53,8 @@ pub fn run() {
             commands::save_unsaved_backup,
             commands::list_unsaved_backups,
             commands::discard_unsaved_backup,
+            commands::append_diagnostic_event,
+            commands::list_diagnostic_events,
             commands::scan_workspace,
             commands::scan_directory,
             commands::search_workspace,
