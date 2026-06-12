@@ -1,6 +1,6 @@
 /// <reference types="bun-types" />
 
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 
 import {
   createAgentState,
@@ -106,7 +106,12 @@ import {
 
 ensureTestDom();
 
+const realEditorTabExports = {
+  ...(await import("../features/editor/EditorTab")),
+};
+
 mock.module("../features/editor/EditorTab", () => ({
+  ...realEditorTabExports,
   EditorTab({
     content,
     onContentChange,
@@ -123,6 +128,10 @@ mock.module("../features/editor/EditorTab", () => ({
     );
   },
 }));
+
+afterAll(() => {
+  mock.module("../features/editor/EditorTab", () => realEditorTabExports);
+});
 
 const { act, cleanup, fireEvent, render } = await import("@testing-library/react");
 

@@ -2716,8 +2716,7 @@ mod tests {
         let import_state = std::sync::Arc::clone(&state);
         let content = format!(
             "[{}]",
-            std::iter::repeat(r#"{"key":"cmd+x","command":"unknown.command"}"#)
-                .take(120_000)
+            std::iter::repeat_n(r#"{"key":"cmd+x","command":"unknown.command"}"#, 120_000)
                 .collect::<Vec<_>>()
                 .join(",")
         );
