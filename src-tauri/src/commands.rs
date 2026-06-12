@@ -1756,6 +1756,62 @@ pub async fn git_log_page(
 }
 
 #[tauri::command]
+pub async fn git_conflict_file(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    path: String,
+) -> Result<crate::git::GitConflictFile, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git::conflict_file(&workspace_root, &path)).await
+}
+
+#[tauri::command]
+pub async fn git_mark_resolved(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    path: String,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git::mark_resolved(&workspace_root, &path)).await
+}
+
+#[tauri::command]
+pub async fn git_accept_conflict_side(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    path: String,
+    side: String,
+    confirmation: String,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || {
+        crate::git::accept_conflict_side(&workspace_root, &path, &side, &confirmation)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn git_blame_file(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    path: String,
+) -> Result<crate::git::GitBlameFile, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git::blame_file(&workspace_root, &path)).await
+}
+
+#[tauri::command]
+pub async fn git_file_history(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    path: String,
+    limit: usize,
+) -> Result<crate::git_log::GitLogPage, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git_log::file_history(&workspace_root, &path, limit)).await
+}
+
+#[tauri::command]
 pub async fn git_branches_full(
     state: State<'_, AppState>,
     workspace_root: String,

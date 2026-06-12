@@ -1308,6 +1308,234 @@ pub fn rename_branch(
     branches_full(workspace_root)
 }
 
+pub const MAX_CONFLICT_BYTES: usize = 512 * 1_024;
+pub const MAX_BLAME_LINES: usize = 20_000;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConflictBlock {
+    pub start_line: u32,
+    pub ours: Vec<String>,
+    pub theirs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitConflictFile {
+    pub path: String,
+    pub base: Option<String>,
+    pub ours: String,
+    pub theirs: String,
+    pub working: String,
+    pub blocks: Vec<ConflictBlock>,
+    pub truncated: bool,
+}
+
+pub fn conflict_file(workspace_root: &Path, path: &str) -> Result<GitConflictFile, String> {
+    let repository_root = repository_root(workspace_root)?;
+    let normalized = normalize_repo_relative_paths(&repository_root, &[path.to_string()])?;
+    let rel = path_to_git_string(&normalized[0]);
+
+    let show_stage = |stage: u8| -> Option<String> {
+        let out = run_git_in(
+            &repository_root,
+            &["show".into(), format!(":{stage}:{rel}")],
+        );
+        match out {
+            Ok(bytes) => {
+                let visible = &bytes[..bytes.len().min(MAX_CONFLICT_BYTES)];
+                Some(String::from_utf8_lossy(visible).into_owned())
+            }
+            // stage absent (add/add conflicts have no base)
+            Err(_) => None,
+        }
+    };
+    let base = show_stage(1);
+    let ours = show_stage(2).ok_or("missing ours stage — file is not conflicted")?;
+    let theirs = show_stage(3).ok_or("missing theirs stage — file is not conflicted")?;
+    let working_bytes =
+        std::fs::read(repository_root.join(&normalized[0])).map_err(|err| err.to_string())?;
+    let truncated = working_bytes.len() > MAX_CONFLICT_BYTES;
+    let working =
+        String::from_utf8_lossy(&working_bytes[..working_bytes.len().min(MAX_CONFLICT_BYTES)])
+            .into_owned();
+    let blocks = parse_conflict_blocks(&working);
+
+    Ok(GitConflictFile {
+        path: rel,
+        base,
+        ours,
+        theirs,
+        working,
+        blocks,
+        truncated,
+    })
+}
+
+pub(crate) fn parse_conflict_blocks(working: &str) -> Vec<ConflictBlock> {
+    let mut blocks = Vec::new();
+    // 0 outside, 1 in ours, 2 in theirs
+    let mut state = 0u8;
+    let mut current = ConflictBlock {
+        start_line: 0,
+        ours: Vec::new(),
+        theirs: Vec::new(),
+    };
+    for (i, line) in working.lines().enumerate() {
+        if line.starts_with("<<<<<<<") {
+            state = 1;
+            current = ConflictBlock {
+                start_line: (i + 1) as u32,
+                ours: Vec::new(),
+                theirs: Vec::new(),
+            };
+        } else if line.starts_with("=======") && state == 1 {
+            state = 2;
+        } else if line.starts_with(">>>>>>>") && state == 2 {
+            state = 0;
+            blocks.push(std::mem::replace(
+                &mut current,
+                ConflictBlock {
+                    start_line: 0,
+                    ours: Vec::new(),
+                    theirs: Vec::new(),
+                },
+            ));
+        } else if state == 1 {
+            current.ours.push(line.to_string());
+        } else if state == 2 {
+            current.theirs.push(line.to_string());
+        }
+    }
+    blocks
+}
+
+pub fn mark_resolved(workspace_root: &Path, path: &str) -> Result<GitRepositoryStatus, String> {
+    stage_paths(workspace_root, std::slice::from_ref(&path.to_string()))
+}
+
+pub fn accept_conflict_side(
+    workspace_root: &Path,
+    path: &str,
+    side: &str,
+    confirmation: &str,
+) -> Result<GitRepositoryStatus, String> {
+    let (expected, flag) = match side {
+        "ours" => ("ACCEPT OURS", "--ours"),
+        "theirs" => ("ACCEPT THEIRS", "--theirs"),
+        _ => return Err("invalid side".into()),
+    };
+    require_confirmation(confirmation, expected)?;
+    let repository_root = repository_root(workspace_root)?;
+    let paths = normalize_required_paths(&repository_root, &[path.to_string()])?;
+
+    let mut command = git_command(&repository_root);
+    command
+        .env("GIT_LITERAL_PATHSPECS", "1")
+        .arg("checkout")
+        .arg(flag)
+        .arg("--")
+        .args(paths.iter());
+    run_git_command("git checkout side", &mut command)?;
+    stage_paths(workspace_root, &[path.to_string()])
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlameSegment {
+    pub hash: String,
+    pub short_hash: String,
+    pub author: String,
+    pub when_unix: i64,
+    pub line_start: u32,
+    pub line_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitBlameFile {
+    pub path: String,
+    pub segments: Vec<BlameSegment>,
+    pub truncated: bool,
+}
+
+pub fn blame_file(workspace_root: &Path, path: &str) -> Result<GitBlameFile, String> {
+    let repository_root = repository_root(workspace_root)?;
+    let normalized = normalize_repo_relative_paths(&repository_root, &[path.to_string()])?;
+    let rel = path_to_git_string(&normalized[0]);
+
+    let mut command = git_command(&repository_root);
+    command
+        .env("GIT_LITERAL_PATHSPECS", "1")
+        .arg("blame")
+        .arg("--porcelain")
+        .arg("--")
+        .arg(&normalized[0]);
+    let output = run_git_command("git blame", &mut command)?;
+    let text = String::from_utf8_lossy(&output);
+
+    // porcelain emits "<hash> <orig> <final> [count]" before every line, key-value
+    // headers (author, author-time, …) after a hash's first occurrence, and the
+    // content itself prefixed with a tab.
+    #[derive(Default, Clone)]
+    struct BlameMeta {
+        author: String,
+        when_unix: i64,
+    }
+    let mut metas: std::collections::HashMap<String, BlameMeta> = std::collections::HashMap::new();
+    let mut line_hashes: Vec<(String, u32)> = Vec::new();
+    let mut current_hash: Option<String> = None;
+    let mut truncated = false;
+
+    for line in text.lines() {
+        if line.starts_with('\t') {
+            continue;
+        }
+        let mut parts = line.split(' ');
+        let first = parts.next().unwrap_or("");
+        if first.len() >= 40 && first.bytes().all(|b| b.is_ascii_hexdigit()) {
+            if let Some(final_no) = parts.nth(1).and_then(|s| s.parse::<u32>().ok()) {
+                if line_hashes.len() >= MAX_BLAME_LINES {
+                    truncated = true;
+                    break;
+                }
+                line_hashes.push((first.to_string(), final_no));
+                current_hash = Some(first.to_string());
+                continue;
+            }
+        }
+        if let Some(hash) = &current_hash {
+            if let Some(rest) = line.strip_prefix("author ") {
+                metas.entry(hash.clone()).or_default().author = rest.to_string();
+            } else if let Some(rest) = line.strip_prefix("author-time ") {
+                metas.entry(hash.clone()).or_default().when_unix = rest.parse().unwrap_or(0);
+            }
+        }
+    }
+
+    let mut segments: Vec<BlameSegment> = Vec::new();
+    for (hash, line_no) in line_hashes {
+        match segments.last_mut() {
+            Some(last) if last.hash == hash && last.line_start + last.line_count == line_no => {
+                last.line_count += 1;
+            }
+            _ => {
+                let meta = metas.get(&hash).cloned().unwrap_or_default();
+                segments.push(BlameSegment {
+                    short_hash: hash[..7.min(hash.len())].to_string(),
+                    hash,
+                    author: meta.author,
+                    when_unix: meta.when_unix,
+                    line_start: line_no,
+                    line_count: 1,
+                });
+            }
+        }
+    }
+
+    Ok(GitBlameFile {
+        path: rel,
+        segments,
+        truncated,
+    })
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -1634,6 +1862,58 @@ pub(crate) mod tests {
         );
         stash_drop(repo.path(), 0, "DROP stash@{0}").expect("confirmed drop");
         assert!(stash_list(repo.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn conflict_file_returns_three_versions_and_blocks() {
+        let repo = TempGitRepo::new();
+        repo.write_file("f.txt", "base\n");
+        repo.run(["add", "."]);
+        repo.run(["commit", "-m", "base"]);
+        repo.run(["branch", "-M", "main"]);
+        repo.run(["checkout", "-b", "feat"]);
+        repo.write_file("f.txt", "theirs\n");
+        repo.run(["add", "."]);
+        repo.run(["commit", "-m", "theirs"]);
+        repo.run(["checkout", "main"]);
+        repo.write_file("f.txt", "ours\n");
+        repo.run(["add", "."]);
+        repo.run(["commit", "-m", "ours"]);
+        let merge = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["merge", "feat"])
+            .output()
+            .unwrap();
+        assert!(!merge.status.success(), "merge must conflict");
+
+        let c = conflict_file(repo.path(), "f.txt").expect("conflict data");
+        assert_eq!(c.ours.trim(), "ours");
+        assert_eq!(c.theirs.trim(), "theirs");
+        assert_eq!(c.base.as_deref().map(str::trim), Some("base"));
+        assert_eq!(c.blocks.len(), 1);
+
+        mark_resolved(repo.path(), "f.txt").expect("resolve stages file");
+        let status = repository_status(repo.path()).expect("status");
+        assert!(!status.has_conflicts);
+    }
+
+    #[test]
+    fn blame_segments_merge_consecutive_lines_of_same_commit() {
+        let repo = TempGitRepo::new();
+        repo.write_file("f.txt", "a\nb\n");
+        repo.run(["add", "."]);
+        repo.run(["commit", "-m", "c1"]);
+        repo.write_file("f.txt", "a\nb\nc\n");
+        repo.run(["add", "."]);
+        repo.run(["commit", "-m", "c2"]);
+
+        let blame = blame_file(repo.path(), "f.txt").expect("blame");
+        assert_eq!(blame.segments.len(), 2, "two commits → two segments");
+        assert_eq!(blame.segments[0].line_start, 1);
+        assert_eq!(blame.segments[0].line_count, 2);
+        assert_eq!(blame.segments[1].line_start, 3);
+        assert!(!blame.truncated);
     }
 
     pub(crate) struct TempGitRepo {

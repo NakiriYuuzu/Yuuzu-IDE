@@ -827,6 +827,51 @@ pub fn commit_file_diff(
     Ok(parsed)
 }
 
+pub fn file_history(workspace_root: &Path, path: &str, limit: usize) -> Result<GitLogPage, String> {
+    let normalized = git::normalize_repo_relative_paths(Path::new(""), &[path.to_string()])?;
+    let limit = limit.clamp(1, MAX_LOG_ROWS);
+    let args: Vec<String> = vec![
+        "log".into(),
+        "--follow".into(),
+        "-z".into(),
+        "--pretty=format:%H%x1f%h%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s".into(),
+        "-n".into(),
+        (limit + 1).to_string(),
+        "--".into(),
+        normalized[0].to_string_lossy().into_owned(),
+    ];
+    let output = git::run_git_in(workspace_root, &args)?;
+    let (mut topo, mut meta) = parse_log_records(&output);
+    let has_more = topo.len() > limit;
+    topo.truncate(limit);
+    meta.truncate(limit);
+    // single-file history renders as a linear list: every row stays on lane 0
+    let rows = topo
+        .into_iter()
+        .zip(meta)
+        .map(|(t, m)| GitLogRow {
+            hash: t.hash,
+            short_hash: m.short_hash,
+            subject: m.subject,
+            author: m.author,
+            when_unix: m.when_unix,
+            refs: m.refs,
+            parents: t.parents,
+            lane: 0,
+            lane_overflow: false,
+            merge: false,
+            edges: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let total_loaded = rows.len();
+    Ok(GitLogPage {
+        rows,
+        has_more,
+        total_loaded,
+        truncated: total_loaded >= MAX_LOG_ROWS,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1024,6 +1069,21 @@ mod tests {
             &format!("RESET HARD {short}")
         )
         .is_ok());
+    }
+
+    #[test]
+    fn file_history_follows_renames_on_lane_zero() {
+        let repo = crate::git::tests::TempGitRepo::new();
+        repo.write_file("old.txt", "1\n");
+        repo.run(["add", "."]);
+        repo.run(["commit", "-m", "create old"]);
+        repo.run(["mv", "old.txt", "new.txt"]);
+        repo.run(["commit", "-m", "rename to new"]);
+
+        let page = file_history(repo.path(), "new.txt", 10).expect("history");
+        assert_eq!(page.rows.len(), 2, "follow crosses the rename");
+        assert!(page.rows.iter().all(|r| r.lane == 0));
+        assert!(!page.has_more);
     }
 
     #[test]
