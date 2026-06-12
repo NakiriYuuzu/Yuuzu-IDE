@@ -8,10 +8,13 @@ Node 11 implementation Tasks 1-7 are delivered. Fresh verification on
 2026-06-12 confirms both real adapter smoke tests pass: Python through
 `debugpy` and compiled C through Xcode's `lldb-dap`.
 
-The final regression fix is `f9aa1af`. It preserves variables from real DAP
-captures when adapters reuse raw `variablesReference` handles across stack
-frames, which was observed with `lldb-dap` frame 524288 `main` and frame 524289
-`start` both exposing Locals as raw reference `1`.
+The final regression fixes are `f9aa1af` and `353d965`. `f9aa1af` preserves
+variables from real DAP captures when adapters reuse raw `variablesReference`
+handles across stack frames, which was observed with `lldb-dap` frame 524288
+`main` and frame 524289 `start` both exposing Locals as raw reference `1`.
+`353d965` then fixed the AppShell stopped-event path so real stopped sessions
+load stack frames, scopes, and variables into DebugPanel state instead of
+depending on test pre-seeded variables.
 
 ## Scope Delivered
 
@@ -25,7 +28,8 @@ frames, which was observed with `lldb-dap` frame 524288 `main` and frame 524289
 - Debug panel, debug console surface, editor breakpoint gutter affordances, and
   active debug line decoration.
 - AppShell integration through the activity rail, command palette, workspace
-  view state, editor surface, debug console surface, and backend listener wiring.
+  view state, editor surface, debug console surface, backend listener wiring,
+  and live stopped-event stack/scope/variable hydration.
 - Real adapter smoke fixtures for compiled C through `lldb-dap` and Python
   through `debugpy`.
 
@@ -117,6 +121,20 @@ frames, which was observed with `lldb-dap` frame 524288 `main` and frame 524289
   fixture breakpoints and returned `counter = 3`.
 - Commit evidence: `f9aa1af`.
 
+### Completion follow-up: AppShell live variables on stopped events
+
+- RED command: `bun test src/app/AppShell.contract.test.tsx`.
+- RED result: failed with two failing AppShell checks because the stopped
+  listener loaded stack frames but never called `debug_scopes` or
+  `debug_variables`.
+- GREEN command: `bun test src/app/AppShell.contract.test.tsx`.
+- GREEN result: passed with 52 tests after AppShell loaded scopes and nonzero
+  variable references for stopped stack frames, and ignored stale variable loads
+  after newer session sequences.
+- Focused regression command: `bun test src/features/debug/debug-model.test.ts src/features/debug/DebugPanel.test.tsx src/features/editor/EditorTab.test.ts src/app/activity-rail.test.tsx src/app/command-palette-model.test.ts src/app/workspace-view-state.test.ts src/app/AppShell.contract.test.tsx`.
+- Focused regression result: passed with 126 tests and 399 expect calls.
+- Commit evidence: `353d965`.
+
 ## Agent Review Evidence
 
 - Task 1 review remediation is represented by `b9fb230` and `d5da874`.
@@ -127,23 +145,25 @@ frames, which was observed with `lldb-dap` frame 524288 `main` and frame 524289
 - Task 6 review remediation is represented by `d46b6f3` and `f6f8599`.
 - Task 7 duplicate-reference smoke regression remediation is represented by
   `f9aa1af`.
+- Completion follow-up for the AppShell stopped-event live variables path is
+  represented by `353d965`.
 - Task dispatch required `gpt-5.5` with `xhigh` reasoning and prohibited
   `gpt-5.4`; no repository evidence records a `gpt-5.4` Node 11 agent.
 
 ## Full Verification Evidence
 
-- `bun test` -> PASS: 336 passed, 0 failed, 952 expect calls across 38 files.
+- `bun test` -> PASS: 338 passed, 0 failed, 964 expect calls across 38 files.
 - `bun run build` -> PASS: `tsc && vite build`, 3277 modules transformed,
-  built in 3.59s; Vite chunk-size warnings only.
+  built successfully; Vite chunk-size warnings only.
 - `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml`
   -> PASS: lib target 285 passed, 0 failed, 3 ignored, plus main and doc-test
   targets with no runnable tests.
 - `. "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check`
   -> PASS.
 - `. "$HOME/.cargo/env" && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings`
-  -> PASS: finished `dev` profile in 7.68s with no warnings.
+  -> PASS: finished `dev` profile with no warnings.
 - `bun run tauri build --debug` -> PASS: frontend before-build completed with
-  Vite chunk-size warnings only, Rust `dev` profile finished in 45.50s, and
+  Vite chunk-size warnings only, Rust `dev` profile finished, and
   debug artifacts were produced:
   - `src-tauri/target/debug/yuuzu-ide`
   - `src-tauri/target/debug/bundle/macos/Yuuzu-IDE.app`
@@ -151,7 +171,7 @@ frames, which was observed with `lldb-dap` frame 524288 `main` and frame 524289
 - `. "$HOME/.cargo/env" && YUZZU_DEBUG_SMOKE=1 cargo test --manifest-path src-tauri/Cargo.toml debug::adapter_smoke_tests -- --ignored --test-threads=1`
   -> PASS: `debugpy_debugs_python_fixture_to_breakpoint` and
   `lldb_dap_debugs_compiled_c_fixture_to_breakpoint` both passed; 2 passed, 0
-  failed, finished in 2.63s.
+  failed.
 
 ## Real Adapter Smoke Evidence
 
@@ -175,8 +195,9 @@ frames, which was observed with `lldb-dap` frame 524288 `main` and frame 524289
   AppShell command routing tests, Rust breakpoint storage tests, and the
   real adapter smoke tests reaching fixture breakpoints.
 - Variables work in the editor: PASS through Rust scripted-adapter runtime
-  tests, frontend debug model tests, Debug panel rendering tests, and the real
-  `lldb-dap` smoke returning `counter = 3`.
+  tests, frontend debug model tests, Debug panel rendering tests, AppShell
+  stopped-event live variable contract tests, and the real `lldb-dap` smoke
+  returning `counter = 3`.
 - Debug sessions are scoped to workspaces: PASS through Rust command/workspace
   guard tests, frontend workspace view state tests, and AppShell event routing
   tests.

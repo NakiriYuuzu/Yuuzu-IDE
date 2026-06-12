@@ -1038,7 +1038,8 @@ state in `docs/architecture/node-11-debugging-results.md`. The standard Bun,
 Rust, lint, format, Tauri debug build, and real adapter smoke checks pass.
 Final acceptance is complete because Python through `debugpy` and compiled C
 through `lldb-dap` both reach fixture breakpoints and return the expected
-`counter = 3` variable.
+`counter = 3` variable, and the AppShell stopped-event path now loads live
+scopes and variables into DebugPanel state.
 
 Completed progress:
 
@@ -1058,6 +1059,9 @@ Completed progress:
   through `debugpy`, then hardened real adapter launch behavior.
 - Task 7 fixed the real-DAP duplicate raw `variablesReference` regression, ran
   full verification, and documented completion.
+- The completion follow-up fixed AppShell stopped-event live variable loading
+  so stack frames, scopes, and variables are refreshed from backend commands
+  under the existing session sequence guard.
 
 Important files and commit milestones:
 
@@ -1078,11 +1082,13 @@ Important files and commit milestones:
   `a00617e`, `9661369`, and `1af3aa9`.
 - Node 11 hardening commits after review: `b9fb230`, `d5da874`, `fad25b7`,
   `55273a7`, `cb2e327`, `efa33a0`, `ef2287c`, `2500b61`, `268f742`,
-  `d46b6f3`, `f6f8599`, and `f9aa1af`.
+  `d46b6f3`, `f6f8599`, `f9aa1af`, and `353d965`.
 
 Verification outcomes:
 
-- `bun test`: PASS with 336 passed, 0 failed, 952 expect calls across 38 files.
+- `bun test`: PASS with 338 passed, 0 failed, 964 expect calls across 38 files.
+- `bun test src/app/AppShell.contract.test.tsx`: PASS with 52 passed and 202
+  expect calls after the stopped-event live variable follow-up.
 - `bun run build`: PASS with `tsc && vite build`; Vite chunk-size warnings
   only.
 - `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml`:
