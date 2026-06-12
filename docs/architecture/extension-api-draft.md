@@ -43,8 +43,8 @@ hooks, but it cannot execute extension-owned code.
       {
         "id": "yuuzu-dark",
         "label": "Yuuzu Dark",
-        "kind": "dark",
-        "source": "builtin"
+        "mode": "dark",
+        "accent": "#7c3aed"
       }
     ],
     "keybindings": [
@@ -56,17 +56,21 @@ hooks, but it cannot execute extension-owned code.
     ],
     "snippets": [
       {
+        "id": "debug-log",
         "language": "typescript",
         "prefix": "dbg",
-        "body": "console.debug($1);",
+        "body": [
+          "console.debug($1);"
+        ],
         "description": "Insert a debug log statement."
       }
     ],
     "workspace_hooks": [
       {
+        "id": "inspect-session-on-open",
         "event": "WorkspaceOpened",
         "command": "yuuzu.debug-tools.inspect-session",
-        "description": "Advertise trusted debug inspection when a workspace opens."
+        "budget_ms": 75
       }
     ]
   }
