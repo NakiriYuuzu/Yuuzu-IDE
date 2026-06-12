@@ -1031,13 +1031,14 @@ Next decision:
 
 ### Node 11: Debugging
 
-Status: blocked in final verification.
+Status: completed and passed.
 
-Node 11 finished implementation Tasks 1-6 and records the final verification
+Node 11 finished implementation Tasks 1-7 and records the final verification
 state in `docs/architecture/node-11-debugging-results.md`. The standard Bun,
-Rust, lint, format, and Tauri debug build checks pass. Final acceptance is not
-complete because the real compiled-language `lldb-dap` smoke fails on this
-machine before the adapter emits a DAP `initialized` event.
+Rust, lint, format, Tauri debug build, and real adapter smoke checks pass.
+Final acceptance is complete because Python through `debugpy` and compiled C
+through `lldb-dap` both reach fixture breakpoints and return the expected
+`counter = 3` variable.
 
 Completed progress:
 
@@ -1055,8 +1056,8 @@ Completed progress:
   workbench surface.
 - Task 6 added real adapter smoke fixtures for C through `lldb-dap` and Python
   through `debugpy`, then hardened real adapter launch behavior.
-- Task 7 ran full verification and documented the remaining compiled-adapter
-  blocker.
+- Task 7 fixed the real-DAP duplicate raw `variablesReference` regression, ran
+  full verification, and documented completion.
 
 Important files and commit milestones:
 
@@ -1077,7 +1078,7 @@ Important files and commit milestones:
   `a00617e`, `9661369`, and `1af3aa9`.
 - Node 11 hardening commits after review: `b9fb230`, `d5da874`, `fad25b7`,
   `55273a7`, `cb2e327`, `efa33a0`, `ef2287c`, `2500b61`, `268f742`,
-  `d46b6f3`, and `f6f8599`.
+  `d46b6f3`, `f6f8599`, and `f9aa1af`.
 
 Verification outcomes:
 
@@ -1085,7 +1086,7 @@ Verification outcomes:
 - `bun run build`: PASS with `tsc && vite build`; Vite chunk-size warnings
   only.
 - `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml`:
-  PASS with 284 Rust lib tests passed, 0 failed, 3 ignored; main and doc-test
+  PASS with 285 Rust lib tests passed, 0 failed, 3 ignored; main and doc-test
   targets had no runnable tests.
 - `. "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check`:
   PASS.
@@ -1095,26 +1096,20 @@ Verification outcomes:
   `src-tauri/target/debug/yuuzu-ide`,
   `src-tauri/target/debug/bundle/macos/Yuuzu-IDE.app`, and
   `src-tauri/target/debug/bundle/dmg/Yuuzu-IDE_0.1.0_aarch64.dmg`.
-- `DevToolsSecurity -status`: `Developer mode is currently disabled.`
-- `xcrun --find lldb-dap`:
-  `/Applications/Xcode.app/Contents/Developer/usr/bin/lldb-dap`.
 - `. "$HOME/.cargo/env" && YUZZU_DEBUG_SMOKE=1 cargo test --manifest-path src-tauri/Cargo.toml debug::adapter_smoke_tests -- --ignored --test-threads=1`:
-  FAILED with 1 passed and 1 failed; `debugpy` passed, while `lldb-dap` failed
-  with `lldb smoke: "initialized event failed: timed out waiting for DAP adapter message"`.
+  PASS with 2 passed and 0 failed; both `debugpy` and `lldb-dap` returned
+  `counter = 3` from their fixture breakpoints.
 
 Acceptance state:
 
 - Scripting-language real adapter smoke: PASS through `debugpy`.
-- Compiled-language real adapter smoke: BLOCKED by the `lldb-dap`
-  initialization timeout.
+- Compiled-language real adapter smoke: PASS through `lldb-dap`.
 - Breakpoints, variables, watches, console output, session lifecycle, and
   workspace scoping: PASS through Bun/Cargo tests and scripted-adapter runtime
   coverage.
 
 Residual risks:
 
-- Node 11 cannot be marked complete until the `lldb-dap` smoke passes after an
-  external macOS Developer Mode or equivalent debug-permission change.
 - Other Debug Adapter Protocol implementations remain compatibility work beyond
   the C and Python smoke fixtures.
 - Vite chunk-size warnings remain expected because Monaco, language workers, and

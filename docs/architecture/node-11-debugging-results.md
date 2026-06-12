@@ -2,23 +2,16 @@
 
 ## Status
 
-Blocked/partial.
+Completed and passed.
 
-Node 11 implementation Tasks 1-6 are delivered and the standard verification
-commands pass. Final acceptance is blocked because the real compiled-language
-`lldb-dap` smoke test fails on this machine before the adapter emits the DAP
-`initialized` event.
+Node 11 implementation Tasks 1-7 are delivered. Fresh verification on
+2026-06-12 confirms both real adapter smoke tests pass: Python through
+`debugpy` and compiled C through Xcode's `lldb-dap`.
 
-Exact blocker:
-
-- `DevToolsSecurity -status` reports `Developer mode is currently disabled.`
-- `xcrun --find lldb-dap` resolves
-  `/Applications/Xcode.app/Contents/Developer/usr/bin/lldb-dap`.
-- `. "$HOME/.cargo/env" && YUZZU_DEBUG_SMOKE=1 cargo test --manifest-path src-tauri/Cargo.toml debug::adapter_smoke_tests -- --ignored --test-threads=1`
-  fails with `lldb smoke: "initialized event failed: timed out waiting for DAP adapter message"`.
-
-Node 11 must stay in verification until the `lldb-dap` smoke passes on a machine
-where macOS permits the adapter to initialize the compiled debuggee.
+The final regression fix is `f9aa1af`. It preserves variables from real DAP
+captures when adapters reuse raw `variablesReference` handles across stack
+frames, which was observed with `lldb-dap` frame 524288 `main` and frame 524289
+`start` both exposing Locals as raw reference `1`.
 
 ## Scope Delivered
 
@@ -104,17 +97,25 @@ where macOS permits the adapter to initialize the compiled debuggee.
 - GREEN command: same command.
 - GREEN result for Task 6 implementation: passed in task-level evidence before
   final verification hardening continued.
-- Final Task 7 result: blocked because the same command now passes `debugpy`
-  and fails `lldb-dap` with the blocker recorded above.
+- Final Task 7 follow-up result: the same command now passes both `debugpy` and
+  `lldb-dap` after the duplicate raw `variablesReference` regression fix.
 - REFACTOR command: `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml debug::real_adapter::tests debug::adapter_smoke_tests -- --ignored --test-threads=1`.
 - Commit evidence: `1af3aa9`, with real adapter client and launch hardening in
   `d46b6f3` and `f6f8599`.
 
-### Task 7: Final verification and documentation
+### Task 7: Final verification, smoke regression, and documentation
 
-- Task 7 is documentation-only and does not require a new RED/GREEN cycle.
-- Fresh verification evidence is recorded below before this result file updates
-  progress and roadmap status.
+- RED command: `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml debug::real_adapter::tests::real_dap_launch_keeps_duplicate_scope_references_per_frame -- --exact --nocapture`.
+- RED result: failed with `main frame Locals should keep counter even when a
+  later frame reuses raw variablesReference`, proving later frame variables
+  overwrote the main frame Locals capture.
+- GREEN command: same focused cargo test command.
+- GREEN result: passed with 1 test after real DAP scope variables were
+  materialized with session-unique synthetic references per frame scope.
+- Smoke command: `. "$HOME/.cargo/env" && YUZZU_DEBUG_SMOKE=1 cargo test --manifest-path src-tauri/Cargo.toml debug::adapter_smoke_tests -- --ignored --test-threads=1`.
+- Smoke result: passed with 2 tests; both `debugpy` and `lldb-dap` reached their
+  fixture breakpoints and returned `counter = 3`.
+- Commit evidence: `f9aa1af`.
 
 ## Agent Review Evidence
 
@@ -124,6 +125,8 @@ where macOS permits the adapter to initialize the compiled debuggee.
 - Task 4 review remediation is represented by `ef2287c`.
 - Task 5 review remediation is represented by `2500b61` and `268f742`.
 - Task 6 review remediation is represented by `d46b6f3` and `f6f8599`.
+- Task 7 duplicate-reference smoke regression remediation is represented by
+  `f9aa1af`.
 - Task dispatch required `gpt-5.5` with `xhigh` reasoning and prohibited
   `gpt-5.4`; no repository evidence records a `gpt-5.4` Node 11 agent.
 
@@ -131,27 +134,24 @@ where macOS permits the adapter to initialize the compiled debuggee.
 
 - `bun test` -> PASS: 336 passed, 0 failed, 952 expect calls across 38 files.
 - `bun run build` -> PASS: `tsc && vite build`, 3277 modules transformed,
-  built in 2.96s; Vite chunk-size warnings only.
+  built in 3.59s; Vite chunk-size warnings only.
 - `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml`
-  -> PASS: lib target 284 passed, 0 failed, 3 ignored, plus main and doc-test
+  -> PASS: lib target 285 passed, 0 failed, 3 ignored, plus main and doc-test
   targets with no runnable tests.
 - `. "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check`
   -> PASS.
 - `. "$HOME/.cargo/env" && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings`
-  -> PASS: finished `dev` profile in 6.17s with no warnings.
+  -> PASS: finished `dev` profile in 7.68s with no warnings.
 - `bun run tauri build --debug` -> PASS: frontend before-build completed with
-  Vite chunk-size warnings only, Rust `dev` profile finished in 49.64s, and
+  Vite chunk-size warnings only, Rust `dev` profile finished in 45.50s, and
   debug artifacts were produced:
   - `src-tauri/target/debug/yuuzu-ide`
   - `src-tauri/target/debug/bundle/macos/Yuuzu-IDE.app`
   - `src-tauri/target/debug/bundle/dmg/Yuuzu-IDE_0.1.0_aarch64.dmg`
-- `DevToolsSecurity -status` -> `Developer mode is currently disabled.`
-- `xcrun --find lldb-dap` ->
-  `/Applications/Xcode.app/Contents/Developer/usr/bin/lldb-dap`.
 - `. "$HOME/.cargo/env" && YUZZU_DEBUG_SMOKE=1 cargo test --manifest-path src-tauri/Cargo.toml debug::adapter_smoke_tests -- --ignored --test-threads=1`
-  -> FAILED: `debugpy_debugs_python_fixture_to_breakpoint` passed;
-  `lldb_dap_debugs_compiled_c_fixture_to_breakpoint` failed after 31.70s with
-  `lldb smoke: "initialized event failed: timed out waiting for DAP adapter message"`.
+  -> PASS: `debugpy_debugs_python_fixture_to_breakpoint` and
+  `lldb_dap_debugs_compiled_c_fixture_to_breakpoint` both passed; 2 passed, 0
+  failed, finished in 2.63s.
 
 ## Real Adapter Smoke Evidence
 
@@ -159,39 +159,38 @@ where macOS permits the adapter to initialize the compiled debuggee.
   `debug::adapter_smoke_tests::debugpy_debugs_python_fixture_to_breakpoint`
   launched the Python fixture through `uv run --with debugpy python -m
   debugpy.adapter` and reached the breakpoint.
-- `lldb-dap`: BLOCKED. The ignored smoke test
+- `lldb-dap`: PASS. The ignored smoke test
   `debug::adapter_smoke_tests::lldb_dap_debugs_compiled_c_fixture_to_breakpoint`
-  found Xcode's `lldb-dap`, compiled the C fixture, then timed out waiting for
-  the first DAP adapter message. The local macOS developer tool security state
-  is disabled, and Task 7 intentionally did not change system settings.
+  found Xcode's `lldb-dap`, compiled the C fixture, reached the breakpoint at
+  `fixtures/debug/compiled-main.c` line 6, and returned `counter = 3` from the
+  main frame Locals scope.
 
 ## Acceptance Results
 
 - At least one scripting language can be debugged: PASS through the real
   `debugpy` smoke.
-- At least one compiled language can be debugged: BLOCKED by the `lldb-dap`
-  initialization timeout recorded above.
+- At least one compiled language can be debugged: PASS through the real
+  `lldb-dap` smoke.
 - Breakpoints work in the editor: PASS through frontend breakpoint tests,
   AppShell command routing tests, Rust breakpoint storage tests, and the
-  `debugpy` real smoke reaching the fixture breakpoint.
+  real adapter smoke tests reaching fixture breakpoints.
 - Variables work in the editor: PASS through Rust scripted-adapter runtime
-  tests, frontend debug model tests, and Debug panel rendering tests.
+  tests, frontend debug model tests, Debug panel rendering tests, and the real
+  `lldb-dap` smoke returning `counter = 3`.
 - Debug sessions are scoped to workspaces: PASS through Rust command/workspace
   guard tests, frontend workspace view state tests, and AppShell event routing
   tests.
 
-Overall acceptance is blocked until the compiled-language smoke passes.
+Overall acceptance is complete.
 
 ## Residual Risks
 
-- `lldb-dap` behavior depends on macOS Developer Mode or equivalent local debug
-  permissions. The implementation should be re-verified after the user changes
-  that OS-level setting or on a machine where `lldb-dap` can initialize a
-  debuggee.
 - The real adapter smoke covers C through `lldb-dap` and Python through
   `debugpy`; other adapters remain future compatibility work.
 - Debug adapter lifecycle tests use bounded scripted adapters for most command
   and event behavior, so real-adapter protocol variance may still require
-  adapter-specific handling in later nodes.
+  adapter-specific handling in later nodes. The duplicate raw
+  `variablesReference` case now has fast regression coverage plus real
+  `lldb-dap` smoke coverage.
 - Vite chunk-size warnings remain expected because Monaco, language workers, and
   terminal assets are large; the build exits successfully.
