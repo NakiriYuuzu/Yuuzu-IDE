@@ -914,6 +914,151 @@ pub(crate) fn word_diff_ranges(del: &str, add: &str) -> (Vec<[u32; 2]>, Vec<[u32
     (dr, ar)
 }
 
+pub const MAX_PATCH_BYTES: usize = 1_024 * 1_024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HunkSelection {
+    pub hunk_index: usize,
+    /// None = whole hunk. Some(indices) = only these positions inside `hunk.lines`
+    /// (unselected Add lines are dropped; unselected Del lines become Context).
+    pub line_indices: Option<Vec<usize>>,
+}
+
+pub(crate) fn build_selection_patch(
+    path: &str,
+    hunks: &[GitHunk],
+    selections: &[HunkSelection],
+) -> Result<String, String> {
+    if selections.is_empty() {
+        return Err("no hunks selected".to_string());
+    }
+    let mut out = format!("diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n");
+
+    for sel in selections {
+        let hunk = hunks.get(sel.hunk_index).ok_or("hunk index out of range")?;
+        let selected: Option<std::collections::HashSet<usize>> = sel
+            .line_indices
+            .as_ref()
+            .map(|v| v.iter().copied().collect());
+
+        let mut body = String::new();
+        let mut has_changes = false;
+        let (mut old_count, mut new_count) = (0u32, 0u32);
+        for (i, line) in hunk.lines.iter().enumerate() {
+            let picked = selected.as_ref().is_none_or(|s| s.contains(&i));
+            match (&line.kind, picked) {
+                (GitLineKind::Context, _) => {
+                    body.push(' ');
+                    body.push_str(&line.text);
+                    body.push('\n');
+                    old_count += 1;
+                    new_count += 1;
+                }
+                (GitLineKind::Del, true) => {
+                    body.push('-');
+                    body.push_str(&line.text);
+                    body.push('\n');
+                    old_count += 1;
+                    has_changes = true;
+                }
+                (GitLineKind::Del, false) => {
+                    body.push(' ');
+                    body.push_str(&line.text);
+                    body.push('\n');
+                    old_count += 1;
+                    new_count += 1;
+                }
+                (GitLineKind::Add, true) => {
+                    body.push('+');
+                    body.push_str(&line.text);
+                    body.push('\n');
+                    new_count += 1;
+                    has_changes = true;
+                }
+                // unselected additions are dropped entirely
+                (GitLineKind::Add, false) => {}
+            }
+        }
+        if !has_changes {
+            continue;
+        }
+        out.push_str(&format!(
+            "@@ -{},{} +{},{} @@\n",
+            hunk.old_start, old_count, hunk.new_start, new_count
+        ));
+        out.push_str(&body);
+    }
+
+    if out.len() > MAX_PATCH_BYTES {
+        return Err("selection patch exceeds 1 MB bound".to_string());
+    }
+    Ok(out)
+}
+
+fn apply_patch(repository_root: &Path, patch: &str, args: &[&str]) -> Result<(), String> {
+    use std::io::Write;
+    let mut command = git_command(repository_root);
+    command
+        .arg("apply")
+        .args(args)
+        .arg("--whitespace=nowarn")
+        .arg("-");
+    command.stdin(std::process::Stdio::piped());
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
+    let mut child = command.spawn().map_err(|err| err.to_string())?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or("no stdin")?
+        .write_all(patch.as_bytes())
+        .map_err(|err| err.to_string())?;
+    let output = child.wait_with_output().map_err(|err| err.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(command_error("git apply", &output.stderr))
+    }
+}
+
+pub fn stage_hunks(
+    workspace_root: &Path,
+    path: &str,
+    selections: &[HunkSelection],
+) -> Result<GitRepositoryStatus, String> {
+    let repository_root = repository_root(workspace_root)?;
+    let current = diff_file_hunks(workspace_root, path, false)?;
+    let patch = build_selection_patch(&current.path, &current.hunks, selections)?;
+    apply_patch(&repository_root, &patch, &["--cached"])?;
+    repository_status(workspace_root)
+}
+
+pub fn unstage_hunks(
+    workspace_root: &Path,
+    path: &str,
+    selections: &[HunkSelection],
+) -> Result<GitRepositoryStatus, String> {
+    let repository_root = repository_root(workspace_root)?;
+    let current = diff_file_hunks(workspace_root, path, true)?;
+    let patch = build_selection_patch(&current.path, &current.hunks, selections)?;
+    apply_patch(&repository_root, &patch, &["--cached", "-R"])?;
+    repository_status(workspace_root)
+}
+
+pub fn revert_hunks(
+    workspace_root: &Path,
+    path: &str,
+    selections: &[HunkSelection],
+    confirmation: &str,
+) -> Result<GitRepositoryStatus, String> {
+    require_confirmation(confirmation, "DISCARD")?;
+    let repository_root = repository_root(workspace_root)?;
+    let current = diff_file_hunks(workspace_root, path, false)?;
+    let patch = build_selection_patch(&current.path, &current.hunks, selections)?;
+    apply_patch(&repository_root, &patch, &["-R"])?;
+    repository_status(workspace_root)
+}
+
 fn attach_word_ranges(diff: &mut GitDiffHunks) {
     for hunk in &mut diff.hunks {
         let mut i = 0;
@@ -1143,6 +1288,88 @@ mod tests {
         let hunks = parse_unified_diff(&raw, MAX_DIFF_HUNKS, MAX_DIFF_TOTAL_LINES).expect("parses");
         assert_eq!(hunks.hunks.len(), MAX_DIFF_HUNKS);
         assert!(hunks.truncated);
+    }
+
+    #[test]
+    fn rebuilds_patch_for_selected_lines_with_recounted_header() {
+        let raw = "diff --git a/f.ts b/f.ts\n--- a/f.ts\n+++ b/f.ts\n@@ -1,2 +1,3 @@\n ctx\n-old\n+new1\n+new2\n";
+        let hunks = parse_unified_diff(raw, MAX_DIFF_HUNKS, MAX_DIFF_TOTAL_LINES).expect("parses");
+        // select only the del line (idx 1) and first add line (idx 2); drop "+new2"
+        let patch = build_selection_patch(
+            "f.ts",
+            &hunks.hunks,
+            &[HunkSelection {
+                hunk_index: 0,
+                line_indices: Some(vec![1, 2]),
+            }],
+        )
+        .expect("patch");
+
+        assert!(patch.contains("--- a/f.ts"));
+        assert!(patch.contains("+++ b/f.ts"));
+        // recounted: ctx (1 old + 1 new) + picked del (1 old) + picked add (1 new)
+        assert!(patch.contains("@@ -1,2 +1,2 @@"));
+        assert!(patch.contains("-old"));
+        assert!(patch.contains("+new1"));
+        assert!(!patch.contains("+new2"));
+    }
+
+    #[test]
+    fn stages_single_hunk_via_apply_cached_in_temp_repo() {
+        let repo = TempGitRepo::new();
+        repo.write_file("f.ts", "a\nb\nc\n");
+        repo.run(["add", "f.ts"]);
+        repo.run(["commit", "-m", "init"]);
+        repo.write_file("f.ts", "a\nB\nc\nd\n");
+
+        let hunks = diff_file_hunks(repo.path(), "f.ts", false).expect("hunks");
+        assert!(!hunks.hunks.is_empty());
+
+        stage_hunks(
+            repo.path(),
+            "f.ts",
+            &[HunkSelection {
+                hunk_index: 0,
+                line_indices: None,
+            }],
+        )
+        .expect("stage hunk");
+
+        let staged = diff_file_hunks(repo.path(), "f.ts", true).expect("staged hunks");
+        assert!(!staged.hunks.is_empty(), "index now contains the hunk");
+    }
+
+    #[test]
+    fn revert_hunk_requires_discard_confirmation() {
+        let repo = TempGitRepo::new();
+        repo.write_file("f.ts", "a\n");
+        repo.run(["add", "f.ts"]);
+        repo.run(["commit", "-m", "init"]);
+        repo.write_file("f.ts", "a\nb\n");
+
+        let err = revert_hunks(
+            repo.path(),
+            "f.ts",
+            &[HunkSelection {
+                hunk_index: 0,
+                line_indices: None,
+            }],
+            "",
+        )
+        .expect_err("missing confirmation rejected");
+        assert!(err.contains("confirmation"));
+
+        revert_hunks(
+            repo.path(),
+            "f.ts",
+            &[HunkSelection {
+                hunk_index: 0,
+                line_indices: None,
+            }],
+            "DISCARD",
+        )
+        .expect("confirmed revert succeeds");
+        assert_eq!(repo.read_file("f.ts"), "a\n");
     }
 
     struct TempGitRepo {

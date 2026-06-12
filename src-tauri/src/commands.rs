@@ -1745,6 +1745,43 @@ pub async fn git_diff_hunks(
 }
 
 #[tauri::command]
+pub async fn git_stage_hunks(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    path: String,
+    selections: Vec<crate::git::HunkSelection>,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git::stage_hunks(&workspace_root, &path, &selections)).await
+}
+
+#[tauri::command]
+pub async fn git_unstage_hunks(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    path: String,
+    selections: Vec<crate::git::HunkSelection>,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git::unstage_hunks(&workspace_root, &path, &selections)).await
+}
+
+#[tauri::command]
+pub async fn git_revert_hunk(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    path: String,
+    selections: Vec<crate::git::HunkSelection>,
+    confirmation: String,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || {
+        crate::git::revert_hunks(&workspace_root, &path, &selections, &confirmation)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn git_stage_paths(
     state: State<'_, AppState>,
     workspace_root: String,
