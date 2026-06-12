@@ -2388,6 +2388,95 @@ describe("AppShell AppShell helpers", () => {
     expect(renderResult.getByLabelText("Enable Beta Tools")).toBeTruthy();
   });
 
+  test("AppShell preserves pending extension toggle state when another toggle resolves", async () => {
+    const workspaceId = "extensions-toggle-pending-cross";
+    const workspaceRoot = "/repo-extensions-toggle-pending-cross";
+    const alphaResponse = createDeferred<ExtensionWorkspaceStatus[]>();
+    const betaResponse = createDeferred<ExtensionWorkspaceStatus[]>();
+    const { renderResult } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot,
+      extensionStatuses: [
+        extensionStatus({
+          id: "yuuzu.alpha-tools",
+          name: "Alpha Tools",
+          enabled: true,
+        }),
+        extensionStatus({
+          id: "yuuzu.beta-tools",
+          name: "Beta Tools",
+          enabled: true,
+        }),
+      ],
+      setExtensionEnabledResponses: [alphaResponse.promise, betaResponse.promise],
+    });
+
+    fireEvent.click(renderResult.getByRole("button", { name: "Extensions" }));
+    await flushAppShellEffects();
+
+    fireEvent.click(renderResult.getByLabelText("Disable Alpha Tools"));
+    expect(renderResult.getByLabelText("Enable Alpha Tools")).toBeTruthy();
+
+    fireEvent.click(renderResult.getByLabelText("Disable Beta Tools"));
+    expect(renderResult.getByLabelText("Enable Beta Tools")).toBeTruthy();
+
+    await act(async () => {
+      betaResponse.resolve([
+        extensionStatus({
+          id: "yuuzu.alpha-tools",
+          name: "Alpha Tools",
+          enabled: true,
+        }),
+        extensionStatus({
+          id: "yuuzu.beta-tools",
+          name: "Beta Tools",
+          enabled: false,
+        }),
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await flushAppShellEffects();
+
+    let extension = workspaceViewStore.getState().viewFor(workspaceId).extension;
+    let alpha = extension.statuses.find(
+      (status) => status.manifest.id === "yuuzu.alpha-tools",
+    );
+    let beta = extension.statuses.find(
+      (status) => status.manifest.id === "yuuzu.beta-tools",
+    );
+    expect(alpha?.enabled).toBe(false);
+    expect(beta?.enabled).toBe(false);
+    expect(renderResult.getByLabelText("Enable Alpha Tools")).toBeTruthy();
+    expect(renderResult.getByLabelText("Enable Beta Tools")).toBeTruthy();
+
+    await act(async () => {
+      alphaResponse.resolve([
+        extensionStatus({
+          id: "yuuzu.alpha-tools",
+          name: "Alpha Tools",
+          enabled: false,
+        }),
+        extensionStatus({
+          id: "yuuzu.beta-tools",
+          name: "Beta Tools",
+          enabled: false,
+        }),
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await flushAppShellEffects();
+
+    extension = workspaceViewStore.getState().viewFor(workspaceId).extension;
+    alpha = extension.statuses.find(
+      (status) => status.manifest.id === "yuuzu.alpha-tools",
+    );
+    beta = extension.statuses.find(
+      (status) => status.manifest.id === "yuuzu.beta-tools",
+    );
+    expect(alpha?.enabled).toBe(false);
+    expect(beta?.enabled).toBe(false);
+  });
+
   test("AppShell stopped listener loads live scopes and variables for DebugPanel", async () => {
     const workspaceId = "debug-stopped-variables";
     const workspaceRoot = "/repo-debug-stopped-variables";

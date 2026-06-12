@@ -97,6 +97,7 @@ import {
   toggleExtensionStatus,
   type ExtensionCommandContribution,
   type ExtensionViewState,
+  type ExtensionWorkspaceStatus,
 } from "../features/extensions/extension-model";
 import { RemotePanel } from "../features/remote/RemotePanel";
 import { SshTerminalSurface } from "../features/remote/SshTerminalSurface";
@@ -2615,7 +2616,6 @@ export function AppShell() {
   const debugLoadRequestRef = useRef<Record<string, number>>({});
   const extensionStatusRequestRef = useRef<Record<string, number>>({});
   const extensionToggleRequestRef = useRef<Record<string, number>>({});
-  const extensionToggleSnapshotRequestRef = useRef<Record<string, number>>({});
   const extensionStateEpochRef = useRef<Record<string, number>>({});
   const extensionPendingToggleRef = useRef<Record<string, number>>({});
   const docsLoadRequestRef = useRef<DocsLoadRequestState>({});
@@ -6434,17 +6434,6 @@ export function AppShell() {
     return requestId;
   }
 
-  function nextExtensionToggleSnapshotRequestId(workspaceId: string): number {
-    const requestId =
-      (extensionToggleSnapshotRequestRef.current[workspaceId] ?? 0) + 1;
-    extensionToggleSnapshotRequestRef.current = {
-      ...extensionToggleSnapshotRequestRef.current,
-      [workspaceId]: requestId,
-    };
-
-    return requestId;
-  }
-
   function isLatestExtensionStatusRequest(
     workspaceId: string,
     requestId: number,
@@ -6464,13 +6453,6 @@ export function AppShell() {
     );
   }
 
-  function isLatestExtensionToggleSnapshotRequest(
-    workspaceId: string,
-    requestId: number,
-  ) {
-    return extensionToggleSnapshotRequestRef.current[workspaceId] === requestId;
-  }
-
   function canApplyExtensionStatusSnapshot(
     workspaceId: string,
     workspaceRoot: string,
@@ -6486,24 +6468,6 @@ export function AppShell() {
     );
   }
 
-  function canApplyExtensionToggleSnapshot(
-    workspaceId: string,
-    workspaceRoot: string,
-    extensionId: string,
-    requestId: number,
-    snapshotRequestId: number,
-  ): boolean {
-    return (
-      isLatestExtensionToggleSnapshotRequest(workspaceId, snapshotRequestId) &&
-      canApplyExtensionToggleResult(
-        workspaceId,
-        workspaceRoot,
-        extensionId,
-        requestId,
-      )
-    );
-  }
-
   function canApplyExtensionToggleResult(
     workspaceId: string,
     workspaceRoot: string,
@@ -6514,6 +6478,30 @@ export function AppShell() {
       isLatestExtensionToggleRequest(workspaceId, extensionId, requestId) &&
       hasRegisteredWorkspace(workspaceId) &&
       getWorkspaceRoot(workspaceId) === workspaceRoot
+    );
+  }
+
+  function patchToggledExtensionStatus(
+    extension: ExtensionViewState,
+    extensionId: string,
+    statuses: ExtensionWorkspaceStatus[],
+  ): ExtensionViewState {
+    const toggledStatus = statuses.find(
+      (status) => status.manifest.id === extensionId,
+    );
+
+    if (!toggledStatus) {
+      return setExtensionError(
+        extension,
+        `Toggle extension failed: missing status for ${extensionId}`,
+      );
+    }
+
+    return replaceExtensionStatuses(
+      extension,
+      extension.statuses.map((status) =>
+        status.manifest.id === extensionId ? toggledStatus : status,
+      ),
     );
   }
 
@@ -6603,7 +6591,6 @@ export function AppShell() {
     const workspaceId = activeWorkspaceId;
     const workspaceRoot = activeWorkspace.path;
     const requestId = nextExtensionToggleRequestId(workspaceId, extensionId);
-    const snapshotRequestId = nextExtensionToggleSnapshotRequestId(workspaceId);
     beginExtensionToggleMutation(workspaceId);
     updateExtension(workspaceId, (extension) =>
       toggleExtensionStatus(extension, extensionId, enabled),
@@ -6617,19 +6604,18 @@ export function AppShell() {
       .then((statuses) => {
         finishExtensionToggleMutation(workspaceId);
         if (
-          !canApplyExtensionToggleSnapshot(
+          !canApplyExtensionToggleResult(
             workspaceId,
             workspaceRoot,
             extensionId,
             requestId,
-            snapshotRequestId,
           )
         ) {
           return;
         }
 
         updateExtension(workspaceId, (extension) =>
-          replaceExtensionStatuses(extension, statuses),
+          patchToggledExtensionStatus(extension, extensionId, statuses),
         );
       })
       .catch((error) => {
