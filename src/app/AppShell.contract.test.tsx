@@ -484,6 +484,10 @@ type AppShellTauriMockOptions = {
   workspaceRoot: string;
   textFiles?: Record<string, TextFileRead>;
   recoveryBackups?: UnsavedBackup[];
+  listUnsavedBackupsResponses?: Array<
+    UnsavedBackup[] | Promise<UnsavedBackup[]>
+  >;
+  saveUnsavedBackupResponses?: Array<UnsavedBackup | Promise<UnsavedBackup>>;
   launchConfigs?: DebugLaunchConfig[];
   debugSessions?: DebugSessionInfo[];
   startedSession?: DebugSessionInfo;
@@ -527,6 +531,12 @@ function installAppShellTauriMock(options: AppShellTauriMockOptions) {
   ];
   const recordExtensionPerformanceResponses = [
     ...(options.recordExtensionPerformanceResponses ?? []),
+  ];
+  const saveUnsavedBackupResponses = [
+    ...(options.saveUnsavedBackupResponses ?? []),
+  ];
+  const listUnsavedBackupsResponses = [
+    ...(options.listUnsavedBackupsResponses ?? []),
   ];
   const registry = {
     active_workspace_id: options.workspaceId,
@@ -595,8 +605,16 @@ function installAppShellTauriMock(options: AppShellTauriMockOptions) {
           );
         }
         case "list_unsaved_backups":
+          if (listUnsavedBackupsResponses.length > 0) {
+            return listUnsavedBackupsResponses.shift();
+          }
+
           return options.recoveryBackups ?? [];
         case "save_unsaved_backup":
+          if (saveUnsavedBackupResponses.length > 0) {
+            return saveUnsavedBackupResponses.shift();
+          }
+
           return {
             id: `backup-${String(args.workspaceId)}-${String(args.path)}`,
             workspace_id: String(args.workspaceId),
@@ -1430,9 +1448,9 @@ describe("AppShell AppShell helpers", () => {
                 workspace_id: "workspace-a",
                 workspace_root: "/repo-a",
                 path: "src/main.ts",
-                content: "dirty text",
                 version: null,
                 updated_ms: 10,
+                content_length: "dirty text".length,
               },
             ],
             selectedBackupId: "b1",
@@ -2067,6 +2085,209 @@ describe("AppShell AppShell helpers", () => {
       content: "dirty text",
       version: fileVersion,
     });
+  });
+
+  test("AppShell ignores stale recovery save responses after content is clean", async () => {
+    const workspaceId = "recovery-race-contract";
+    const workspaceRoot = "/repo-recovery-race-contract";
+    const fileVersion = { modified_ms: 7, len: 10 };
+    const backupId = "b1";
+    const staleSave = createDeferred<UnsavedBackup>();
+    const tauri = installAppShellTauriMock({
+      workspaceId,
+      workspaceRoot,
+      textFiles: {
+        "src/main.ts": {
+          path: "src/main.ts",
+          content: "saved text",
+          version: fileVersion,
+          too_large: false,
+        },
+      },
+      recoveryBackups: [
+        {
+          id: backupId,
+          workspace_id: workspaceId,
+          workspace_root: workspaceRoot,
+          path: "src/main.ts",
+          content: "old dirty text",
+          version: fileVersion,
+          updated_ms: 10,
+        },
+      ],
+      saveUnsavedBackupResponses: [staleSave.promise],
+    });
+    resetWorkspaceBootstrapForTests();
+    window.localStorage.clear();
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: workspaceId,
+      workspaces: [
+        {
+          id: workspaceId,
+          path: workspaceRoot,
+          name: workspaceId,
+          pinned: false,
+        },
+      ],
+    });
+    workspaceViewStore.getState().updateView(workspaceId, {
+      activeActivity: "settings",
+      panelOpen: true,
+      surface: "editor",
+    });
+    workspaceViewStore.getState().updateEditor(workspaceId, () => ({
+      tabs: [
+        {
+          path: "src/main.ts",
+          name: "main.ts",
+          dirty: false,
+          tooLarge: false,
+          version: fileVersion,
+          externalChange: false,
+        },
+      ],
+      activePath: "src/main.ts",
+    }));
+
+    let renderResult!: ReturnType<typeof render>;
+    await act(async () => {
+      renderResult = render(<AppShell />);
+    });
+    const editor = await renderResult.findByLabelText("Mock editor");
+    await flushAppShellEffects();
+    expect(
+      renderResult.getByRole("button", { name: "Restore src/main.ts" }),
+    ).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.change(editor, { target: { value: "dirty text" } });
+    });
+    await flushAppShellEffects();
+    expect(
+      tauri.invokeCalls.some((call) => call.command === "save_unsaved_backup"),
+    ).toBe(true);
+
+    await act(async () => {
+      fireEvent.change(editor, { target: { value: "saved text" } });
+    });
+    await flushAppShellEffects();
+    expect(
+      tauri.invokeCalls.some(
+        (call) =>
+          call.command === "discard_unsaved_backup" &&
+          call.args.backupId === backupId,
+      ),
+    ).toBe(true);
+    expect(
+      workspaceViewStore.getState().viewFor(workspaceId).recovery.backups,
+    ).toEqual([]);
+    expect(
+      renderResult.queryByRole("button", { name: "Restore src/main.ts" }),
+    ).toBeNull();
+
+    staleSave.resolve({
+      id: backupId,
+      workspace_id: workspaceId,
+      workspace_root: workspaceRoot,
+      path: "src/main.ts",
+      content: "dirty text",
+      version: fileVersion,
+      updated_ms: 20,
+    });
+    await flushAppShellEffects();
+
+    expect(
+      workspaceViewStore.getState().viewFor(workspaceId).recovery.backups,
+    ).toEqual([]);
+    expect(
+      renderResult.queryByRole("button", { name: "Restore src/main.ts" }),
+    ).toBeNull();
+  });
+
+  test("AppShell restores backup content from a fresh recovery list", async () => {
+    const workspaceId = "recovery-restore-contract";
+    const workspaceRoot = "/repo-recovery-restore-contract";
+    const fileVersion = { modified_ms: 7, len: 10 };
+    const staleBackup: UnsavedBackup = {
+      id: "b1",
+      workspace_id: workspaceId,
+      workspace_root: workspaceRoot,
+      path: "src/main.ts",
+      content: "stale state content",
+      version: fileVersion,
+      updated_ms: 10,
+    };
+    const freshBackup: UnsavedBackup = {
+      ...staleBackup,
+      content: "fresh restore content",
+      updated_ms: 20,
+    };
+    installAppShellTauriMock({
+      workspaceId,
+      workspaceRoot,
+      textFiles: {
+        "src/main.ts": {
+          path: "src/main.ts",
+          content: "saved text",
+          version: fileVersion,
+          too_large: false,
+        },
+      },
+      listUnsavedBackupsResponses: [[staleBackup], [freshBackup]],
+    });
+    resetWorkspaceBootstrapForTests();
+    window.localStorage.clear();
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: workspaceId,
+      workspaces: [
+        {
+          id: workspaceId,
+          path: workspaceRoot,
+          name: workspaceId,
+          pinned: false,
+        },
+      ],
+    });
+    workspaceViewStore.getState().updateView(workspaceId, {
+      activeActivity: "settings",
+      panelOpen: true,
+      surface: "editor",
+    });
+    workspaceViewStore.getState().updateEditor(workspaceId, () => ({
+      tabs: [
+        {
+          path: "src/main.ts",
+          name: "main.ts",
+          dirty: false,
+          tooLarge: false,
+          version: fileVersion,
+          externalChange: false,
+        },
+      ],
+      activePath: "src/main.ts",
+    }));
+
+    let renderResult!: ReturnType<typeof render>;
+    await act(async () => {
+      renderResult = render(<AppShell />);
+    });
+    const editor = await renderResult.findByLabelText("Mock editor");
+    await flushAppShellEffects();
+
+    await act(async () => {
+      fireEvent.click(
+        renderResult.getByRole("button", { name: "Restore src/main.ts" }),
+      );
+    });
+    await flushAppShellEffects();
+
+    expect((editor as HTMLTextAreaElement).value).toBe("fresh restore content");
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        workspaceViewStore.getState().viewFor(workspaceId).recovery.backups[0],
+        "content",
+      ),
+    ).toBe(false);
   });
 
   test("AppShell opens Extensions rail and loads workspace extension statuses", async () => {

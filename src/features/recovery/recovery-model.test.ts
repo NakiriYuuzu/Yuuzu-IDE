@@ -33,6 +33,20 @@ describe("recovery model", () => {
     expect(state.selectedBackupId).toBe("new");
   });
 
+  test("stores backup summaries without content in recovery state", () => {
+    const state = storeRecoveryBackups(createRecoveryState(), [
+      backup({ id: "b1", content: "dirty text" }),
+    ]);
+
+    expect(state.backups[0]).toMatchObject({
+      id: "b1",
+      content_length: "dirty text".length,
+    });
+    expect(
+      Object.prototype.hasOwnProperty.call(state.backups[0], "content"),
+    ).toBe(false);
+  });
+
   test("restoreRecoveryBackup marks the restored backup for opening", () => {
     const state = restoreRecoveryBackup(
       storeRecoveryBackups(createRecoveryState(), [backup({ id: "b1" })]),

@@ -1,6 +1,6 @@
 import { RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 
-import type { RecoveryViewState, UnsavedBackup } from "./recovery-model";
+import type { RecoveryViewState, UnsavedBackupSummary } from "./recovery-model";
 
 type RecoveryPanelProps = {
   state: RecoveryViewState;
@@ -9,17 +9,16 @@ type RecoveryPanelProps = {
   onDiscard: (backupId: string) => void;
 };
 
-function previewContent(content: string): string {
-  const firstLine = content.replace(/\s+/g, " ").trim();
-  return firstLine.length > 140 ? `${firstLine.slice(0, 137)}...` : firstLine;
-}
-
-function backupTimeLabel(backup: UnsavedBackup): string {
+function backupTimeLabel(backup: UnsavedBackupSummary): string {
   if (!Number.isFinite(backup.updated_ms) || backup.updated_ms <= 0) {
     return "pending";
   }
 
   return new Date(backup.updated_ms).toLocaleString();
+}
+
+function backupSizeLabel(backup: UnsavedBackupSummary): string {
+  return `${backup.content_length.toLocaleString()} bytes`;
 }
 
 export function RecoveryPanel({
@@ -70,11 +69,9 @@ export function RecoveryPanel({
                   <span className="recovery-meta mono">
                     {restoring ? "restoring" : backupTimeLabel(backup)}
                   </span>
-                  {backup.content ? (
-                    <span className="recovery-preview mono">
-                      {previewContent(backup.content)}
-                    </span>
-                  ) : null}
+                  <span className="recovery-preview mono">
+                    {backupSizeLabel(backup)}
+                  </span>
                 </div>
                 <div className="recovery-row-actions">
                   <button

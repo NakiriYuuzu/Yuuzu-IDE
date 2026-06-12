@@ -446,9 +446,9 @@ describe("createWorkspaceViewStore", () => {
         workspace_id: "unknown-recovery",
         workspace_root: "/unknown",
         path: "src/main.ts",
-        content: "dirty text",
         version: null,
         updated_ms: 10,
+        content_length: "dirty text".length,
       });
     }).toThrow(TypeError);
 

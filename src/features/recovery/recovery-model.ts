@@ -10,8 +10,12 @@ export type UnsavedBackup = {
   updated_ms: number;
 };
 
+export type UnsavedBackupSummary = Omit<UnsavedBackup, "content"> & {
+  content_length: number;
+};
+
 export type RecoveryViewState = {
-  backups: UnsavedBackup[];
+  backups: UnsavedBackupSummary[];
   selectedBackupId: string | null;
   restoringBackupId: string | null;
   loading: boolean;
@@ -28,15 +32,32 @@ export function createRecoveryState(): RecoveryViewState {
   };
 }
 
+export function toRecoverySummary(
+  backup: UnsavedBackup | UnsavedBackupSummary,
+): UnsavedBackupSummary {
+  return {
+    id: backup.id,
+    workspace_id: backup.workspace_id,
+    workspace_root: backup.workspace_root,
+    path: backup.path,
+    version: backup.version,
+    updated_ms: backup.updated_ms,
+    content_length:
+      "content_length" in backup ? backup.content_length : backup.content.length,
+  };
+}
+
 export function storeRecoveryBackups(
   state: RecoveryViewState,
-  backups: UnsavedBackup[],
+  backups: Array<UnsavedBackup | UnsavedBackupSummary>,
 ): RecoveryViewState {
-  const sortedBackups = [...backups].sort((a, b) =>
-    b.updated_ms === a.updated_ms
-      ? a.path.localeCompare(b.path)
-      : b.updated_ms - a.updated_ms,
-  );
+  const sortedBackups = backups
+    .map(toRecoverySummary)
+    .sort((a, b) =>
+      b.updated_ms === a.updated_ms
+        ? a.path.localeCompare(b.path)
+        : b.updated_ms - a.updated_ms,
+    );
 
   return {
     ...state,

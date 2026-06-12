@@ -2651,6 +2651,7 @@ export function AppShell() {
   const extensionStateEpochRef = useRef<Record<string, number>>({});
   const extensionPendingToggleRef = useRef<Record<string, number>>({});
   const recoveryLoadRequestRef = useRef<Record<string, number>>({});
+  const recoverySaveEpochRef = useRef<Record<string, number>>({});
   const docsLoadRequestRef = useRef<DocsLoadRequestState>({});
   const agentSessionsLoadRef = useRef<Record<string, number>>({});
   const languageRefreshRequestRef = useRef<LanguageRefreshRequestState>({});
@@ -3567,11 +3568,31 @@ export function AppShell() {
     }
   }
 
+  function recoverySaveKey(workspaceId: string, path: string): string {
+    return `${workspaceId}\n${path}`;
+  }
+
+  function nextRecoverySaveEpoch(workspaceId: string, path: string): number {
+    const key = recoverySaveKey(workspaceId, path);
+    const epoch = (recoverySaveEpochRef.current[key] ?? 0) + 1;
+    recoverySaveEpochRef.current[key] = epoch;
+    return epoch;
+  }
+
+  function isLatestRecoverySaveEpoch(
+    workspaceId: string,
+    path: string,
+    epoch: number,
+  ): boolean {
+    return recoverySaveEpochRef.current[recoverySaveKey(workspaceId, path)] === epoch;
+  }
+
   function discardRecoveryBackupForPath(
     workspaceId: string,
     workspaceRoot: string,
     path: string,
   ) {
+    nextRecoverySaveEpoch(workspaceId, path);
     const backup = workspaceViewStore
       .getState()
       .viewFor(workspaceId)
@@ -3603,11 +3624,11 @@ export function AppShell() {
       return;
     }
 
-    const backup = workspaceViewStore
+    const backupSummary = workspaceViewStore
       .getState()
       .viewFor(activeWorkspaceId)
       .recovery.backups.find((item) => item.id === backupId);
-    if (!backup) {
+    if (!backupSummary) {
       return;
     }
 
@@ -3616,26 +3637,64 @@ export function AppShell() {
     );
     setEditorError(null);
 
-    let savedContent = "";
-    let version = backup.version;
+    let backupContent = "";
+    let backupVersion = backupSummary.version;
     try {
-      const read = await readTextFile(activeWorkspace.path, backup.path);
+      const freshBackups = await listUnsavedBackups({
+        workspaceRoot: activeWorkspace.path,
+        workspaceId: activeWorkspaceId,
+      });
+      const fullBackup = freshBackups.find((item) => item.id === backupId);
+      updateRecovery(activeWorkspaceId, (recovery) => {
+        const stored = storeRecoveryBackups(recovery, freshBackups);
+        return stored.backups.some((item) => item.id === backupId)
+          ? {
+              ...stored,
+              selectedBackupId: backupId,
+              restoringBackupId: backupId,
+            }
+          : stored;
+      });
+      if (!fullBackup) {
+        updateRecovery(activeWorkspaceId, (recovery) => ({
+          ...recovery,
+          restoringBackupId: null,
+          error: "Restore failed: backup is no longer available",
+        }));
+        return;
+      }
+
+      backupContent = fullBackup.content;
+      backupVersion = fullBackup.version;
+    } catch (error) {
+      updateRecovery(activeWorkspaceId, (recovery) => ({
+        ...recovery,
+        restoringBackupId: null,
+        error: `Restore failed: ${terminalErrorMessage(error)}`,
+      }));
+      return;
+    }
+
+    let savedContent = "";
+    let version = backupVersion;
+    try {
+      const read = await readTextFile(activeWorkspace.path, backupSummary.path);
       savedContent = read.content ?? "";
       version = read.version;
     } catch {
       savedContent =
         savedContentByPathRef.current[
-          createLoadedFileKey(activeWorkspaceId, backup.path)
+          createLoadedFileKey(activeWorkspaceId, backupSummary.path)
         ] ?? "";
     }
 
     savedContentByPathRef.current[
-      createLoadedFileKey(activeWorkspaceId, backup.path)
+      createLoadedFileKey(activeWorkspaceId, backupSummary.path)
     ] = savedContent;
     updateEditor(activeWorkspaceId, (editor) =>
       openFileTab(editor, {
-        path: backup.path,
-        name: backup.path.split(/[\\/]/).pop() ?? backup.path,
+        path: backupSummary.path,
+        name: backupSummary.path.split(/[\\/]/).pop() ?? backupSummary.path,
         dirty: true,
         tooLarge: false,
         version,
@@ -3644,17 +3703,17 @@ export function AppShell() {
     );
     setLoadedFile({
       workspaceId: activeWorkspaceId,
-      path: backup.path,
-      content: backup.content,
-      language: languageForPath(backup.path),
+      path: backupSummary.path,
+      content: backupContent,
+      language: languageForPath(backupSummary.path),
       readOnly: false,
     });
-    if (isLspSupportedDocumentPath(backup.path)) {
+    if (isLspSupportedDocumentPath(backupSummary.path)) {
       void openLanguageDocument({
         workspaceId: activeWorkspaceId,
         workspaceRoot: activeWorkspace.path,
-        path: lspDocumentPathForWorkspace(activeWorkspace.path, backup.path),
-        content: backup.content,
+        path: lspDocumentPathForWorkspace(activeWorkspace.path, backupSummary.path),
+        content: backupContent,
       }).catch(() => {});
     }
     setSurface("editor");
@@ -3676,6 +3735,7 @@ export function AppShell() {
     if (!backup) {
       return;
     }
+    nextRecoverySaveEpoch(activeWorkspaceId, backup.path);
 
     try {
       await discardUnsavedBackup({
@@ -3812,6 +3872,10 @@ export function AppShell() {
         (tab) => tab.path === loadedFile.path,
       );
       if (activeWorkspace) {
+        const saveEpoch = nextRecoverySaveEpoch(
+          activeWorkspaceId,
+          loadedFile.path,
+        );
         void saveUnsavedBackup({
           workspaceRoot: activeWorkspace.path,
           workspaceId: activeWorkspaceId,
@@ -3820,6 +3884,35 @@ export function AppShell() {
           version: activeTab?.version ?? null,
         })
           .then((backup) => {
+            if (
+              !isLatestRecoverySaveEpoch(
+                activeWorkspaceId,
+                loadedFile.path,
+                saveEpoch,
+              )
+            ) {
+              return;
+            }
+
+            const currentWorkspace = workspaceStore
+              .getState()
+              .registry.workspaces.find(
+                (workspace) => workspace.id === activeWorkspaceId,
+              );
+            const currentView = workspaceViewStore
+              .getState()
+              .viewFor(activeWorkspaceId);
+            const currentTab = currentView.editor.tabs.find(
+              (tab) => tab.path === loadedFile.path,
+            );
+            if (
+              currentWorkspace?.path !== activeWorkspace.path ||
+              currentView.editor.activePath !== loadedFile.path ||
+              !currentTab?.dirty
+            ) {
+              return;
+            }
+
             updateRecovery(activeWorkspaceId, (recovery) =>
               storeRecoveryBackups(recovery, [
                 ...recovery.backups.filter((item) => item.id !== backup.id),

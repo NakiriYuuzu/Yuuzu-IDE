@@ -5,7 +5,10 @@ import { cleanup, fireEvent, render } from "@testing-library/react";
 
 import { ensureTestDom } from "../../app/test-dom";
 import { RecoveryPanel } from "./RecoveryPanel";
-import { createRecoveryState, type UnsavedBackup } from "./recovery-model";
+import {
+  createRecoveryState,
+  type UnsavedBackupSummary,
+} from "./recovery-model";
 
 ensureTestDom();
 
@@ -13,15 +16,17 @@ afterEach(() => {
   cleanup();
 });
 
-function backup(overrides: Partial<UnsavedBackup> = {}): UnsavedBackup {
+function backup(
+  overrides: Partial<UnsavedBackupSummary> = {},
+): UnsavedBackupSummary {
   return {
     id: overrides.id ?? "b1",
     workspace_id: overrides.workspace_id ?? "workspace-a",
     workspace_root: overrides.workspace_root ?? "/repo-a",
     path: overrides.path ?? "src/main.ts",
-    content: overrides.content ?? "dirty text",
     version: overrides.version ?? null,
     updated_ms: overrides.updated_ms ?? 10,
+    content_length: overrides.content_length ?? "dirty text".length,
   };
 }
 
