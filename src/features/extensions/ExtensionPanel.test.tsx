@@ -54,6 +54,19 @@ function status(
   };
 }
 
+function pressEnterToActivateButton(button: HTMLElement): void {
+  button.focus();
+  const defaultAllowed = fireEvent.keyDown(button, {
+    key: "Enter",
+    code: "Enter",
+    cancelable: true,
+  });
+
+  if (defaultAllowed) {
+    fireEvent.click(button);
+  }
+}
+
 describe("ExtensionPanel", () => {
   test("renders extension status, contributions, and slow budget", () => {
     const state = replaceExtensionStatuses(createExtensionState(), [
@@ -96,6 +109,53 @@ describe("ExtensionPanel", () => {
     fireEvent.click(result.getByLabelText("Disable Debug Tools"));
 
     expect(onToggleExtension).toHaveBeenCalledWith("yuuzu.debug-tools", false);
+  });
+
+  test("keyboard activation toggles extension without selecting the row", () => {
+    const onSelectExtension = mock(() => {});
+    const onToggleExtension = mock(() => {});
+    const state = replaceExtensionStatuses(createExtensionState(), [
+      status("yuuzu.debug-tools", true),
+    ]);
+
+    const result = render(
+      <ExtensionPanel
+        state={state}
+        onRefresh={() => {}}
+        onSelectExtension={onSelectExtension}
+        onToggleExtension={onToggleExtension}
+      />,
+    );
+
+    pressEnterToActivateButton(result.getByLabelText("Disable Debug Tools"));
+
+    expect(onToggleExtension).toHaveBeenCalledWith("yuuzu.debug-tools", false);
+    expect(onSelectExtension).not.toHaveBeenCalled();
+  });
+
+  test("keyboard activation on the extension row selects the extension", () => {
+    const onSelectExtension = mock(() => {});
+    const state = replaceExtensionStatuses(createExtensionState(), [
+      status("yuuzu.debug-tools", true),
+    ]);
+
+    const result = render(
+      <ExtensionPanel
+        state={state}
+        onRefresh={() => {}}
+        onSelectExtension={onSelectExtension}
+        onToggleExtension={() => {}}
+      />,
+    );
+
+    const row = result.getByLabelText("Select Debug Tools");
+    row.focus();
+    fireEvent.keyDown(row, {
+      key: "Enter",
+      code: "Enter",
+    });
+
+    expect(onSelectExtension).toHaveBeenCalledWith("yuuzu.debug-tools");
   });
 
   test("shows disabled workspace state", () => {

@@ -28,6 +28,20 @@ type ExtensionPanelProps = {
   onToggleExtension: (extensionId: string, enabled: boolean) => void;
 };
 
+function isNestedInteractiveEventTarget(
+  target: EventTarget | null,
+  currentTarget: HTMLElement,
+): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  const interactiveTarget = target.closest(
+    "button,a,input,select,textarea,[role='button'],[role='link']",
+  );
+  return interactiveTarget !== null && interactiveTarget !== currentTarget;
+}
+
 function ExtensionRow({
   status,
   active,
@@ -52,6 +66,10 @@ function ExtensionRow({
       aria-label={`Select ${status.manifest.name}`}
       onClick={onSelect}
       onKeyDown={(event) => {
+        if (isNestedInteractiveEventTarget(event.target, event.currentTarget)) {
+          return;
+        }
+
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           onSelect();
