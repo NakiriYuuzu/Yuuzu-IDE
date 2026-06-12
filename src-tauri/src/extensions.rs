@@ -4,7 +4,14 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
+
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+pub const EXTENSION_PERFORMANCE_SAMPLE_LIMIT: usize = 64;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ExtensionHookEvent {
@@ -176,11 +183,15 @@ impl ExtensionCatalog {
 #[derive(Clone, Debug)]
 pub struct ExtensionWorkspaceStore {
     path: PathBuf,
+    mutation_lock: Arc<Mutex<()>>,
 }
 
 impl ExtensionWorkspaceStore {
     pub fn new(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            mutation_lock: Arc::new(Mutex::new(())),
+        }
     }
 
     pub fn is_enabled(&self, workspace_root: &str, extension_id: &str) -> Result<bool, String> {
@@ -205,8 +216,9 @@ impl ExtensionWorkspaceStore {
         enabled: bool,
         current_time_ms: impl FnOnce() -> Result<u64, String>,
     ) -> Result<(), String> {
-        let mut data = self.load()?;
         let updated_ms = current_time_ms()?;
+        let _guard = self.mutation_lock.lock().map_err(|err| err.to_string())?;
+        let mut data = self.load()?;
         let workspace = data.workspace_mut(workspace_root);
 
         if enabled {
@@ -231,11 +243,16 @@ impl ExtensionWorkspaceStore {
         workspace_root: &str,
         mut sample: ExtensionPerformanceSample,
     ) -> Result<(), String> {
+        let _guard = self.mutation_lock.lock().map_err(|err| err.to_string())?;
         let mut data = self.load()?;
         sample.workspace_root = workspace_root.to_string();
         let workspace = data.workspace_mut(workspace_root);
         workspace.updated_ms = sample.recorded_ms;
         workspace.performance_samples.push(sample);
+        if workspace.performance_samples.len() > EXTENSION_PERFORMANCE_SAMPLE_LIMIT {
+            let excess = workspace.performance_samples.len() - EXTENSION_PERFORMANCE_SAMPLE_LIMIT;
+            workspace.performance_samples.drain(0..excess);
+        }
         self.save(&data)
     }
 
@@ -298,6 +315,14 @@ impl ExtensionWorkspaceStore {
             .unwrap_or_else(|| OsStr::new("extensions-workspace.json"));
         let mut temp_file_name = OsString::from(".");
         temp_file_name.push(file_name);
+        temp_file_name.push(".");
+        temp_file_name.push(std::process::id().to_string());
+        temp_file_name.push(".");
+        temp_file_name.push(
+            TEMP_FILE_COUNTER
+                .fetch_add(1, Ordering::Relaxed)
+                .to_string(),
+        );
         temp_file_name.push(".tmp");
         let temp_path = parent.join(temp_file_name);
 
@@ -461,7 +486,7 @@ fn core_manifest() -> ExtensionManifest {
                 key: "mod+shift+p".to_string(),
                 when: "editorFocus || terminalFocus".to_string(),
             }],
-            snippets: vec![debug_snippet()],
+            snippets: vec![debug_snippet("core-debug-log")],
             workspace_hooks: vec![ExtensionWorkspaceHookContribution {
                 id: "core.workspace-opened".to_string(),
                 event: ExtensionHookEvent::WorkspaceOpened,
@@ -500,7 +525,7 @@ fn debug_tools_manifest() -> ExtensionManifest {
             ),
             themes: Vec::new(),
             keybindings: Vec::new(),
-            snippets: vec![debug_snippet()],
+            snippets: vec![debug_snippet("debug-tools-log")],
             workspace_hooks: vec![ExtensionWorkspaceHookContribution {
                 id: "debug.workspace-closed".to_string(),
                 event: ExtensionHookEvent::WorkspaceClosed,
@@ -564,9 +589,9 @@ fn command_contributions(
         .collect()
 }
 
-fn debug_snippet() -> ExtensionSnippetContribution {
+fn debug_snippet(id: &str) -> ExtensionSnippetContribution {
     ExtensionSnippetContribution {
-        id: "debug-log".to_string(),
+        id: id.to_string(),
         language: "typescript".to_string(),
         prefix: "dbg".to_string(),
         body: vec!["console.debug(${1:value});".to_string()],
@@ -577,6 +602,10 @@ fn debug_snippet() -> ExtensionSnippetContribution {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        sync::{Arc, Barrier},
+        thread,
+    };
 
     #[test]
     fn builtin_catalog_exposes_command_theme_keybinding_snippet_and_hook_contributions() {
@@ -630,6 +659,51 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_enablement_mutations_preserve_all_workspace_updates() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(ExtensionWorkspaceStore::new(
+            temp.path().join("extensions.json"),
+        ));
+        let loaded = Arc::new(Barrier::new(3));
+        let release = Arc::new(Barrier::new(3));
+
+        let debug_store = Arc::clone(&store);
+        let debug_loaded = Arc::clone(&loaded);
+        let debug_release = Arc::clone(&release);
+        let debug = thread::spawn(move || {
+            debug_store.set_enabled("/repo-a", "yuuzu.debug-tools", false, || {
+                debug_loaded.wait();
+                debug_release.wait();
+                Ok(10)
+            })
+        });
+
+        let theme_store = Arc::clone(&store);
+        let theme_loaded = Arc::clone(&loaded);
+        let theme_release = Arc::clone(&release);
+        let theme = thread::spawn(move || {
+            theme_store.set_enabled("/repo-a", "yuuzu.theme-yuzu", false, || {
+                theme_loaded.wait();
+                theme_release.wait();
+                Ok(11)
+            })
+        });
+
+        loaded.wait();
+        release.wait();
+
+        debug.join().expect("debug thread").expect("debug disable");
+        theme.join().expect("theme thread").expect("theme disable");
+
+        assert!(!store
+            .is_enabled("/repo-a", "yuuzu.debug-tools")
+            .expect("debug enabled"));
+        assert!(!store
+            .is_enabled("/repo-a", "yuuzu.theme-yuzu")
+            .expect("theme enabled"));
+    }
+
+    #[test]
     fn extension_status_marks_disabled_extensions_and_filters_commands() {
         let catalog = ExtensionCatalog::builtin();
         let temp = tempfile::tempdir().expect("tempdir");
@@ -666,5 +740,78 @@ mod tests {
 
         assert!(sample.is_slow());
         assert_eq!(sample.classification(), ExtensionPerformanceClass::Slow);
+    }
+
+    #[test]
+    fn builtin_snippet_contribution_ids_are_unique_across_extensions() {
+        let catalog = ExtensionCatalog::builtin();
+        let mut snippet_ids = std::collections::HashSet::new();
+
+        for manifest in catalog.manifests() {
+            for snippet in &manifest.contributes.snippets {
+                assert!(
+                    snippet_ids.insert(snippet.id.clone()),
+                    "duplicate snippet id: {}",
+                    snippet.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn performance_samples_are_capped_to_newest_records() {
+        let catalog = ExtensionCatalog::builtin();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = ExtensionWorkspaceStore::new(temp.path().join("extensions.json"));
+        let budget = ExtensionPerformanceBudget::default();
+        let cap = EXTENSION_PERFORMANCE_SAMPLE_LIMIT;
+        let total = cap + 5;
+
+        for index in 0..total {
+            let duration_ms = if index == total - 1 {
+                budget.command_warn_ms + 25
+            } else {
+                budget.command_warn_ms
+            };
+
+            store
+                .record_performance(
+                    "/repo-a",
+                    ExtensionPerformanceSample {
+                        extension_id: "yuuzu.debug-tools".to_string(),
+                        workspace_root: "/repo-a".to_string(),
+                        operation: format!("command:debug-start-session:{index}"),
+                        duration_ms,
+                        budget_ms: budget.command_warn_ms,
+                        recorded_ms: index as u64,
+                    },
+                )
+                .expect("record sample");
+        }
+
+        let data = store.load().expect("load store");
+        let samples = &data
+            .workspace("/repo-a")
+            .expect("workspace record")
+            .performance_samples;
+        assert_eq!(samples.len(), cap);
+        assert_eq!(samples.first().expect("first sample").recorded_ms, 5);
+        assert_eq!(
+            samples.last().expect("last sample").recorded_ms,
+            (total - 1) as u64
+        );
+
+        let statuses = extension_statuses(&catalog, &store, "/repo-a").expect("statuses");
+        let debug = statuses
+            .iter()
+            .find(|status| status.manifest.id == "yuuzu.debug-tools")
+            .expect("debug status");
+        assert_eq!(debug.performance.sample_count, cap);
+        assert_eq!(
+            debug.performance.last_duration_ms,
+            Some(budget.command_warn_ms + 25)
+        );
+        assert_eq!(debug.performance.slow_operation_count, 1);
+        assert_eq!(debug.performance.class, ExtensionPerformanceClass::Slow);
     }
 }
