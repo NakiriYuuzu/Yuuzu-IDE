@@ -3,10 +3,12 @@ use rusqlite::Connection;
 use std::{
     path::{Component, Path, PathBuf},
     sync::{Arc, Mutex},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use tauri::{AppHandle, State};
 
+use crate::extensions::{ExtensionPerformanceSample, ExtensionWorkspaceStatus};
 use crate::file_system::{self, FileOperationResult, FileVersion, TextFileRead};
 use crate::file_watcher::{FileWatcherState, WatchWorkspaceHandle};
 use crate::metrics::{snapshot, AppMetricSnapshot};
@@ -31,6 +33,7 @@ pub struct AppState {
     remote_profiles: crate::remote::RemoteHostProfileStore,
     remote_secrets: crate::remote::KeyringRemoteSecretStore,
     debug_launch_configs: crate::debug::DebugLaunchConfigStore,
+    extension_store: crate::extensions::ExtensionWorkspaceStore,
 }
 
 impl AppState {
@@ -57,6 +60,9 @@ impl AppState {
         let debug_launch_configs = crate::debug::DebugLaunchConfigStore::new(
             config_dir.as_ref().join("debug-launch.json"),
         );
+        let extension_store = crate::extensions::ExtensionWorkspaceStore::new(
+            config_dir.as_ref().join("extensions-workspace.json"),
+        );
 
         Ok(Self {
             registry: Mutex::new(registry),
@@ -71,6 +77,7 @@ impl AppState {
             remote_profiles,
             remote_secrets,
             debug_launch_configs,
+            extension_store,
         })
     }
 
@@ -644,6 +651,42 @@ impl AppState {
         let workspace_root = self.trusted_workspace_root(workspace_root)?;
         self.debug_launch_configs
             .delete_config_for_workspace(&workspace_root.to_string_lossy(), config_id)
+    }
+
+    pub fn extension_statuses(
+        &self,
+        workspace_root: &str,
+    ) -> Result<Vec<ExtensionWorkspaceStatus>, String> {
+        let workspace_root = self.trusted_workspace_root(workspace_root)?;
+        crate::extensions::extension_statuses(
+            &crate::extensions::ExtensionCatalog::builtin(),
+            &self.extension_store,
+            &workspace_root.to_string_lossy(),
+        )
+    }
+
+    pub fn set_extension_enabled(
+        &self,
+        workspace_root: &str,
+        extension_id: String,
+        enabled: bool,
+    ) -> Result<Vec<ExtensionWorkspaceStatus>, String> {
+        let workspace_root = self.trusted_workspace_root(workspace_root)?;
+        let root = workspace_root.to_string_lossy().to_string();
+        self.extension_store
+            .set_enabled(&root, &extension_id, enabled, current_time_ms)?;
+        self.extension_statuses(&root)
+    }
+
+    pub fn record_extension_performance(
+        &self,
+        workspace_root: &str,
+        sample: ExtensionPerformanceSample,
+    ) -> Result<Vec<ExtensionWorkspaceStatus>, String> {
+        let workspace_root = self.trusted_workspace_root(workspace_root)?;
+        let root = workspace_root.to_string_lossy().to_string();
+        self.extension_store.record_performance(&root, sample)?;
+        self.extension_statuses(&root)
     }
 
     pub fn debug_list_sessions(
@@ -1282,6 +1325,33 @@ pub fn debug_delete_launch_config(
     config_id: String,
 ) -> Result<(), String> {
     state.debug_delete_launch_config(&workspace_root, &config_id)
+}
+
+#[tauri::command]
+pub fn extension_statuses(
+    state: State<'_, AppState>,
+    workspace_root: String,
+) -> Result<Vec<ExtensionWorkspaceStatus>, String> {
+    state.extension_statuses(&workspace_root)
+}
+
+#[tauri::command]
+pub fn set_extension_enabled(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    extension_id: String,
+    enabled: bool,
+) -> Result<Vec<ExtensionWorkspaceStatus>, String> {
+    state.set_extension_enabled(&workspace_root, extension_id, enabled)
+}
+
+#[tauri::command]
+pub fn record_extension_performance(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    sample: ExtensionPerformanceSample,
+) -> Result<Vec<ExtensionWorkspaceStatus>, String> {
+    state.record_extension_performance(&workspace_root, sample)
 }
 
 #[tauri::command]
@@ -2090,6 +2160,13 @@ fn normalize_lsp_document_path(path: &str) -> Result<String, String> {
     Ok(parts.join("/"))
 }
 
+fn current_time_ms() -> Result<u64, String> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| err.to_string())?
+        .as_millis() as u64)
+}
+
 #[tauri::command]
 pub fn lsp_server_status(
     state: State<'_, AppState>,
@@ -2514,6 +2591,51 @@ mod tests {
             super::scan_workspace_root(&state, unregistered.path().to_str().expect("path"));
 
         assert!(result.unwrap_err().contains("workspace not registered"));
+    }
+
+    #[test]
+    fn extension_commands_require_registered_workspace() {
+        let config = tempfile::tempdir().expect("config");
+        let unregistered = tempfile::tempdir().expect("unregistered workspace");
+        let state = AppState::new(config.path()).expect("state");
+
+        let error = state
+            .extension_statuses(&unregistered.path().to_string_lossy())
+            .expect_err("unregistered workspace rejected");
+
+        assert!(error.contains("workspace not registered"));
+    }
+
+    #[test]
+    fn extension_enablement_is_workspace_scoped_through_app_state() {
+        let (_config, state, workspace_a, workspace_b, _workspace_a_id, _workspace_b_id) =
+            app_state_with_two_workspaces();
+
+        let disabled = state
+            .set_extension_enabled(
+                &workspace_a.to_string_lossy(),
+                "yuuzu.debug-tools".to_string(),
+                false,
+            )
+            .expect("disable");
+        let enabled_elsewhere = state
+            .extension_statuses(&workspace_b.to_string_lossy())
+            .expect("workspace b statuses");
+
+        assert!(
+            !disabled
+                .iter()
+                .find(|status| status.manifest.id == "yuuzu.debug-tools")
+                .expect("debug tools")
+                .enabled
+        );
+        assert!(
+            enabled_elsewhere
+                .iter()
+                .find(|status| status.manifest.id == "yuuzu.debug-tools")
+                .expect("debug tools b")
+                .enabled
+        );
     }
 
     #[test]

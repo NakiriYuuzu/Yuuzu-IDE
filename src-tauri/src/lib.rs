@@ -4,6 +4,7 @@ mod commands;
 pub mod database;
 pub mod debug;
 pub mod docs;
+pub mod extensions;
 mod file_system;
 mod file_watcher;
 pub mod git;
@@ -68,6 +69,9 @@ pub fn run() {
             commands::debug_list_launch_configs,
             commands::debug_save_launch_config,
             commands::debug_delete_launch_config,
+            commands::extension_statuses,
+            commands::set_extension_enabled,
+            commands::record_extension_performance,
             commands::debug_list_sessions,
             commands::debug_start_session,
             commands::debug_set_breakpoints,
