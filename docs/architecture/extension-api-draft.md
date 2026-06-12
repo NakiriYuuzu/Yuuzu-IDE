@@ -26,7 +26,7 @@ hooks, but it cannot execute extension-owned code.
   "id": "yuuzu.debug-tools",
   "name": "Yuuzu Debug Tools",
   "version": "0.1.0",
-  "api_version": "node12.manifest.v1",
+  "api_version": "0.1",
   "description": "Debugging helpers exposed through manifest-only extension contributions.",
   "builtin": true,
   "contributes": {
@@ -131,12 +131,13 @@ Performance samples use this record shape:
 type ExtensionPerformanceSample = {
   extension_id: string;
   workspace_root: string;
-  operation: "activation" | "command" | "workspace_hook";
+  operation: string;
   duration_ms: number;
   budget_ms: number;
   recorded_ms: number;
 };
 ```
 
+Current command samples use `command:<command-id>` in the `operation` field.
 The Extensions panel marks an extension as Slow when it has at least one slow
 operation in the current workspace.
