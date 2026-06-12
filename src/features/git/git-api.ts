@@ -5,6 +5,15 @@ import type {
   GitDiff,
   GitRepositoryStatus,
 } from "./git-model";
+import type {
+  GitCommitDetail,
+  GitExportFormat,
+  GitExportReport,
+  GitExportScope,
+  GitLogFilter,
+  GitLogPage,
+  GitResetMode,
+} from "./git-log-model";
 
 export function getGitStatus(
   workspaceRoot: string,
@@ -112,4 +121,61 @@ export function rebaseGitOnto(
   confirmation: string,
 ): Promise<GitRepositoryStatus> {
   return call("git_rebase_onto", { workspaceRoot, target, confirmation });
+}
+
+export function getGitLogPage(
+  workspaceRoot: string,
+  filter: GitLogFilter,
+  limit: number,
+): Promise<GitLogPage> {
+  return call("git_log_page", { workspaceRoot, filter, limit });
+}
+
+export function getGitCommitDetail(
+  workspaceRoot: string,
+  hash: string,
+): Promise<GitCommitDetail> {
+  return call("git_commit_detail", { workspaceRoot, hash });
+}
+
+export function cherryPickGit(
+  workspaceRoot: string,
+  hash: string,
+): Promise<GitRepositoryStatus> {
+  return call("git_cherry_pick", { workspaceRoot, hash });
+}
+
+export function revertGitCommit(
+  workspaceRoot: string,
+  hash: string,
+  confirmation: string,
+): Promise<GitRepositoryStatus> {
+  return call("git_revert_commit", { workspaceRoot, hash, confirmation });
+}
+
+export function resetGitTo(
+  workspaceRoot: string,
+  hash: string,
+  mode: GitResetMode,
+  confirmation: string,
+): Promise<GitRepositoryStatus> {
+  return call("git_reset_to", { workspaceRoot, hash, mode, confirmation });
+}
+
+export function exportGitCommit(
+  workspaceRoot: string,
+  hash: string,
+  scope: GitExportScope,
+  format: GitExportFormat,
+  destDir: string,
+  overwrite: boolean,
+): Promise<GitExportReport> {
+  return call("git_export_commit", {
+    workspaceRoot,
+    hash,
+    scope,
+    format,
+    destDir,
+    overwrite,
+  });
 }
