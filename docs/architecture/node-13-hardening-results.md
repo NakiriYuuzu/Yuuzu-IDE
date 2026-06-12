@@ -38,17 +38,18 @@ operating risks.
 - `ca4ae22` fix: harden settings import migration
 - `de5ab14` docs: record node 13 hardening readiness
 - `8a82863` fix: clear node 13 verification blockers
+- `babcd41` fix: harden recovery save races
 
 ## Task Evidence
 
 | Task | RED evidence | GREEN evidence | REFACTOR or hardening evidence |
 | --- | --- | --- | --- |
 | Task 1: Rust native unsaved-backup store | Focused `cargo test --manifest-path src-tauri/Cargo.toml recovery::tests` failed before `RecoveryStore`, `UnsavedBackup`, and `backup_id` existed. | Recovery and command scoping tests passed after `0208ae4`. | `5d5f290` hardened persistence behavior; final `cargo test` still passes the recovery and command coverage. |
-| Task 2: Frontend recovery integration | Focused Bun recovery model, panel, workspace-view-state, and AppShell contract tests failed before the recovery modules and native backup wiring existed. | Focused recovery/AppShell checks passed after `39cc01c`. | `4996467` bounded recovery state and stale save writes; final `bun test` passes the recovery coverage and full frontend suite. |
+| Task 2: Frontend recovery integration | Focused Bun recovery model, panel, workspace-view-state, and AppShell contract tests failed before the recovery modules and native backup wiring existed. | Focused recovery/AppShell checks passed after `39cc01c`. | `4996467` bounded recovery state and stale save writes; `babcd41` hardens native save races after final review; final `bun test` passes the recovery coverage and full frontend suite. |
 | Task 3: Rust metrics and diagnostics | Focused `cargo test --manifest-path src-tauri/Cargo.toml diagnostics::tests metrics::tests` failed before the diagnostics module and richer metric fields existed. | Diagnostics, metrics, and command tests passed after `8b5e2e1`. | `4b836b9` skipped corrupt diagnostic log lines; final `cargo test` passes diagnostics and metrics coverage. |
 | Task 4: Frontend Settings, Diagnostics, and Performance dashboard | Focused diagnostics/settings/command-palette/AppShell Bun tests failed before the dashboard, models, and Node 13 commands existed. | Focused dashboard/settings/AppShell checks passed after `e34b470`. | `f2bb0c7` guarded diagnostics refreshes; final `bun test` passes Settings, diagnostics, and AppShell coverage. |
 | Task 5: Settings migration, update policy, and keybinding import | Focused Rust settings and frontend settings import tests failed before migration and import behavior existed. | Settings import and migration checks passed after `ea20734`. | `ba5dbb7` scoped keybinding import errors and `ca4ae22` hardened migration; final `cargo test` and `bun test` pass settings coverage. |
-| Task 6: Packaging, setup docs, and node completion evidence | The setup, update strategy, final results, progress, and roadmap records were absent before this task; the first full verification run exposed `EditorTab.test.ts` order sensitivity and a clippy lint blocker. | `8a82863` clears both blockers; `bun test`, `bun run build`, `cargo test`, `cargo fmt --check`, `cargo clippy`, and `bun run tauri build --debug` pass. | The marker scan and `git diff --check` are the documentation cleanup gate for this task. |
+| Task 6: Packaging, setup docs, and node completion evidence | The setup, update strategy, final results, progress, and roadmap records were absent before this task; the first full verification run exposed `EditorTab.test.ts` order sensitivity and a clippy lint blocker. | `8a82863` clears both blockers; `babcd41` clears the final review recovery race blocker; `bun test`, `bun run build`, `cargo test`, `cargo fmt --check`, `cargo clippy`, and `bun run tauri build --debug` pass. | The marker scan and `git diff --check` are the documentation cleanup gate for this task. |
 
 ## Final Verification
 
@@ -56,8 +57,8 @@ Commands run from `/Users/yuuzu/HanaokaYuuzu/Ai/yuuzu-ide` on 2026-06-12.
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `bun test` | PASS | Exit 0. 411 pass, 0 fail, 1175 `expect()` calls across 47 files. |
-| `bun run build` | PASS | Exit 0. `tsc && vite build` completed in 3.26s. Vite emitted chunk-size warnings for large Monaco/editor and worker assets. |
+| `bun test` | PASS | Exit 0. 413 pass, 0 fail, 1182 `expect()` calls across 47 files. |
+| `bun run build` | PASS | Exit 0. `tsc && vite build` completed in 3.33s. Vite emitted chunk-size warnings for large Monaco/editor and worker assets. |
 | `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml` | PASS | Exit 0. Rust lib tests: 315 passed, 0 failed, 3 ignored. Main and doc-test targets had 0 runnable tests. |
 | `. "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check` | PASS | Exit 0 with no output. |
 | `. "$HOME/.cargo/env" && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings` | PASS | Exit 0. Clippy finished the dev profile with warnings denied. |
@@ -106,8 +107,15 @@ conservative current value rather than a measured file tree total.
 - `8a82863` replaces `std::iter::repeat(...).take(120_000)` with
   `std::iter::repeat_n(..., 120_000)` in `src-tauri/src/commands.rs`, preserving
   the test payload while clearing `clippy::manual-repeat-n`.
-- Spec-compliance and code-quality reviewers both approved the blocker fix with
-  no open issues.
+- The first final Node 13 reviewer found a blocking native recovery race:
+  in-flight native backup saves could resolve after a file became clean, or an
+  older dirty save could resolve after newer dirty content.
+- `babcd41` adds AppShell regression coverage for clean-after-dirty and
+  out-of-order dirty native recovery saves. RED evidence reproduced the missing
+  discard and missing corrective re-save; GREEN evidence is the focused tests,
+  `bun test src/app/AppShell.contract.test.tsx`, and final `bun test` passing.
+- Spec-compliance and code-quality reviewers approved both blocker fixes with
+  no open critical or important issues.
 
 ## Residual Risks
 

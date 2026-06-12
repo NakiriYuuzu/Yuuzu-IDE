@@ -1164,10 +1164,13 @@ Completed progress:
 - The blocker-fix follow-up preserved real `EditorTab` exports across the
   AppShell contract test mock and replaced the clippy-blocked manual repeat in
   the Rust keybinding import stress test.
+- The final review follow-up fixed native recovery save races so an in-flight
+  backup resolving after clean state is discarded, and older dirty backup
+  completions cannot leave stale content as the durable recovery record.
 
 Verification outcomes:
 
-- `bun test`: PASS with 411 passed, 0 failed, 1175 `expect()` calls across 47
+- `bun test`: PASS with 413 passed, 0 failed, 1182 `expect()` calls across 47
   files.
 - `bun run build`: PASS with `tsc && vite build`; Vite chunk-size warnings are
   present.

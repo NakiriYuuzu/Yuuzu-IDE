@@ -769,7 +769,8 @@ implementation and verification evidence are recorded in
   code-quality reviews covered.
 - Node 13 implementation covers native unsaved edit recovery, diagnostics,
   performance metrics, Settings migration, keybinding import, manual update
-  strategy, personal setup docs, and current-host debug packaging. Final
-  verification passes with `bun test`, `bun run build`, `cargo test`,
-  `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`,
-  and `bun run tauri build --debug`.
+  strategy, personal setup docs, current-host debug packaging, and native
+  recovery race hardening. Final verification passes with `bun test`,
+  `bun run build`, `cargo test`, `cargo fmt --check`,
+  `cargo clippy --all-targets --all-features -- -D warnings`, and
+  `bun run tauri build --debug`.
