@@ -37,6 +37,14 @@ export function writeTerminalSession(
   return call<void>("write_terminal_session", { sessionId, data });
 }
 
+export function resizeTerminalSession(
+  sessionId: string,
+  rows: number,
+  cols: number,
+): Promise<void> {
+  return call<void>("resize_terminal_session", { sessionId, rows, cols });
+}
+
 export function closeTerminalSession(
   sessionId: string,
 ): Promise<TerminalSessionInfo> {

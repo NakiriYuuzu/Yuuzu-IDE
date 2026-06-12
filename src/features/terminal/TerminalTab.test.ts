@@ -12,11 +12,26 @@ mock.module("./load-xterm", () => ({
 }));
 
 ensureTestDom();
-if (!globalThis.ResizeObserver) {
-  globalThis.ResizeObserver = (
-    globalThis.window as unknown as { ResizeObserver: typeof ResizeObserver }
-  ).ResizeObserver;
+
+class ControlledResizeObserver {
+  static instances: ControlledResizeObserver[] = [];
+  callback: () => void;
+
+  constructor(callback: () => void) {
+    this.callback = callback;
+    ControlledResizeObserver.instances.push(this);
+  }
+
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+  trigger() {
+    this.callback();
+  }
 }
+
+globalThis.ResizeObserver =
+  ControlledResizeObserver as unknown as typeof ResizeObserver;
 
 const { TerminalTab } = await import("./TerminalTab");
 const { appendTerminalReplayOutput, clearTerminalReplayOutput } = await import(
@@ -65,14 +80,25 @@ class FakeTerminal {
 }
 
 class FakeFitAddon {
+  static proposed: { rows: number; cols: number } | undefined = {
+    rows: 30,
+    cols: 100,
+  };
+
   fit() {}
+  proposeDimensions() {
+    return FakeFitAddon.proposed;
+  }
 }
 
 function fakeXterm() {
   return { Terminal: FakeTerminal, FitAddon: FakeFitAddon };
 }
 
-async function mountTerminalTab(sessionId: string) {
+async function mountTerminalTab(
+  sessionId: string,
+  onResize?: (sessionId: string, rows: number, cols: number) => void,
+) {
   const { createRoot } = await import("react-dom/client");
   const { flushSync } = await import("react-dom");
   const container = document.createElement("div");
@@ -84,6 +110,7 @@ async function mountTerminalTab(sessionId: string) {
       React.createElement(TerminalTab, {
         sessionId,
         onInput: () => {},
+        onResize,
       }),
     );
   });
@@ -179,6 +206,76 @@ describe("TerminalTab output pipeline", () => {
 
     mounted.unmount();
     clearTerminalReplayOutput("w:tab-4");
+    loadXtermMock.mockReset();
+  });
+
+  test("syncs the PTY to the fitted dimensions on mount", async () => {
+    FakeTerminal.instances = [];
+    FakeFitAddon.proposed = { rows: 30, cols: 100 };
+    loadXtermMock.mockResolvedValueOnce(fakeXterm());
+    clearTerminalReplayOutput("w:tab-6");
+    const resizeCalls: Array<[string, number, number]> = [];
+
+    const mounted = await mountTerminalTab("w:tab-6", (sessionId, rows, cols) =>
+      resizeCalls.push([sessionId, rows, cols]),
+    );
+    await waitUntil(() => expect(FakeTerminal.instances.length).toBe(1));
+
+    expect(resizeCalls).toEqual([["w:tab-6", 30, 100]]);
+
+    mounted.unmount();
+    clearTerminalReplayOutput("w:tab-6");
+    loadXtermMock.mockReset();
+  });
+
+  test("debounces resize notifications after container resizes", async () => {
+    FakeTerminal.instances = [];
+    ControlledResizeObserver.instances = [];
+    FakeFitAddon.proposed = { rows: 30, cols: 100 };
+    loadXtermMock.mockResolvedValueOnce(fakeXterm());
+    clearTerminalReplayOutput("w:tab-7");
+    const resizeCalls: Array<[string, number, number]> = [];
+
+    const mounted = await mountTerminalTab("w:tab-7", (sessionId, rows, cols) =>
+      resizeCalls.push([sessionId, rows, cols]),
+    );
+    await waitUntil(() =>
+      expect(ControlledResizeObserver.instances.length).toBe(1),
+    );
+    const observer = ControlledResizeObserver.instances[0]!;
+    resizeCalls.length = 0;
+
+    FakeFitAddon.proposed = { rows: 48, cols: 180 };
+    observer.trigger();
+    observer.trigger();
+    expect(resizeCalls).toEqual([]);
+
+    await waitUntil(() =>
+      expect(resizeCalls).toEqual([["w:tab-7", 48, 180]]),
+    );
+
+    mounted.unmount();
+    clearTerminalReplayOutput("w:tab-7");
+    loadXtermMock.mockReset();
+  });
+
+  test("skips resize notifications when no dimensions can be proposed", async () => {
+    FakeTerminal.instances = [];
+    FakeFitAddon.proposed = undefined;
+    loadXtermMock.mockResolvedValueOnce(fakeXterm());
+    clearTerminalReplayOutput("w:tab-8");
+    const resizeCalls: Array<[string, number, number]> = [];
+
+    const mounted = await mountTerminalTab("w:tab-8", (sessionId, rows, cols) =>
+      resizeCalls.push([sessionId, rows, cols]),
+    );
+    await waitUntil(() => expect(FakeTerminal.instances.length).toBe(1));
+
+    expect(resizeCalls).toEqual([]);
+
+    mounted.unmount();
+    clearTerminalReplayOutput("w:tab-8");
+    FakeFitAddon.proposed = { rows: 30, cols: 100 };
     loadXtermMock.mockReset();
   });
 

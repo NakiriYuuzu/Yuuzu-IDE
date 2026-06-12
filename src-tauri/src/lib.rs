@@ -132,6 +132,7 @@ pub fn run() {
             commands::list_terminal_sessions,
             commands::spawn_terminal_session,
             commands::write_terminal_session,
+            commands::resize_terminal_session,
             commands::close_terminal_session,
             commands::list_workspace_tasks,
             commands::run_workspace_task,

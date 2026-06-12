@@ -2177,6 +2177,16 @@ pub fn write_terminal_session(
 }
 
 #[tauri::command]
+pub fn resize_terminal_session(
+    state: State<'_, TerminalState>,
+    session_id: String,
+    rows: u16,
+    cols: u16,
+) -> Result<(), String> {
+    state.resize_session(&session_id, rows, cols)
+}
+
+#[tauri::command]
 pub fn close_terminal_session(
     state: State<'_, TerminalState>,
     session_id: String,

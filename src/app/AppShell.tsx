@@ -430,6 +430,7 @@ import {
   closeTerminalSession,
   onTerminalExit,
   onTerminalOutput,
+  resizeTerminalSession,
   spawnTerminalSession,
   writeTerminalSession,
 } from "../features/terminal/terminal-api";
@@ -4628,6 +4629,13 @@ export function AppShell() {
     });
   }
 
+  function resizeTerminalPty(sessionId: string, rows: number, cols: number) {
+    void resizeTerminalSession(sessionId, rows, cols).catch(() => {
+      // Resize is a background sync; a failed call (e.g. exited session)
+      // must not surface as a terminal error.
+    });
+  }
+
   function updateTaskCustomCommand(value: string) {
     updateTask(activeWorkspaceId, (task) => setCustomCommand(task, value));
   }
@@ -8668,6 +8676,7 @@ export function AppShell() {
                           key={activeTerminal.id}
                           sessionId={activeTerminal.id}
                           onInput={writeTerminalInput}
+                          onResize={resizeTerminalPty}
                         />
                       </Suspense>
                     </>

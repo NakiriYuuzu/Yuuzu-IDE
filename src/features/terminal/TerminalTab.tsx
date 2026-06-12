@@ -14,24 +14,30 @@ import {
   subscribeTerminalChunks,
 } from "./terminal-replay-buffer";
 
+const RESIZE_NOTIFY_DEBOUNCE_MS = 100;
+
 type TerminalTabProps = {
   sessionId: string;
   onInput: (sessionId: string, data: string) => void;
+  onResize?: (sessionId: string, rows: number, cols: number) => void;
 };
 
-export function TerminalTab({ sessionId, onInput }: TerminalTabProps) {
+export function TerminalTab({ sessionId, onInput, onResize }: TerminalTabProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onInputRef = useRef(onInput);
+  const onResizeRef = useRef(onResize);
   const [loadFailure, setLoadFailure] =
     useState<TerminalLoadFailureCopy | null>(null);
 
   onInputRef.current = onInput;
+  onResizeRef.current = onResize;
 
   useEffect(() => {
     let disposed = false;
     let cleanup: (() => void) | undefined;
     let inputCleanup: (() => void) | undefined;
     let unsubscribeChunks: (() => void) | undefined;
+    let resizeNotifyTimer: ReturnType<typeof setTimeout> | undefined;
 
     setLoadFailure(null);
 
@@ -74,7 +80,21 @@ export function TerminalTab({ sessionId, onInput }: TerminalTabProps) {
         });
         inputCleanup = createTerminalInputCleanup(dataDisposable);
 
-        const resizeObserver = new ResizeObserver(() => fitAddon.fit());
+        const notifyPtySize = () => {
+          const dimensions = fitAddon.proposeDimensions();
+          if (dimensions) {
+            onResizeRef.current?.(sessionId, dimensions.rows, dimensions.cols);
+          }
+        };
+        notifyPtySize();
+
+        const resizeObserver = new ResizeObserver(() => {
+          fitAddon.fit();
+          if (resizeNotifyTimer !== undefined) {
+            clearTimeout(resizeNotifyTimer);
+          }
+          resizeNotifyTimer = setTimeout(notifyPtySize, RESIZE_NOTIFY_DEBOUNCE_MS);
+        });
         resizeObserver.observe(hostRef.current);
         cleanup = createTerminalCleanup(terminal, resizeObserver);
       } catch (error) {
@@ -91,6 +111,9 @@ export function TerminalTab({ sessionId, onInput }: TerminalTabProps) {
 
     return () => {
       disposed = true;
+      if (resizeNotifyTimer !== undefined) {
+        clearTimeout(resizeNotifyTimer);
+      }
       unsubscribeChunks?.();
       inputCleanup?.();
       cleanup?.();

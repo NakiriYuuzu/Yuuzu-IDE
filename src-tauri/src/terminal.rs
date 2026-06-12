@@ -1,4 +1,6 @@
-use portable_pty::{Child, ChildKiller, CommandBuilder, NativePtySystem, PtySize, PtySystem};
+use portable_pty::{
+    Child, ChildKiller, CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -137,6 +139,7 @@ pub struct TerminalExitEvent {
 struct TerminalProcess {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
+    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
 }
 
 pub struct TerminalState {
@@ -266,8 +269,16 @@ impl TerminalState {
             }
         });
 
+        let master = Arc::new(Mutex::new(pair.master));
         if let Err(err) = self.processes.lock().map(|mut processes| {
-            processes.insert(info.id.clone(), TerminalProcess { writer, killer });
+            processes.insert(
+                info.id.clone(),
+                TerminalProcess {
+                    writer,
+                    killer,
+                    master,
+                },
+            );
         }) {
             kill_and_wait(&mut *child);
             let _ = self
@@ -296,6 +307,22 @@ impl TerminalState {
         });
 
         Ok(info)
+    }
+
+    pub fn resize_session(&self, session_id: &str, rows: u16, cols: u16) -> Result<(), String> {
+        let master = {
+            let processes = self.processes.lock().map_err(|err| err.to_string())?;
+            Arc::clone(
+                &processes
+                    .get(session_id)
+                    .ok_or_else(|| format!("missing terminal session: {session_id}"))?
+                    .master,
+            )
+        };
+        let master = master.lock().map_err(|err| err.to_string())?;
+        master
+            .resize(terminal_size(rows, cols))
+            .map_err(|err| err.to_string())
     }
 
     pub fn write_session(&self, session_id: &str, data: &str) -> Result<(), String> {
@@ -356,7 +383,7 @@ fn kill_and_wait(child: &mut dyn Child) {
 
 #[cfg(test)]
 mod tests {
-    use portable_pty::{Child, ChildKiller, ExitStatus};
+    use portable_pty::{Child, ChildKiller, ExitStatus, PtySystem};
     use std::{
         io::{self, Write},
         path::PathBuf,
@@ -434,11 +461,15 @@ mod tests {
         session_id: &str,
         writer: Box<dyn Write + Send>,
     ) {
+        let pair = portable_pty::NativePtySystem::default()
+            .openpty(super::terminal_size(24, 80))
+            .expect("openpty");
         manager.processes.lock().expect("processes").insert(
             session_id.to_string(),
             super::TerminalProcess {
                 writer: Arc::new(Mutex::new(writer)),
                 killer: Arc::new(Mutex::new(Box::new(NoopKiller))),
+                master: Arc::new(Mutex::new(pair.master)),
             },
         );
     }
@@ -587,6 +618,39 @@ mod tests {
 
         assert_eq!(size.rows, 1);
         assert_eq!(size.cols, 1);
+    }
+
+    #[test]
+    fn resize_session_updates_kernel_pty_size() {
+        let manager = super::TerminalState::new();
+        let session = manager
+            .register_test_session("workspace-a".to_string(), PathBuf::from("/repo-a"), None)
+            .expect("session");
+        insert_test_process(&manager, &session.id, Box::new(io::sink()));
+
+        manager
+            .resize_session(&session.id, 50, 220)
+            .expect("resize");
+
+        let size = {
+            let processes = manager.processes.lock().expect("processes");
+            let process = processes.get(&session.id).expect("process");
+            let master = process.master.lock().expect("master");
+            master.get_size().expect("get size")
+        };
+        assert_eq!(size.rows, 50);
+        assert_eq!(size.cols, 220);
+    }
+
+    #[test]
+    fn resize_session_rejects_missing_sessions() {
+        let manager = super::TerminalState::new();
+
+        let result = manager.resize_session("workspace-a:terminal-9", 50, 220);
+
+        assert!(result
+            .expect_err("missing session must error")
+            .contains("missing terminal session"));
     }
 
     #[test]
