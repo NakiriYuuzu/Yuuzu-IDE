@@ -1,3 +1,5 @@
+import type { GitDiffHunks } from "./git-diff-model";
+
 export type GitChangeKind =
   | "added"
   | "modified"
@@ -93,7 +95,7 @@ export type GitViewState = {
   error: string | null;
   commitMessage: string;
   selectedDiff: GitDiffSelection | null;
-  diffByKey: Record<string, GitDiff>;
+  diffByKey: Record<string, GitDiffHunks>;
   branches: GitBranch[];
   graph: GitCommitSummary[];
 };
@@ -155,7 +157,10 @@ export function selectDiff(
   return { ...state, selectedDiff };
 }
 
-export function storeDiff(state: GitViewState, diff: GitDiff): GitViewState {
+export function storeDiff(
+  state: GitViewState,
+  diff: GitDiffHunks,
+): GitViewState {
   return {
     ...state,
     diffByKey: {

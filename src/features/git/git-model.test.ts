@@ -132,14 +132,32 @@ describe("git-model", () => {
   test("stores diff content by public diff cache key", () => {
     const state = storeDiff(createGitState(), {
       path: "README.md",
-      original_path: null,
       staged: false,
       binary: false,
       truncated: false,
-      raw: "diff --git a/README.md b/README.md\n+hello\n",
+      hunks: [
+        {
+          header: "@@ -1,1 +1,2 @@",
+          old_start: 1,
+          old_lines: 1,
+          new_start: 1,
+          new_lines: 2,
+          lines: [
+            {
+              kind: "add",
+              old_no: null,
+              new_no: 2,
+              text: "hello",
+              word_ranges: [],
+            },
+          ],
+        },
+      ],
     });
 
-    expect(state.diffByKey["unstaged:README.md"]?.raw).toContain("+hello");
+    expect(
+      state.diffByKey["unstaged:README.md"]?.hunks[0]?.lines[0]?.text,
+    ).toBe("hello");
   });
 
   test("replaces status and preserves commit message", () => {
@@ -227,14 +245,13 @@ describe("git-model", () => {
   test("stores loaded diff by path and staged flag", () => {
     const state = storeDiff(createGitState(), {
       path: "README.md",
-      original_path: null,
       staged: false,
       binary: false,
       truncated: false,
-      raw: "diff --git a/README.md b/README.md\n+changed\n",
+      hunks: [],
     });
 
-    expect(state.diffByKey["unstaged:README.md"]?.raw).toContain("+changed");
+    expect(state.diffByKey["unstaged:README.md"]?.path).toBe("README.md");
   });
 
   test("keeps current branch first in branch controls", () => {

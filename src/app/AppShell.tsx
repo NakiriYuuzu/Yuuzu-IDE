@@ -339,17 +339,24 @@ import {
   discardGitPaths,
   fetchGit,
   getGitCommitGraph,
-  getGitDiffFile,
+  getGitDiffHunks,
   getGitStatus,
   listGitBranches,
   pullGit,
   pushGit,
   rebaseGitOnto,
   resetGitHard,
+  revertGitHunk,
+  stageGitHunks,
   stageGitPaths,
   stashGit,
+  unstageGitHunks,
   unstageGitPaths,
 } from "../features/git/git-api";
+import {
+  hunksToUnifiedText,
+  type HunkSelection,
+} from "../features/git/git-diff-model";
 import { GitDiffView } from "../features/git/GitDiffView";
 import { GitGraphView } from "../features/git/GitGraphView";
 import { GitPanel } from "../features/git/GitPanel";
@@ -529,10 +536,7 @@ export type AgentAvailableContextSource = {
   selectedDiff:
     | {
         path: string;
-        original_path: string | null;
         staged: boolean;
-        binary: boolean;
-        truncated: boolean;
         raw: string;
       }
     | null;
@@ -2951,7 +2955,13 @@ export function AppShell() {
         loadedFile: activeLoadedFile,
         docsPreviews,
         browserScreenshots: view.browser.screenshots,
-        selectedDiff: selectedGitDiff,
+        selectedDiff: selectedGitDiff
+          ? {
+              path: selectedGitDiff.path,
+              staged: selectedGitDiff.staged,
+              raw: hunksToUnifiedText(selectedGitDiff),
+            }
+          : null,
         activeFileDiagnostics,
         terminalSession: activeTerminal,
         terminalOutput: activeTerminal
@@ -4904,6 +4914,61 @@ export function AppShell() {
     await request.run(confirmation);
   }
 
+  function applyGitHunkSelections(
+    action: "stage" | "unstage",
+    selections: HunkSelection[],
+  ) {
+    const selection = workspaceViewStore
+      .getState()
+      .viewFor(activeWorkspaceId).git.selectedDiff;
+    if (!selection || selections.length === 0) {
+      return;
+    }
+
+    const label = action === "stage" ? "Stage hunks" : "Unstage hunks";
+    void runGitStatusMutation(label, (workspaceRoot) =>
+      action === "stage"
+        ? stageGitHunks(workspaceRoot, selection.path, selections)
+        : unstageGitHunks(workspaceRoot, selection.path, selections),
+    ).then((ok) => {
+      if (ok) {
+        void loadGitDiff(selection.path, selection.staged);
+      }
+    });
+  }
+
+  function revertGitHunkSelections(selections: HunkSelection[]) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+    const selection = workspaceViewStore
+      .getState()
+      .viewFor(activeWorkspaceId).git.selectedDiff;
+    if (!selection || selections.length === 0) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    openGitConfirmation({
+      action: { kind: "discard", paths: [selection.path] },
+      title: "Revert selected changes",
+      detail: selection.path,
+      run: async (confirmation) => {
+        const ok = await runGitStatusMutationForWorkspace(
+          workspaceId,
+          workspaceRoot,
+          "Revert hunks",
+          (root) =>
+            revertGitHunk(root, selection.path, selections, confirmation),
+        );
+        if (ok) {
+          void loadGitDiff(selection.path, selection.staged);
+        }
+      },
+    });
+  }
+
   function stageGitPath(path: string) {
     void runGitStatusMutation("Stage", (workspaceRoot) =>
       stageGitPaths(workspaceRoot, [path]),
@@ -4974,7 +5039,7 @@ export function AppShell() {
     updateGit(workspaceId, (git) => setGitLoading(setGitError(git, null), true));
 
     try {
-      const diff = await getGitDiffFile(workspaceRoot, path, staged);
+      const diff = await getGitDiffHunks(workspaceRoot, path, staged);
       updateGit(workspaceId, (git) => setGitLoading(storeDiff(git, diff), false));
     } catch (error) {
       updateGit(workspaceId, (git) =>
@@ -8735,7 +8800,7 @@ export function AppShell() {
                 </div>
               ) : surface === "git-diff" ? (
                 <GitDiffView
-                  diff={selectedGitDiff}
+                  hunks={selectedGitDiff}
                   selectedPath={view.git.selectedDiff?.path ?? null}
                   loading={view.git.loading}
                   error={view.git.error}
@@ -8748,6 +8813,15 @@ export function AppShell() {
                       void loadGitDiff(selection.path, selection.staged);
                     }
                   }}
+                  onStageSelections={(selections) =>
+                    applyGitHunkSelections("stage", selections)
+                  }
+                  onUnstageSelections={(selections) =>
+                    applyGitHunkSelections("unstage", selections)
+                  }
+                  onRevertSelections={(selections) =>
+                    revertGitHunkSelections(selections)
+                  }
                 />
               ) : surface === "git-graph" ? (
                 <GitGraphView

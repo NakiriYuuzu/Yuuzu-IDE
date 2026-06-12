@@ -6,6 +6,10 @@ import type {
   GitRepositoryStatus,
 } from "./git-model";
 import type {
+  GitDiffHunks,
+  HunkSelection,
+} from "./git-diff-model";
+import type {
   GitCommitDetail,
   GitExportFormat,
   GitExportReport,
@@ -178,4 +182,50 @@ export function exportGitCommit(
     destDir,
     overwrite,
   });
+}
+
+export function getGitDiffHunks(
+  workspaceRoot: string,
+  path: string,
+  staged: boolean,
+): Promise<GitDiffHunks> {
+  return call("git_diff_hunks", { workspaceRoot, path, staged });
+}
+
+export function stageGitHunks(
+  workspaceRoot: string,
+  path: string,
+  selections: HunkSelection[],
+): Promise<GitRepositoryStatus> {
+  return call("git_stage_hunks", { workspaceRoot, path, selections });
+}
+
+export function unstageGitHunks(
+  workspaceRoot: string,
+  path: string,
+  selections: HunkSelection[],
+): Promise<GitRepositoryStatus> {
+  return call("git_unstage_hunks", { workspaceRoot, path, selections });
+}
+
+export function revertGitHunk(
+  workspaceRoot: string,
+  path: string,
+  selections: HunkSelection[],
+  confirmation: string,
+): Promise<GitRepositoryStatus> {
+  return call("git_revert_hunk", {
+    workspaceRoot,
+    path,
+    selections,
+    confirmation,
+  });
+}
+
+export function getGitCommitFileDiff(
+  workspaceRoot: string,
+  hash: string,
+  path: string,
+): Promise<GitDiffHunks> {
+  return call("git_commit_file_diff", { workspaceRoot, hash, path });
 }

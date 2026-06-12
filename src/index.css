@@ -2138,6 +2138,141 @@ circle.lane-5 {
   color: var(--txt-dim);
 }
 
+.diffwrap {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  line-height: 19px;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.dline {
+  display: flex;
+  align-items: center;
+  white-space: pre;
+}
+
+.dline .lno {
+  flex: 0 0 38px;
+  text-align: right;
+  padding-right: 10px;
+  color: var(--txt-faint, var(--txt-dim));
+  user-select: none;
+}
+
+.dline .dtext {
+  flex: 1;
+  padding: 0 12px 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dline.add {
+  background: color-mix(in srgb, var(--git-added, #c3e88d) 12%, transparent);
+}
+
+.dline.add .dtext {
+  color: var(--git-added, #c3e88d);
+}
+
+.dline.del {
+  background: color-mix(in srgb, var(--git-deleted, #f07178) 11%, transparent);
+}
+
+.dline.del .dtext {
+  color: var(--git-deleted, #f07178);
+}
+
+.dline.ctx .dtext {
+  color: var(--txt-dim);
+}
+
+.dline.fill {
+  background: var(--chrome-2);
+  opacity: 0.5;
+}
+
+.dline mark {
+  background: color-mix(in srgb, var(--git-added, #c3e88d) 38%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.dline.del mark {
+  background: color-mix(in srgb, var(--git-deleted, #f07178) 38%, transparent);
+}
+
+.hunkbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  background: var(--chrome-2);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  color: var(--txt-dim);
+}
+
+.hunkbar .hb-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.hunkbar button {
+  border: 1px solid var(--line);
+  background: var(--editor);
+  color: var(--txt-dim);
+  font-size: 10.5px;
+  font-family: inherit;
+  border-radius: 4px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+
+.hunkbar button:hover {
+  color: var(--txt);
+  border-color: var(--line-strong, var(--line));
+}
+
+.git-diff-linecheck,
+.git-diff-hunkcheck {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  width: 22px;
+  justify-content: center;
+}
+
+.git-diff-linecheck input,
+.git-diff-hunkcheck input {
+  accent-color: var(--yuzu, #f5c451);
+  cursor: pointer;
+}
+
+.git-diff-linecheck.spacer {
+  visibility: hidden;
+}
+
+.sbs {
+  display: flex;
+  flex-direction: column;
+}
+
+.sbs-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.sbs-row .dline + .dline {
+  border-left: 1px solid var(--line);
+}
+
 .database-panel {
   min-height: 0;
   display: flex;
