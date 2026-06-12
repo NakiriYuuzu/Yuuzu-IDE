@@ -606,6 +606,9 @@ stable.
 
 **Goal:** open customization without destabilizing core performance.
 
+**Status:** completed and passed. Final results are recorded in
+`docs/architecture/node-12-extension-results.md`.
+
 **Scope**
 
 - Internal command registry.
@@ -706,8 +709,8 @@ stable.
 ## Current Priority
 
 Node 0, Node 1, Node 2, Node 3, Node 4, Node 5, Node 6, Node 7, Node 8,
-Node 9, Node 10, and Node 11 are complete. The next active priority is Node
-12: Extension And Ecosystem Layer.
+Node 9, Node 10, Node 11, and Node 12 are complete. The next active priority is
+Node 13: Hardening, Packaging, And Daily Driver Readiness.
 
 - Node 0 measurements keep Tauri 2 as the main route; Rust-native fallback
   research remains deferred.
@@ -757,5 +760,7 @@ Node 9, Node 10, and Node 11 are complete. The next active priority is Node
   refresh guard contracts, clippy, formatting, Tauri debug build, and real
   adapter smoke covered. Both `debugpy` and `lldb-dap` smoke tests pass and
   return the expected `counter = 3` variables at their fixture breakpoints.
-- Node 12 should start from the extension command registry, disable controls,
-  performance visibility, and isolation model described above.
+- Node 12 verification keeps the shared command registry, workspace-scoped
+  extension disablement, slow-extension performance visibility, public API
+  draft, Bun/Cargo tests, Tauri debug build, and implementer/spec-compliance/
+  code-quality reviews covered.

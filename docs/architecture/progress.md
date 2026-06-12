@@ -1130,3 +1130,9 @@ Residual risks:
   the C and Python smoke fixtures.
 - Vite chunk-size warnings remain expected because Monaco, language workers, and
   terminal assets are large; the build exits successfully.
+
+### Node 12: Extension And Ecosystem Layer
+
+Status: completed and passed.
+
+Node 12 records final evidence in `docs/architecture/node-12-extension-results.md`.
