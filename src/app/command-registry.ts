@@ -319,6 +319,41 @@ export const coreCommandContributions: CommandContribution[] = [
     description: "Refresh workspace extension status",
     owner_extension_id: "yuuzu.core",
   },
+  {
+    id: "git-open-log",
+    label: "Git: Open Log",
+    group: "Git",
+    description: "Open the git log surface",
+    owner_extension_id: "yuuzu.core",
+  },
+  {
+    id: "git-export-commit",
+    label: "Git: Export Commit…",
+    group: "Git",
+    description: "Export the selected commit as files or a zip",
+    owner_extension_id: "yuuzu.core",
+  },
+  {
+    id: "git-toggle-blame",
+    label: "Git: Toggle Blame",
+    group: "Git",
+    description: "Toggle the blame gutter for the active file",
+    owner_extension_id: "yuuzu.core",
+  },
+  {
+    id: "git-branches",
+    label: "Git: Branches…",
+    group: "Git",
+    description: "Open the branch popup",
+    owner_extension_id: "yuuzu.core",
+  },
+  {
+    id: "git-rebase-branch",
+    label: "Git: Rebase Current Branch…",
+    group: "Git",
+    description: "Rebase the current branch onto a chosen target",
+    owner_extension_id: "yuuzu.core",
+  },
 ];
 
 const coreCommandIdSet = new Set(

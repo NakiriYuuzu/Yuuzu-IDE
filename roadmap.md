@@ -370,6 +370,10 @@ in `docs/architecture/node-2-editor-results.md`.
 
 ### Node 4: Git Workflows
 
+**Status:** completed and passed; measured git results are recorded in
+`docs/architecture/node-4-git-results.md`. Superseded in depth by
+Node 10.5 Git Deep Dive.
+
 **Goal:** cover the daily source-control loop without leaving the app.
 
 **Scope**
@@ -427,6 +431,9 @@ context.
 
 ### Node 6: Language Intelligence
 
+**Status:** completed and passed; measured language results are recorded in
+`docs/architecture/node-6-language-results.md`.
+
 **Goal:** add modern code intelligence while keeping idle overhead low.
 
 **Scope**
@@ -456,6 +463,9 @@ context.
 - Heavy semantic indexing beyond LSP.
 
 ### Node 7: Agent Workbench
+
+**Status:** completed and passed; measured agent results are recorded in
+`docs/architecture/node-7-agent-results.md`.
 
 **Goal:** integrate agent-assisted development as a structured IDE workflow.
 
@@ -570,6 +580,46 @@ desktop.
 
 - Full remote workspace editing.
 - Remote container orchestration.
+
+### Node 10.5: Git Deep Dive
+
+**Status:** completed and passed. Final results are recorded in
+`docs/architecture/git-deep-dive-results.md`.
+
+**Goal:** upgrade git tooling to JetBrains-grade capability for the daily
+source-control loop.
+
+**Scope**
+
+- Real DAG commit log with filters, pagination, and commit detail.
+- Commit actions: checkout revision, new branch, cherry-pick, confirmed
+  revert, confirmed reset soft/mixed/hard, copy hash.
+- Single-commit export (changed files or snapshot, folder or zip) with
+  overwrite protection and bounds.
+- Hunk- and line-level partial staging with confirmed revert.
+- Side-by-side diff with word-level highlights.
+- Three-way conflict resolution with per-block accepts.
+- Branch popup with search, favorites, merge/rename/confirmed delete, and
+  rebase target picking; stash list/apply/pop/branch/confirmed drop.
+- Blame gutter with log navigation and file history following renames.
+
+**Acceptance**
+
+- Log renders true parent-edge DAG with fork/join on merges and stays bounded
+  at 2,000 loaded rows with `truncated` flags.
+- A single hunk and a single line can be staged, unstaged, and reverted behind
+  typed `DISCARD`.
+- Export writes the commit version of changed files with folder structure and
+  refuses silent overwrite.
+- A real conflicted merge can be resolved block-by-block and committed.
+- All destructive actions keep typed confirmations; payloads stay bounded; no
+  large dataset enters React global state.
+
+**Non-goals**
+
+- Interactive rebase editor.
+- Multi-repository workspaces.
+- Git hosting integrations (PRs, reviews).
 
 ### Node 11: Debugging
 
@@ -711,9 +761,10 @@ stable.
 ## Current Priority
 
 Node 0, Node 1, Node 2, Node 3, Node 4, Node 5, Node 6, Node 7, Node 8,
-Node 9, Node 10, Node 11, Node 12, and Node 13 are complete. Node 13
-implementation and verification evidence are recorded in
-`docs/architecture/node-13-hardening-results.md`.
+Node 9, Node 10, Node 10.5 (Git Deep Dive), Node 11, Node 12, and Node 13 are
+complete. Node 13 evidence is recorded in
+`docs/architecture/node-13-hardening-results.md`; Git Deep Dive evidence is
+recorded in `docs/architecture/git-deep-dive-results.md`.
 
 - Node 0 measurements keep Tauri 2 as the main route; Rust-native fallback
   research remains deferred.

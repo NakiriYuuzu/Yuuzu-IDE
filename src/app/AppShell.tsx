@@ -1,4 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   Bell,
   BookOpenText,
@@ -338,7 +339,6 @@ import {
   createGitBranch,
   discardGitPaths,
   fetchGit,
-  getGitCommitGraph,
   getGitDiffHunks,
   getGitStatus,
   listGitBranches,
@@ -352,29 +352,70 @@ import {
   stashGit,
   unstageGitHunks,
   unstageGitPaths,
+  acceptGitConflictSide,
+  applyGitStash,
+  branchFromGitStash,
+  cherryPickGit,
+  deleteGitBranch,
+  dropGitStash,
+  exportGitCommit,
+  getGitBlameFile,
+  getGitBranchesFull,
+  getGitCommitDetail,
+  getGitCommitFileDiff,
+  getGitConflictFile,
+  getGitLogPage,
+  getGitStashList,
+  markGitResolved,
+  mergeGitBranch,
+  popGitStash,
+  renameGitBranch,
+  resetGitTo,
+  revertGitCommit,
 } from "../features/git/git-api";
 import {
   hunksToUnifiedText,
   type HunkSelection,
 } from "../features/git/git-diff-model";
+import {
+  LOG_PAGE_SIZE,
+  closeExportDialog,
+  openExportDialog,
+  selectLogCommit,
+  setExportField,
+  setLogError,
+  setLogFilter,
+  setLogLoading,
+  storeCommitDetail,
+  storeLogPage,
+  type GitLogFilter,
+} from "../features/git/git-log-model";
+import { GitLogView } from "../features/git/GitLogView";
+import { GitConflictView } from "../features/git/GitConflictView";
+import { GitBranchPopup } from "../features/git/GitBranchPopup";
+import { GitBlameGutter } from "../features/git/GitBlameGutter";
 import { GitDiffView } from "../features/git/GitDiffView";
-import { GitGraphView } from "../features/git/GitGraphView";
 import { GitPanel } from "../features/git/GitPanel";
 import { LanguagePanel } from "../features/language/LanguagePanel";
 import {
   changeBadgeCount,
+  chooseConflictBlock,
   confirmationTextForGitAction,
   decorationMapFromStatus,
+  resolveConflictText,
+  storeBlame,
+  storeBranchesFull,
+  storeConflict,
+  storeStashes,
+  toggleFavoriteBranch,
   replaceGitStatus,
   selectDiff,
   setGitError,
   setGitLoading,
   shouldRefreshGitAfterFileEvent,
   shouldRefreshGitAfterTask,
-  statusBranchLabel,
   storeBranches,
   storeDiff,
-  storeGraph,
   type GitConfirmationAction,
   updateGitCommitMessage,
   type GitRepositoryStatus,
@@ -2731,6 +2772,19 @@ export function AppShell() {
   const [gitConfirmation, setGitConfirmation] =
     useState<GitConfirmationRequest | null>(null);
   const [gitConfirmationInput, setGitConfirmationInput] = useState("");
+  const [gitLogMenu, setGitLogMenu] = useState<{
+    hash: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [branchPopupOpen, setBranchPopupOpen] = useState(false);
+  const [gitNameDialog, setGitNameDialog] = useState<{
+    title: string;
+    placeholder: string;
+    submitLabel: string;
+    onSubmit: (name: string) => void;
+  } | null>(null);
+  const [gitNameInput, setGitNameInput] = useState("");
   const savedContentByPathRef = useRef<Record<string, string>>({});
   const openRequestRef = useRef(0);
   const databaseProfilesLoadRef = useRef<Record<string, number>>({});
@@ -2855,6 +2909,7 @@ export function AppShell() {
   );
   const updateTask = useWorkspaceViewStore((state) => state.updateTask);
   const updateGit = useWorkspaceViewStore((state) => state.updateGit);
+  const updateGitLog = useWorkspaceViewStore((state) => state.updateGitLog);
   const updateDocs = useWorkspaceViewStore((state) => state.updateDocs);
   const updateLanguage = useWorkspaceViewStore((state) => state.updateLanguage);
   const updateAgent = useWorkspaceViewStore((state) => state.updateAgent);
@@ -4969,6 +5024,351 @@ export function AppShell() {
     });
   }
 
+  async function browseGitExportDestination() {
+    const picked = await openDialog({ directory: true, multiple: false });
+    if (typeof picked === "string" && picked.length > 0) {
+      updateGitLog(activeWorkspaceId, (gitLog) =>
+        setExportField(gitLog, "destination", picked),
+      );
+    }
+  }
+
+  async function confirmGitExport() {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const dialog = workspaceViewStore
+      .getState()
+      .viewFor(workspaceId).gitLog.exportDialog;
+    if (!dialog || !dialog.destination.trim()) {
+      return;
+    }
+
+    try {
+      await exportGitCommit(
+        workspaceRoot,
+        dialog.hash,
+        dialog.scope,
+        dialog.format,
+        dialog.destination,
+        dialog.overwrite,
+      );
+      updateGitLog(workspaceId, closeExportDialog);
+    } catch (error) {
+      updateGitLog(workspaceId, (gitLog) =>
+        setLogError(gitLog, `Export failed: ${terminalErrorMessage(error)}`),
+      );
+    }
+  }
+
+  function openGitBranchPopup() {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    setBranchPopupOpen(true);
+    void (async () => {
+      try {
+        const [branchesFull, stashes] = await Promise.all([
+          getGitBranchesFull(workspaceRoot),
+          getGitStashList(workspaceRoot),
+        ]);
+        updateGit(workspaceId, (git) =>
+          storeStashes(storeBranchesFull(git, branchesFull), stashes),
+        );
+      } catch (error) {
+        updateGit(workspaceId, (git) =>
+          setGitError(git, `Branches failed: ${terminalErrorMessage(error)}`),
+        );
+      }
+    })();
+  }
+
+  function refreshBranchPopupData() {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    void (async () => {
+      try {
+        const [branchesFull, stashes] = await Promise.all([
+          getGitBranchesFull(workspaceRoot),
+          getGitStashList(workspaceRoot),
+        ]);
+        updateGit(workspaceId, (git) =>
+          storeStashes(storeBranchesFull(git, branchesFull), stashes),
+        );
+      } catch {
+        // popup refresh is best-effort; the status mutation already reported errors
+      }
+    })();
+  }
+
+  function mergeBranchFromPopup(name: string) {
+    void runGitStatusMutation("Merge", (workspaceRoot) =>
+      mergeGitBranch(workspaceRoot, name),
+    ).then(() => refreshBranchPopupData());
+  }
+
+  function deleteBranchFromPopup(name: string) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    openGitConfirmation({
+      action: { kind: "delete-branch", branch: name },
+      title: "Delete branch",
+      detail: name,
+      run: async (confirmation) => {
+        try {
+          const branchesFull = await deleteGitBranch(
+            workspaceRoot,
+            name,
+            confirmation,
+          );
+          updateGit(workspaceId, (git) => storeBranchesFull(git, branchesFull));
+        } catch (error) {
+          updateGit(workspaceId, (git) =>
+            setGitError(git, `Delete failed: ${terminalErrorMessage(error)}`),
+          );
+        }
+      },
+    });
+  }
+
+  function renameBranchFromPopup(name: string) {
+    setGitNameInput(name);
+    setGitNameDialog({
+      title: `Rename branch ${name}`,
+      placeholder: "new-name",
+      submitLabel: "Rename",
+      onSubmit: (to) => {
+        if (!activeWorkspace || !activeWorkspaceId) {
+          return;
+        }
+        const workspaceId = activeWorkspaceId;
+        const workspaceRoot = activeWorkspace.path;
+        void (async () => {
+          try {
+            const branchesFull = await renameGitBranch(workspaceRoot, name, to);
+            updateGit(workspaceId, (git) =>
+              storeBranchesFull(git, branchesFull),
+            );
+          } catch (error) {
+            updateGit(workspaceId, (git) =>
+              setGitError(
+                git,
+                `Rename failed: ${terminalErrorMessage(error)}`,
+              ),
+            );
+          }
+        })();
+      },
+    });
+  }
+
+  function stashActionFromPopup(
+    label: string,
+    mutation: (workspaceRoot: string) => Promise<GitRepositoryStatus>,
+  ) {
+    void runGitStatusMutation(label, mutation).then(() =>
+      refreshBranchPopupData(),
+    );
+  }
+
+  function dropStashFromPopup(index: number) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    openGitConfirmation({
+      action: { kind: "drop-stash", index },
+      title: "Drop stash",
+      detail: `stash@{${index}}`,
+      run: async (confirmation) => {
+        const ok = await runGitStatusMutationForWorkspace(
+          workspaceId,
+          workspaceRoot,
+          "Drop stash",
+          (root) => dropGitStash(root, index, confirmation),
+        );
+        if (ok) {
+          refreshBranchPopupData();
+        }
+      },
+    });
+  }
+
+  function stashBranchFromPopup(index: number) {
+    setGitNameInput("");
+    setGitNameDialog({
+      title: `Branch from stash@{${index}}`,
+      placeholder: "branch-name",
+      submitLabel: "Create",
+      onSubmit: (name) => {
+        stashActionFromPopup("Stash branch", (workspaceRoot) =>
+          branchFromGitStash(workspaceRoot, index, name),
+        );
+      },
+    });
+  }
+
+  function toggleGitBlame() {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const current = workspaceViewStore.getState().viewFor(workspaceId);
+    const nextOn = !current.git.blameOn;
+    const activePath = current.editor.activePath;
+    updateGit(workspaceId, (git) => ({ ...git, blameOn: nextOn }));
+    if (nextOn && activePath) {
+      void (async () => {
+        try {
+          const blame = await getGitBlameFile(workspaceRoot, activePath);
+          updateGit(workspaceId, (git) => storeBlame(git, blame));
+        } catch (error) {
+          updateGit(workspaceId, (git) =>
+            setGitError(git, `Blame failed: ${terminalErrorMessage(error)}`),
+          );
+        }
+      })();
+    }
+    if (!nextOn) {
+      updateGit(workspaceId, (git) => storeBlame(git, null));
+    }
+  }
+
+  function gitLogMenuAction(action: (hash: string) => void) {
+    const menu = gitLogMenu;
+    setGitLogMenu(null);
+    if (menu) {
+      action(menu.hash);
+    }
+  }
+
+  function cherryPickFromLog(hash: string) {
+    void runGitStatusMutation("Cherry-pick", (workspaceRoot) =>
+      cherryPickGit(workspaceRoot, hash),
+    ).then((ok) => {
+      if (ok) {
+        void loadGitLog();
+      }
+    });
+  }
+
+  function revertCommitFromLog(hash: string) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+    const row = workspaceViewStore
+      .getState()
+      .viewFor(activeWorkspaceId)
+      .gitLog.rows.find((entry) => entry.hash === hash);
+    const short = row?.short_hash ?? hash.slice(0, 7);
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    openGitConfirmation({
+      action: { kind: "revert-commit", short },
+      title: "Revert commit",
+      detail: short,
+      run: async (confirmation) => {
+        const ok = await runGitStatusMutationForWorkspace(
+          workspaceId,
+          workspaceRoot,
+          "Revert",
+          (root) => revertGitCommit(root, hash, confirmation),
+        );
+        if (ok) {
+          void loadGitLog();
+        }
+      },
+    });
+  }
+
+  function resetToFromLog(hash: string, mode: "soft" | "mixed" | "hard") {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+    const row = workspaceViewStore
+      .getState()
+      .viewFor(activeWorkspaceId)
+      .gitLog.rows.find((entry) => entry.hash === hash);
+    const short = row?.short_hash ?? hash.slice(0, 7);
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    openGitConfirmation({
+      action: { kind: "reset-to", short, mode },
+      title: `Reset ${mode} to commit`,
+      detail: short,
+      run: async (confirmation) => {
+        const ok = await runGitStatusMutationForWorkspace(
+          workspaceId,
+          workspaceRoot,
+          "Reset",
+          (root) => resetGitTo(root, hash, mode, confirmation),
+        );
+        if (ok) {
+          void loadGitLog();
+        }
+      },
+    });
+  }
+
+  function newBranchFromLog(hash: string) {
+    setGitNameInput("");
+    setGitNameDialog({
+      title: `New branch from ${hash.slice(0, 7)}`,
+      placeholder: "branch-name",
+      submitLabel: "Create",
+      onSubmit: (name) => {
+        void runGitStatusMutation("Branch", async (workspaceRoot) => {
+          await createGitBranch(workspaceRoot, name);
+          return getGitStatus(workspaceRoot);
+        });
+      },
+    });
+  }
+
+  function checkoutRevisionFromLog(hash: string) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+    const short = hash.slice(0, 7);
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    openGitConfirmation({
+      action: { kind: "checkout", branch: short },
+      title: "Checkout revision (detached)",
+      detail: short,
+      run: async (confirmation) => {
+        const ok = await runGitStatusMutationForWorkspace(
+          workspaceId,
+          workspaceRoot,
+          "Checkout",
+          (root) => checkoutGitBranch(root, short, confirmation),
+        );
+        if (ok) {
+          void loadGitLog();
+        }
+      },
+    });
+  }
+
   function stageGitPath(path: string) {
     void runGitStatusMutation("Stage", (workspaceRoot) =>
       stageGitPaths(workspaceRoot, [path]),
@@ -5048,27 +5448,6 @@ export function AppShell() {
     }
   }
 
-  async function loadGitGraph(label = "Graph") {
-    if (!activeWorkspace || !activeWorkspaceId) {
-      return;
-    }
-
-    const workspaceId = activeWorkspaceId;
-    const workspaceRoot = activeWorkspace.path;
-    updateGit(workspaceId, (git) => setGitLoading(setGitError(git, null), true));
-
-    try {
-      const graph = await getGitCommitGraph(workspaceRoot, 120);
-      updateGit(workspaceId, (git) =>
-        setGitLoading(storeGraph(git, graph), false),
-      );
-    } catch (error) {
-      updateGit(workspaceId, (git) =>
-        setGitError(git, `${label} failed: ${terminalErrorMessage(error)}`),
-      );
-    }
-  }
-
   async function refreshGraphAfterStatusMutation(
     label: string,
     mutation: (workspaceRoot: string) => Promise<GitRepositoryStatus>,
@@ -5078,9 +5457,9 @@ export function AppShell() {
     if (
       changed &&
       workspaceViewStore.getState().viewFor(activeWorkspaceId).surface ===
-        "git-graph"
+        "git-log"
     ) {
-      await loadGitGraph();
+      await loadGitLog();
     }
   }
 
@@ -5200,16 +5579,196 @@ export function AppShell() {
   }
 
   function openGitDiff(path: string, staged: boolean) {
+    const status = workspaceViewStore
+      .getState()
+      .viewFor(activeWorkspaceId).git.status;
+    const change = status?.changes.find((entry) => entry.path === path);
+    if (change?.kind === "conflict") {
+      openGitConflict(path);
+      return;
+    }
     updateGit(activeWorkspaceId, (git) => selectDiff(git, { path, staged }));
     setSurface("git-diff");
     setActiveActivity("git");
     void loadGitDiff(path, staged);
   }
 
-  function openGitGraph() {
-    setSurface("git-graph");
+  function openGitLog() {
+    setSurface("git-log");
     setActiveActivity("git");
-    void loadGitGraph();
+    void loadGitLog();
+  }
+
+  async function loadGitLog(pages?: number) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const current = workspaceViewStore.getState().viewFor(workspaceId).gitLog;
+    const pageCount = Math.max(1, pages ?? Math.max(1, current.loadedPages));
+    updateGitLog(workspaceId, (gitLog) => setLogLoading(gitLog, true));
+
+    try {
+      const page = await getGitLogPage(
+        workspaceRoot,
+        current.filter,
+        pageCount * LOG_PAGE_SIZE,
+      );
+      updateGitLog(workspaceId, (gitLog) => storeLogPage(gitLog, page));
+    } catch (error) {
+      updateGitLog(workspaceId, (gitLog) =>
+        setLogError(gitLog, `Log failed: ${terminalErrorMessage(error)}`),
+      );
+    }
+  }
+
+  function setGitLogFilter(filter: GitLogFilter) {
+    updateGitLog(activeWorkspaceId, (gitLog) => setLogFilter(gitLog, filter));
+    void loadGitLog(1);
+  }
+
+  function selectGitLogCommit(hash: string) {
+    updateGitLog(activeWorkspaceId, (gitLog) => selectLogCommit(gitLog, hash));
+    const cached = workspaceViewStore
+      .getState()
+      .viewFor(activeWorkspaceId).gitLog.detailByHash[hash];
+    if (!cached) {
+      void loadGitCommitDetail(hash);
+    }
+  }
+
+  async function loadGitCommitDetail(hash: string) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    try {
+      const detail = await getGitCommitDetail(workspaceRoot, hash);
+      updateGitLog(workspaceId, (gitLog) => storeCommitDetail(gitLog, detail));
+    } catch (error) {
+      updateGitLog(workspaceId, (gitLog) =>
+        setLogError(gitLog, `Detail failed: ${terminalErrorMessage(error)}`),
+      );
+    }
+  }
+
+  function openGitCommitFileDiff(hash: string, path: string) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    updateGit(workspaceId, (git) =>
+      selectDiff(git, { path, staged: false }),
+    );
+    setSurface("git-diff");
+    void (async () => {
+      try {
+        const diff = await getGitCommitFileDiff(workspaceRoot, hash, path);
+        updateGit(workspaceId, (git) => storeDiff(git, diff));
+      } catch (error) {
+        updateGit(workspaceId, (git) =>
+          setGitError(git, `Diff failed: ${terminalErrorMessage(error)}`),
+        );
+      }
+    })();
+  }
+
+  function openGitConflict(path: string) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    setSurface("git-conflict");
+    setActiveActivity("git");
+    void (async () => {
+      try {
+        const conflict = await getGitConflictFile(workspaceRoot, path);
+        updateGit(workspaceId, (git) => storeConflict(git, conflict));
+      } catch (error) {
+        updateGit(workspaceId, (git) =>
+          setGitError(git, `Conflict failed: ${terminalErrorMessage(error)}`),
+        );
+      }
+    })();
+  }
+
+  function acceptConflictSideFromView(side: "ours" | "theirs") {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+    const conflict = workspaceViewStore
+      .getState()
+      .viewFor(activeWorkspaceId).git.conflict;
+    if (!conflict) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    openGitConfirmation({
+      action: { kind: "accept-side", side },
+      title: side === "ours" ? "Accept all ours" : "Accept all theirs",
+      detail: conflict.path,
+      run: async (confirmation) => {
+        const ok = await runGitStatusMutationForWorkspace(
+          workspaceId,
+          workspaceRoot,
+          "Accept side",
+          (root) =>
+            acceptGitConflictSide(root, conflict.path, side, confirmation),
+        );
+        if (ok) {
+          updateGit(workspaceId, (git) => storeConflict(git, null));
+          setSurface("empty");
+        }
+      },
+    });
+  }
+
+  function markConflictResolvedFromView() {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+    const git = workspaceViewStore
+      .getState()
+      .viewFor(activeWorkspaceId).git;
+    const conflict = git.conflict;
+    if (!conflict) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    const resolvedText = resolveConflictText(
+      conflict.working,
+      conflict.blocks,
+      git.conflictChoices,
+    );
+    void (async () => {
+      try {
+        await writeTextFile(workspaceRoot, conflict.path, resolvedText, null);
+        const status = await markGitResolved(workspaceRoot, conflict.path);
+        updateGit(workspaceId, (gitState) =>
+          replaceGitStatus(storeConflict(gitState, null), status),
+        );
+        setSurface("empty");
+      } catch (error) {
+        updateGit(workspaceId, (gitState) =>
+          setGitError(
+            gitState,
+            `Resolve failed: ${terminalErrorMessage(error)}`,
+          ),
+        );
+      }
+    })();
   }
 
   function openDocsPanel() {
@@ -7919,8 +8478,29 @@ export function AppShell() {
       case "git-reset-hard":
         resetHardFromGitPanel();
         break;
-      case "git-rebase-main":
-        rebaseOntoFromGitPanel("main");
+      case "git-open-log":
+        openGitLog();
+        break;
+      case "git-export-commit": {
+        const selected = workspaceViewStore
+          .getState()
+          .viewFor(activeWorkspaceId).gitLog.selectedHash;
+        if (selected) {
+          updateGitLog(activeWorkspaceId, (gitLog) =>
+            openExportDialog(gitLog, selected),
+          );
+        }
+        openGitLog();
+        break;
+      }
+      case "git-toggle-blame":
+        toggleGitBlame();
+        break;
+      case "git-branches":
+        openGitBranchPopup();
+        break;
+      case "git-rebase-branch":
+        openGitBranchPopup();
         break;
       case "toggle-sidebar":
         setPanelOpen(!panelOpen);
@@ -8189,7 +8769,7 @@ export function AppShell() {
                 void checkoutBranchFromGitPanel(branch)
               }
               onGitCreateBranch={(name) => void createBranchFromGitPanel(name)}
-              onGitOpenGraph={openGitGraph}
+              onGitOpenGraph={openGitLog}
               onDocsRefresh={() => void refreshDocsIndex()}
               onDocsSearch={searchDocsPanel}
               onDocsOpenPreview={(path) => void openDocsPreview(path)}
@@ -8619,7 +9199,8 @@ export function AppShell() {
                   surface === "ssh-terminal" ||
                   surface === "sftp-browser" ||
                   surface === "git-diff" ||
-                  surface === "git-graph" ||
+                  surface === "git-log" ||
+                  surface === "git-conflict" ||
                   surface === "docs-preview" ||
                   surface === "browser-preview" ||
                   surface === "database-result" ||
@@ -8660,6 +9241,20 @@ export function AppShell() {
                       This file is too large to edit. It was opened read-only.
                     </div>
                   ) : (
+                    <div className="editor-blame-split">
+                      {view.git.blameOn &&
+                      view.git.blame &&
+                      view.git.blame.path === loadedFile!.path ? (
+                        <GitBlameGutter
+                          blame={view.git.blame}
+                          lineHeight={19}
+                          onHoverSegment={() => undefined}
+                          onOpenInLog={(hash) => {
+                            openGitLog();
+                            selectGitLogCommit(hash);
+                          }}
+                        />
+                      ) : null}
                     <Suspense
                       fallback={
                         <div className="editor-loading">Loading editor</div>
@@ -8689,6 +9284,7 @@ export function AppShell() {
                         onDirtyChange={() => undefined}
                       />
                     </Suspense>
+                    </div>
                   )}
                 </>
               ) : surface === "terminal" ? (
@@ -8823,14 +9419,61 @@ export function AppShell() {
                     revertGitHunkSelections(selections)
                   }
                 />
-              ) : surface === "git-graph" ? (
-                <GitGraphView
-                  graph={view.git.graph}
-                  branchLabel={statusBranchLabel(view.git.status)}
-                  loading={view.git.loading}
-                  error={view.git.error}
-                  onFetch={fetchFromGitPanel}
-                  onRefresh={() => void loadGitGraph()}
+              ) : surface === "git-log" ? (
+                <GitLogView
+                  state={view.gitLog}
+                  nowUnix={Math.floor(Date.now() / 1000)}
+                  onSelectCommit={selectGitLogCommit}
+                  onOpenContextMenu={(hash, x, y) =>
+                    setGitLogMenu({ hash, x, y })
+                  }
+                  onLoadMore={() =>
+                    void loadGitLog(
+                      Math.max(1, view.gitLog.loadedPages) + 1,
+                    )
+                  }
+                  onSetFilter={setGitLogFilter}
+                  onOpenFileDiff={openGitCommitFileDiff}
+                  onOpenExport={(hash) => {
+                    updateGitLog(activeWorkspaceId, (gitLog) =>
+                      openExportDialog(gitLog, hash),
+                    );
+                  }}
+                  onExportFieldChange={(field, value) =>
+                    updateGitLog(activeWorkspaceId, (gitLog) =>
+                      setExportField(gitLog, field, value),
+                    )
+                  }
+                  onCloseExport={() =>
+                    updateGitLog(activeWorkspaceId, closeExportDialog)
+                  }
+                  onConfirmExport={() => void confirmGitExport()}
+                  onBrowseDestination={() => void browseGitExportDestination()}
+                />
+              ) : surface === "git-conflict" && view.git.conflict ? (
+                <GitConflictView
+                  conflict={view.git.conflict}
+                  resolvedBlocks={Object.keys(view.git.conflictChoices).map(
+                    Number,
+                  )}
+                  onAcceptOurs={(blockIndex) =>
+                    updateGit(activeWorkspaceId, (git) =>
+                      chooseConflictBlock(git, blockIndex, "ours"),
+                    )
+                  }
+                  onAcceptTheirs={(blockIndex) =>
+                    updateGit(activeWorkspaceId, (git) =>
+                      chooseConflictBlock(git, blockIndex, "theirs"),
+                    )
+                  }
+                  onResolveBlock={(blockIndex) =>
+                    updateGit(activeWorkspaceId, (git) =>
+                      chooseConflictBlock(git, blockIndex, "ours"),
+                    )
+                  }
+                  onAcceptAllOurs={() => acceptConflictSideFromView("ours")}
+                  onAcceptAllTheirs={() => acceptConflictSideFromView("theirs")}
+                  onMarkResolved={markConflictResolvedFromView}
                 />
               ) : surface === "docs-preview" ? (
                 <MarkdownPreview
@@ -8993,10 +9636,57 @@ export function AppShell() {
       </div>
 
       <footer className="statusbar">
-        <div className="sb accent">
+        <button
+          type="button"
+          className="sb accent statusbar-branch"
+          aria-label="Open branches"
+          onClick={openGitBranchPopup}
+        >
           <GitBranch aria-hidden="true" />
-          main
-        </div>
+          {view.git.status?.branch ?? "branch"}
+        </button>
+        {branchPopupOpen ? (
+          <div className="branch-popup-anchor">
+            <GitBranchPopup
+              branches={view.git.branchesFull}
+              stashes={view.git.stashes}
+              favoriteBranches={view.git.favoriteBranches}
+              onClose={() => setBranchPopupOpen(false)}
+              onCheckoutBranch={(name) => {
+                setBranchPopupOpen(false);
+                checkoutBranchFromGitPanel(name);
+              }}
+              onNewBranch={() => {
+                setBranchPopupOpen(false);
+                newBranchFromLog("HEAD");
+              }}
+              onMergeBranch={(name) => mergeBranchFromPopup(name)}
+              onRenameBranch={(name) => renameBranchFromPopup(name)}
+              onDeleteBranch={(name) => deleteBranchFromPopup(name)}
+              onToggleFavorite={(name) =>
+                updateGit(activeWorkspaceId, (git) =>
+                  toggleFavoriteBranch(git, name),
+                )
+              }
+              onStashApply={(index) =>
+                stashActionFromPopup("Stash apply", (workspaceRoot) =>
+                  applyGitStash(workspaceRoot, index),
+                )
+              }
+              onStashPop={(index) =>
+                stashActionFromPopup("Stash pop", (workspaceRoot) =>
+                  popGitStash(workspaceRoot, index),
+                )
+              }
+              onStashBranch={(index) => stashBranchFromPopup(index)}
+              onStashDrop={(index) => dropStashFromPopup(index)}
+              onRebaseBranch={(name) => {
+                setBranchPopupOpen(false);
+                rebaseOntoFromGitPanel(name);
+              }}
+            />
+          </div>
+        ) : null}
         <div className="sb">registry {registry.workspaces.length}</div>
         <div className="sb">tasks {view.task.runs.length}</div>
         <div className="sb">problems {activeTaskProblems.length}</div>
@@ -9029,6 +9719,157 @@ export function AppShell() {
         onRun={runCommand}
         commands={commandPaletteCommands}
       />
+      {gitLogMenu ? (
+        <div
+          className="git-log-menu-backdrop"
+          onClick={() => setGitLogMenu(null)}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            setGitLogMenu(null);
+          }}
+        >
+          <div
+            className="menu git-log-menu"
+            role="menu"
+            style={{ left: gitLogMenu.x, top: gitLogMenu.y }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mlabel mono">{gitLogMenu.hash.slice(0, 7)}</div>
+            <button
+              type="button"
+              className="mi"
+              onClick={() => gitLogMenuAction(checkoutRevisionFromLog)}
+            >
+              Checkout Revision
+            </button>
+            <button
+              type="button"
+              className="mi"
+              onClick={() => gitLogMenuAction(newBranchFromLog)}
+            >
+              New Branch from Here…
+            </button>
+            <button
+              type="button"
+              className="mi"
+              onClick={() => gitLogMenuAction(cherryPickFromLog)}
+            >
+              Cherry-pick
+            </button>
+            <button
+              type="button"
+              className="mi"
+              onClick={() => gitLogMenuAction(revertCommitFromLog)}
+            >
+              Revert Commit…
+            </button>
+            <div className="msep" />
+            <button
+              type="button"
+              className="mi danger"
+              onClick={() =>
+                gitLogMenuAction((hash) => resetToFromLog(hash, "soft"))
+              }
+            >
+              Reset Soft to Here…
+            </button>
+            <button
+              type="button"
+              className="mi danger"
+              onClick={() =>
+                gitLogMenuAction((hash) => resetToFromLog(hash, "mixed"))
+              }
+            >
+              Reset Mixed to Here…
+            </button>
+            <button
+              type="button"
+              className="mi danger"
+              onClick={() =>
+                gitLogMenuAction((hash) => resetToFromLog(hash, "hard"))
+              }
+            >
+              Reset Hard to Here…
+            </button>
+            <div className="msep" />
+            <button
+              type="button"
+              className="mi"
+              onClick={() =>
+                gitLogMenuAction((hash) =>
+                  updateGitLog(activeWorkspaceId, (gitLog) =>
+                    openExportDialog(gitLog, hash),
+                  ),
+                )
+              }
+            >
+              Export Commit…
+            </button>
+            <button
+              type="button"
+              className="mi"
+              onClick={() =>
+                gitLogMenuAction((hash) =>
+                  void navigator.clipboard?.writeText(hash),
+                )
+              }
+            >
+              Copy Hash
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {gitNameDialog ? (
+        <div className="git-confirm-backdrop">
+          <div
+            className="git-confirm-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="git-name-title"
+          >
+            <h2 id="git-name-title">{gitNameDialog.title}</h2>
+            <input
+              className="input2 mono"
+              value={gitNameInput}
+              placeholder={gitNameDialog.placeholder}
+              aria-label="Name"
+              autoFocus
+              onChange={(event) => setGitNameInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  setGitNameDialog(null);
+                }
+                if (event.key === "Enter" && gitNameInput.trim()) {
+                  const dialog = gitNameDialog;
+                  setGitNameDialog(null);
+                  dialog.onSubmit(gitNameInput.trim());
+                }
+              }}
+            />
+            <div className="git-confirm-actions">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setGitNameDialog(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn primary"
+                disabled={!gitNameInput.trim()}
+                onClick={() => {
+                  const dialog = gitNameDialog;
+                  setGitNameDialog(null);
+                  dialog.onSubmit(gitNameInput.trim());
+                }}
+              >
+                {gitNameDialog.submitLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {gitConfirmation ? (
         <div className="git-confirm-backdrop">
           <div

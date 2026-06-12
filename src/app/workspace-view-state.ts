@@ -57,6 +57,10 @@ import {
   createTerminalState,
   type TerminalViewState,
 } from "../features/terminal/terminal-model";
+import {
+  createGitLogState,
+  type GitLogState,
+} from "../features/git/git-log-model";
 import type { ActivityId } from "./activity-rail";
 
 export type Surface =
@@ -64,7 +68,8 @@ export type Surface =
   | "editor"
   | "terminal"
   | "git-diff"
-  | "git-graph"
+  | "git-log"
+  | "git-conflict"
   | "docs-preview"
   | "browser-preview"
   | "database-result"
@@ -81,6 +86,7 @@ export type WorkspaceViewState = {
   terminal: TerminalViewState;
   task: TaskViewState;
   git: GitViewState;
+  gitLog: GitLogState;
   docs: DocsViewState;
   language: LanguageViewState;
   browser: BrowserViewState;
@@ -115,6 +121,10 @@ type WorkspaceViewStore = {
   updateGit: (
     workspaceId: string | null,
     update: (git: GitViewState) => GitViewState,
+  ) => void;
+  updateGitLog: (
+    workspaceId: string | null,
+    update: (gitLog: GitLogState) => GitLogState,
   ) => void;
   updateDocs: (
     workspaceId: string | null,
@@ -172,6 +182,7 @@ function defaultWorkspaceView(): WorkspaceViewState {
     terminal: createTerminalState(),
     task: createTaskState(),
     git: createGitState(),
+    gitLog: createGitLogState(),
     docs: createDocsState(),
     language: createLanguageState(),
     browser: createBrowserState(),
@@ -211,6 +222,9 @@ function freezeWorkspaceView(view: WorkspaceViewState): WorkspaceViewState {
   }
   Object.freeze(view.git.graph);
   Object.freeze(view.git);
+  Object.freeze(view.gitLog.rows);
+  Object.freeze(view.gitLog.detailByHash);
+  Object.freeze(view.gitLog);
   Object.freeze(view.docs.index);
   for (const preview of Object.values(view.docs.previewByPath)) {
     Object.freeze(preview.references);
@@ -499,6 +513,18 @@ export function createWorkspaceViewStore() {
           views: {
             ...state.views,
             [key]: { ...current, git: update(current.git) },
+          },
+        };
+      }),
+    updateGitLog: (workspaceId, update) =>
+      set((state) => {
+        const key = workspaceId ?? shellKey;
+        const current = state.views[key] ?? defaultViewForKey(key);
+
+        return {
+          views: {
+            ...state.views,
+            [key]: { ...current, gitLog: update(current.gitLog) },
           },
         };
       }),

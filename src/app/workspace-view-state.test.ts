@@ -53,6 +53,24 @@ describe("createWorkspaceViewStore", () => {
     });
   });
 
+  test("git log filters and blame toggle are restored per workspace", () => {
+    const store = createWorkspaceViewStore();
+
+    store.getState().updateGitLog("w-log", (gitLog) => ({
+      ...gitLog,
+      filter: { author: "mina" },
+    }));
+    store.getState().updateGit("w-log", (git) => ({ ...git, blameOn: true }));
+
+    const view = store.getState().viewFor("w-log");
+    expect(view.gitLog.filter.author).toBe("mina");
+    expect(view.git.blameOn).toBe(true);
+
+    const other = store.getState().viewFor("w-other");
+    expect(other.gitLog.filter.author).toBeUndefined();
+    expect(other.git.blameOn).toBe(false);
+  });
+
   test("empty workspace id uses a stable shell view", () => {
     const store = createWorkspaceViewStore();
 

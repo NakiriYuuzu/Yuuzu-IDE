@@ -342,7 +342,10 @@ describe("git-model", () => {
 });
 
 import {
+  chooseConflictBlock,
+  resolveConflictText,
   storeBranchesFull,
+  storeConflict,
   storeStashes,
   storeBlame,
   toggleFavoriteBranch,
@@ -379,5 +382,78 @@ describe("branch popup, stash, and blame state", () => {
     expect(state.favoriteBranches).toEqual(["main"]);
     state = toggleFavoriteBranch(state, "main");
     expect(state.favoriteBranches).toEqual([]);
+  });
+});
+
+describe("git deep dive confirmations", () => {
+  test("new destructive actions produce their typed confirmation text", () => {
+    expect(
+      confirmationTextForGitAction({ kind: "revert-commit", short: "abc1234" }),
+    ).toBe("REVERT abc1234");
+    expect(
+      confirmationTextForGitAction({
+        kind: "reset-to",
+        short: "abc1234",
+        mode: "hard",
+      }),
+    ).toBe("RESET HARD abc1234");
+    expect(
+      confirmationTextForGitAction({
+        kind: "reset-to",
+        short: "abc1234",
+        mode: "soft",
+      }),
+    ).toBe("RESET abc1234");
+    expect(
+      confirmationTextForGitAction({ kind: "drop-stash", index: 2 }),
+    ).toBe("DROP stash@{2}");
+    expect(
+      confirmationTextForGitAction({ kind: "delete-branch", branch: "feat" }),
+    ).toBe("DELETE feat");
+    expect(
+      confirmationTextForGitAction({ kind: "accept-side", side: "ours" }),
+    ).toBe("ACCEPT OURS");
+    expect(
+      confirmationTextForGitAction({ kind: "accept-side", side: "theirs" }),
+    ).toBe("ACCEPT THEIRS");
+  });
+});
+
+describe("conflict resolution state", () => {
+  const working =
+    "head\n<<<<<<< HEAD\nours line\n=======\ntheirs line\n>>>>>>> feat\nmid\n<<<<<<< HEAD\nours two\n=======\ntheirs two\n>>>>>>> feat\ntail\n";
+  const blocks = [
+    { start_line: 2, ours: ["ours line"], theirs: ["theirs line"] },
+    { start_line: 8, ours: ["ours two"], theirs: ["theirs two"] },
+  ];
+
+  test("storeConflict and conflict block choices accumulate", () => {
+    let state = storeConflict(createGitState(), {
+      path: "f.ts",
+      base: null,
+      ours: "",
+      theirs: "",
+      working,
+      blocks,
+      truncated: false,
+    });
+    expect(state.conflict?.path).toBe("f.ts");
+    expect(state.conflictChoices).toEqual({});
+
+    state = chooseConflictBlock(state, 0, "ours");
+    state = chooseConflictBlock(state, 1, "theirs");
+    expect(state.conflictChoices).toEqual({ 0: "ours", 1: "theirs" });
+
+    state = storeConflict(state, null);
+    expect(state.conflict).toBeNull();
+    expect(state.conflictChoices).toEqual({});
+  });
+
+  test("resolveConflictText splices chosen sides into the working copy", () => {
+    const resolved = resolveConflictText(working, blocks, {
+      0: "ours",
+      1: "theirs",
+    });
+    expect(resolved).toBe("head\nours line\nmid\ntheirs two\ntail\n");
   });
 });

@@ -18,6 +18,7 @@ export type GitBranchPopupProps = {
   onStashPop: (index: number) => void;
   onStashBranch: (index: number) => void;
   onStashDrop: (index: number) => void;
+  onRebaseBranch?: (name: string) => void;
 };
 
 function trackingLabel(branch: GitBranchFull): string {
@@ -46,6 +47,7 @@ export function GitBranchPopup({
   onStashPop,
   onStashBranch,
   onStashDrop,
+  onRebaseBranch,
 }: GitBranchPopupProps) {
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -122,6 +124,15 @@ export function GitBranchPopup({
               onClick={() => onMergeBranch(branch.name)}
             >
               Merge into current
+            </button>
+          )}
+          {!branch.current && onRebaseBranch && (
+            <button
+              type="button"
+              className="mi"
+              onClick={() => onRebaseBranch(branch.name)}
+            >
+              Rebase current onto this…
             </button>
           )}
           {!branch.remote && (

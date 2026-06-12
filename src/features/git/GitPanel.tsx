@@ -130,8 +130,8 @@ export function GitPanel({
           <button
             type="button"
             className="iconbtn"
-            title="View graph"
-            aria-label="View graph"
+            title="View log"
+            aria-label="View log"
             disabled={!repositoryActionEnabled}
             onClick={onOpenGraph}
           >

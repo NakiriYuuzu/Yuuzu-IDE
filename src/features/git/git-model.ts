@@ -73,7 +73,12 @@ export type GitConfirmationAction =
   | { kind: "discard"; paths: string[] }
   | { kind: "checkout"; branch: string }
   | { kind: "reset-hard" }
-  | { kind: "rebase"; target: string };
+  | { kind: "rebase"; target: string }
+  | { kind: "revert-commit"; short: string }
+  | { kind: "reset-to"; short: string; mode: "soft" | "mixed" | "hard" }
+  | { kind: "drop-stash"; index: number }
+  | { kind: "delete-branch"; branch: string }
+  | { kind: "accept-side"; side: "ours" | "theirs" };
 
 export type GitAction = "commit" | "commit-push" | "amend" | "stash";
 
@@ -148,7 +153,10 @@ export type GitViewState = {
   branchesFull: GitBranchFull[];
   stashes: GitStashEntry[];
   blame: GitBlameFile | null;
+  blameOn: boolean;
   favoriteBranches: string[];
+  conflict: GitConflictFile | null;
+  conflictChoices: Record<number, "ours" | "theirs">;
 };
 
 const MAX_GRAPH_COMMITS = 120;
@@ -166,7 +174,10 @@ export function createGitState(): GitViewState {
     branchesFull: [],
     stashes: [],
     blame: null,
+    blameOn: false,
     favoriteBranches: [],
+    conflict: null,
+    conflictChoices: {},
   };
 }
 
@@ -255,6 +266,60 @@ export function storeBlame(
   blame: GitBlameFile | null,
 ): GitViewState {
   return { ...state, blame };
+}
+
+export function storeConflict(
+  state: GitViewState,
+  conflict: GitConflictFile | null,
+): GitViewState {
+  return { ...state, conflict, conflictChoices: {} };
+}
+
+export function chooseConflictBlock(
+  state: GitViewState,
+  blockIndex: number,
+  side: "ours" | "theirs",
+): GitViewState {
+  return {
+    ...state,
+    conflictChoices: { ...state.conflictChoices, [blockIndex]: side },
+  };
+}
+
+/// Rebuild the file content by replacing each conflict marker region with the
+/// chosen side's lines. Blocks without a choice keep their markers.
+export function resolveConflictText(
+  working: string,
+  blocks: ConflictBlock[],
+  choices: Record<number, "ours" | "theirs">,
+): string {
+  const lines = working.split("\n");
+  const output: string[] = [];
+  let blockIndex = 0;
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.startsWith("<<<<<<<") && blockIndex < blocks.length) {
+      const block = blocks[blockIndex];
+      const choice = choices[blockIndex];
+      // find the end of this marker region
+      let end = i;
+      while (end < lines.length && !lines[end].startsWith(">>>>>>>")) {
+        end += 1;
+      }
+      if (choice) {
+        output.push(...(choice === "ours" ? block.ours : block.theirs));
+      } else {
+        output.push(...lines.slice(i, end + 1));
+      }
+      i = end + 1;
+      blockIndex += 1;
+      continue;
+    }
+    output.push(line);
+    i += 1;
+  }
+  return output.join("\n");
 }
 
 export function toggleFavoriteBranch(
@@ -395,6 +460,18 @@ export function confirmationTextForGitAction(
       return "RESET HARD";
     case "rebase":
       return `REBASE ${action.target}`;
+    case "revert-commit":
+      return `REVERT ${action.short}`;
+    case "reset-to":
+      return action.mode === "hard"
+        ? `RESET HARD ${action.short}`
+        : `RESET ${action.short}`;
+    case "drop-stash":
+      return `DROP stash@{${action.index}}`;
+    case "delete-branch":
+      return `DELETE ${action.branch}`;
+    case "accept-side":
+      return action.side === "ours" ? "ACCEPT OURS" : "ACCEPT THEIRS";
   }
 }
 

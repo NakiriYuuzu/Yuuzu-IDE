@@ -2585,6 +2585,81 @@ circle.lane-5 {
   white-space: nowrap;
 }
 
+.statusbar-branch {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.branch-popup-anchor {
+  position: fixed;
+  left: 8px;
+  bottom: 30px;
+  z-index: 60;
+}
+
+.git-log-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+}
+
+.git-log-menu {
+  position: fixed;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  padding: 4px 0;
+}
+
+.git-log-menu .mlabel {
+  padding: 6px 12px 4px;
+  font-size: 10.5px;
+  color: var(--txt-faint, var(--txt-dim));
+}
+
+.git-log-menu .mi {
+  border: 0;
+  background: transparent;
+  color: var(--txt);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+.git-log-menu .mi:hover {
+  background: var(--yuzu-wash);
+  color: var(--yuzu);
+}
+
+.git-log-menu .mi.danger {
+  color: var(--git-deleted, #f07178);
+}
+
+.git-log-menu .msep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--line);
+}
+
+.editor-blame-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.editor-blame-split > :last-child {
+  flex: 1;
+  min-width: 0;
+}
+
 .database-panel {
   min-height: 0;
   display: flex;

@@ -377,3 +377,21 @@ describe("filterCommands", () => {
     );
   });
 });
+
+describe("git deep dive palette commands", () => {
+  test("log, export, blame, branches, and rebase commands are registered", () => {
+    const ids = allCommands.map((command) => command.id);
+    expect(ids).toContain("git-open-log");
+    expect(ids).toContain("git-export-commit");
+    expect(ids).toContain("git-toggle-blame");
+    expect(ids).toContain("git-branches");
+    expect(ids).toContain("git-rebase-branch");
+    expect(ids).not.toContain("git-rebase-main");
+
+    expect(allCommands).toContainEqual({
+      id: "git-export-commit",
+      label: "Git: Export Commit…",
+      group: "Git",
+    });
+  });
+});

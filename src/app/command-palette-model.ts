@@ -130,6 +130,14 @@ export const node13Commands: CommandItem[] = coreCommandsById(
   },
 );
 
+export const gitDeepDiveCommands: CommandItem[] = coreCommandsById([
+  "git-open-log",
+  "git-export-commit",
+  "git-toggle-blame",
+  "git-branches",
+  "git-rebase-branch",
+]);
+
 export const allCommands: CommandItem[] = [
   ...node1Commands,
   ...node5Commands,
@@ -141,6 +149,7 @@ export const allCommands: CommandItem[] = [
   ...node11Commands,
   ...node12Commands,
   ...node13Commands,
+  ...gitDeepDiveCommands,
 ];
 
 export function filterCommands(

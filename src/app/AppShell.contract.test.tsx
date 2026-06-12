@@ -10,6 +10,7 @@ import {
 } from "../features/agents/agent-model";
 import { createLanguageState } from "../features/language/language-model";
 import { createDocsState } from "../features/docs/docs-model";
+import { replaceGitStatus } from "../features/git/git-model";
 import {
   createDiagnosticsState,
   storeMetricSnapshot,
@@ -312,7 +313,10 @@ function panelBodyProps(overrides: Partial<PanelBodyProps> = {}): PanelBodyProps
       branchesFull: [],
       stashes: [],
       blame: null,
+      blameOn: false,
       favoriteBranches: [],
+      conflict: null,
+      conflictChoices: {},
     },
     docsState: createDocsState(),
     contextPackNameById: {},
@@ -554,6 +558,13 @@ type AppShellTauriMockOptions = {
     DebugVariable[] | Promise<DebugVariable[]>
   >;
   extensionStatuses?: ExtensionWorkspaceStatus[];
+  gitLogPage?: unknown;
+  gitCommitDetail?: unknown;
+  gitBranchesFull?: unknown[];
+  gitStashes?: unknown[];
+  gitConflictFile?: unknown;
+  gitBlameFile?: unknown;
+  dialogOpenPath?: string;
   setExtensionEnabledResponses?: Array<
     ExtensionWorkspaceStatus[] | Promise<ExtensionWorkspaceStatus[]>
   >;
@@ -638,6 +649,9 @@ function installAppShellTauriMock(options: AppShellTauriMockOptions) {
       }
       if (command === "plugin:event|unlisten") {
         return null;
+      }
+      if (command === "plugin:dialog|open") {
+        return options.dialogOpenPath ?? null;
       }
 
       switch (command) {
@@ -826,6 +840,25 @@ function installAppShellTauriMock(options: AppShellTauriMockOptions) {
           return null;
         case "git_status":
           return appShellGitStatus(String(args.workspaceRoot));
+        case "git_log_page":
+          return (
+            options.gitLogPage ?? {
+              rows: [],
+              has_more: false,
+              total_loaded: 0,
+              truncated: false,
+            }
+          );
+        case "git_commit_detail":
+          return options.gitCommitDetail ?? null;
+        case "git_branches_full":
+          return options.gitBranchesFull ?? [];
+        case "git_stash_list":
+          return options.gitStashes ?? [];
+        case "git_conflict_file":
+          return options.gitConflictFile ?? null;
+        case "git_blame_file":
+          return options.gitBlameFile ?? null;
         case "debug_list_launch_configs":
           return options.launchConfigs ?? [];
         case "debug_list_sessions":
@@ -1582,7 +1615,10 @@ describe("AppShell AppShell helpers", () => {
           branchesFull: [],
           stashes: [],
           blame: null,
+          blameOn: false,
           favoriteBranches: [],
+          conflict: null,
+          conflictChoices: {},
         }}
         docsState={createDocsState()}
         contextPackNameById={{}}
@@ -1783,7 +1819,10 @@ describe("AppShell AppShell helpers", () => {
           branchesFull: [],
           stashes: [],
           blame: null,
+          blameOn: false,
           favoriteBranches: [],
+          conflict: null,
+          conflictChoices: {},
         }}
         docsState={createDocsState()}
         contextPackNameById={{}}
@@ -4955,7 +4994,10 @@ describe("AppShell AppShell helpers", () => {
           branchesFull: [],
           stashes: [],
           blame: null,
+          blameOn: false,
           favoriteBranches: [],
+          conflict: null,
+          conflictChoices: {},
         }}
         docsState={createDocsState()}
         contextPackNameById={{}}
@@ -5092,7 +5134,10 @@ describe("AppShell AppShell helpers", () => {
           branchesFull: [],
           stashes: [],
           blame: null,
+          blameOn: false,
           favoriteBranches: [],
+          conflict: null,
+          conflictChoices: {},
         }}
         docsState={createDocsState()}
         contextPackNameById={{}}
@@ -5737,5 +5782,218 @@ describe("AppShell AppShell helpers", () => {
     expect(classifyDatabaseSql("").confirmation_text).toBe(
       "RUN DESTRUCTIVE SQL",
     );
+  });
+});
+
+describe("AppShell git deep dive integration", () => {
+  const logRow = (hash: string) => ({
+    hash,
+    short_hash: hash.slice(0, 7),
+    subject: `subject ${hash.slice(0, 4)}`,
+    author: "mina",
+    when_unix: 1_700_000_000,
+    refs: [],
+    parents: [],
+    lane: 0,
+    lane_overflow: false,
+    merge: false,
+    edges: [],
+  });
+
+  test("git panel view log opens the log surface with dag rows", async () => {
+    const workspaceId = "git-log-open";
+    const { renderResult } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot: "/repo-git-log-open",
+      gitLogPage: {
+        rows: [logRow("aaaaaaa1aaaaaaa1"), logRow("bbbbbbb2bbbbbbb2")],
+        has_more: false,
+        total_loaded: 2,
+        truncated: false,
+      },
+    });
+
+    workspaceViewStore.getState().updateView(workspaceId, {
+      activeActivity: "git",
+      panelOpen: true,
+    });
+    await flushAppShellEffects();
+
+    fireEvent.click(renderResult.getByLabelText("View log"));
+    await flushAppShellEffects();
+
+    const view = workspaceViewStore.getState().viewFor(workspaceId);
+    expect(view.surface).toBe("git-log");
+    expect(view.gitLog.rows.length).toBe(2);
+    expect(
+      renderResult.container.querySelector(".dbgrid.gitlog"),
+    ).toBeTruthy();
+    expect(
+      renderResult.container.querySelectorAll("svg circle").length,
+    ).toBeGreaterThan(0);
+  });
+
+  test("selecting a conflicted file opens the conflict resolver", async () => {
+    const workspaceId = "git-conflict-open";
+    const workspaceRoot = "/repo-git-conflict-open";
+    const { renderResult } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot,
+      gitConflictFile: {
+        path: "src/f.ts",
+        base: "base\n",
+        ours: "ours\n",
+        theirs: "theirs\n",
+        working:
+          "<<<<<<< HEAD\nours line\n=======\ntheirs line\n>>>>>>> feat\n",
+        blocks: [{ start_line: 1, ours: ["ours line"], theirs: ["theirs line"] }],
+        truncated: false,
+      },
+    });
+
+    workspaceViewStore.getState().updateView(workspaceId, {
+      activeActivity: "git",
+      panelOpen: true,
+    });
+    workspaceViewStore.getState().updateGit(workspaceId, (git) =>
+      replaceGitStatus(git, {
+        workspace_root: workspaceRoot,
+        repository_root: workspaceRoot,
+        branch: "main",
+        upstream: null,
+        ahead: 0,
+        behind: 0,
+        clean: false,
+        has_conflicts: true,
+        changes: [
+          {
+            path: "src/f.ts",
+            original_path: null,
+            index_status: "U",
+            worktree_status: "U",
+            kind: "conflict",
+          },
+        ],
+      }),
+    );
+    await flushAppShellEffects();
+
+    fireEvent.click(renderResult.getByText("src/f.ts"));
+    await flushAppShellEffects();
+
+    const view = workspaceViewStore.getState().viewFor(workspaceId);
+    expect(view.surface).toBe("git-conflict");
+    expect(renderResult.getByText("Ours")).toBeTruthy();
+    expect(renderResult.getByText("Result")).toBeTruthy();
+    expect(renderResult.getByText("Theirs")).toBeTruthy();
+  });
+
+  test("status bar branch chip opens the branch popup", async () => {
+    const workspaceId = "git-branch-popup";
+    const { renderResult } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot: "/repo-git-branch-popup",
+      gitBranchesFull: [
+        {
+          name: "main",
+          current: true,
+          remote: false,
+          upstream: "origin/main",
+          ahead: 0,
+          behind: 0,
+          head_short: "abc1111",
+        },
+        {
+          name: "feat/log",
+          current: false,
+          remote: false,
+          upstream: null,
+          ahead: 0,
+          behind: 0,
+          head_short: "abc2222",
+        },
+      ],
+      gitStashes: [{ index: 0, message: "On main: wip", when_unix: 1 }],
+    });
+
+    fireEvent.click(renderResult.getByLabelText("Open branches"));
+    await flushAppShellEffects();
+
+    expect(renderResult.getByPlaceholderText(/search branches/i)).toBeTruthy();
+    expect(renderResult.getByText("feat/log")).toBeTruthy();
+    expect(renderResult.getByText("On main: wip")).toBeTruthy();
+  });
+
+  test("palette lists git deep dive commands and export browse uses the dialog plugin", async () => {
+    const workspaceId = "git-palette-export";
+    const { renderResult, tauri } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot: "/repo-git-palette-export",
+      gitLogPage: {
+        rows: [logRow("ccccccc3ccccccc3")],
+        has_more: false,
+        total_loaded: 1,
+        truncated: false,
+      },
+      gitCommitDetail: {
+        hash: "ccccccc3ccccccc3",
+        short_hash: "ccccccc",
+        subject: "subject cccc",
+        body: "",
+        author: "mina",
+        author_email: "mina@example.test",
+        when_unix: 1_700_000_000,
+        parents: [],
+        refs: [],
+        files: [],
+        files_truncated: false,
+      },
+      dialogOpenPath: "/tmp/export-target",
+    });
+
+    fireEvent.click(
+      renderResult.getByRole("button", { name: /Search or run a command/ }),
+    );
+    expect(
+      renderResult.getByRole("button", { name: /Git: Export Commit…/ }),
+    ).toBeTruthy();
+    expect(
+      renderResult.getByRole("button", { name: /Git: Toggle Blame/ }),
+    ).toBeTruthy();
+    expect(
+      renderResult.getByRole("button", { name: /Git: Branches…/ }),
+    ).toBeTruthy();
+    expect(
+      renderResult.getByRole("button", { name: /Git: Rebase Current Branch…/ }),
+    ).toBeTruthy();
+
+    fireEvent.click(
+      renderResult.getByRole("button", { name: /Git: Open Log/ }),
+    );
+    await flushAppShellEffects();
+
+    const rowCell = renderResult.getByText("subject cccc");
+    fireEvent.click(rowCell);
+    await flushAppShellEffects();
+
+    fireEvent.click(renderResult.getByText("Export…"));
+    await flushAppShellEffects();
+
+    fireEvent.click(renderResult.getByText("Browse…"));
+    await flushAppShellEffects();
+
+    const dialogCall = tauri.invokeCalls.find(
+      (call) => call.command === "plugin:dialog|open",
+    );
+    expect(dialogCall).toBeTruthy();
+    expect(
+      (dialogCall?.args.options as { directory?: boolean } | undefined)
+        ?.directory,
+    ).toBe(true);
+
+    const destination = renderResult.getByLabelText(
+      "Export destination",
+    ) as HTMLInputElement;
+    expect(destination.value).toBe("/tmp/export-target");
   });
 });

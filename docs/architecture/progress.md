@@ -1201,3 +1201,50 @@ Residual risks:
 - Team collaboration remains outside Node 13.
 - Vite chunk-size warnings remain present for large editor and worker assets
   even when build/package commands pass.
+
+## 2026-06-13
+
+### Node 10.5: Git Deep Dive
+
+Status: completed and passed.
+
+Git tooling upgraded to JetBrains-grade capability across ten TDD tasks; the
+full implementation and verification evidence is recorded in
+`docs/architecture/git-deep-dive-results.md`.
+
+Completed progress:
+
+- Tasks 1-6 added the Rust backend: structured diff hunks with word-level
+  ranges, hunk/line staging via reconstructed patches, log topology with
+  streaming lane assignment and bounded pagination, commit detail/actions and
+  bounded export (folder/zip, changed-files/snapshot), branches-full with
+  ahead/behind plus the stash suite, three-way conflict payloads, porcelain
+  blame segments, and `--follow` file history — 24 async commands following
+  the Spec A `spawn_blocking` pattern.
+- Tasks 7-9 added the frontend: GitLogView (DAG table, filters, detail pane,
+  context menu, export dialog), the upgraded GitDiffView (unified and
+  side-by-side modes, word marks, hunk bars, line checkboxes), and
+  GitConflictView, GitBranchPopup, and GitBlameGutter with their pure-model
+  reducers.
+- Task 10 integrated everything into the workbench: GitLogView replaced
+  GitGraphView, conflicted files route to the resolver, the status-bar branch
+  chip opens the branch popup, blame toggles from the palette, the export
+  dialog browses destinations through the dialog plugin, and the typed
+  confirmation flow gained `REVERT <short>`, `RESET [HARD] <short>`,
+  `DROP stash@{n}`, `DELETE <branch>`, and `ACCEPT OURS/THEIRS`.
+
+Verification (full gate at Task 10):
+
+- `bun test`: PASS — 476 tests, 0 failed.
+- `bun run build`: PASS (pre-existing chunk-size warnings).
+- `cargo test`: PASS — 344 passed, 0 failed, 3 ignored.
+- `cargo fmt --check` and `cargo clippy --all-targets --all-features
+  -- -D warnings`: PASS.
+- `bun run tauri build --debug`: PASS — `Yuuzu-IDE.app` produced.
+- Measurements: `git_log_page` 200 rows in 94 ms (target < 150 ms);
+  `git_blame_file` on `src/app/AppShell.tsx` in 252 ms (target < 400 ms);
+  changed-files export in 136 ms.
+
+Residual risks are tracked in the results document (lane clamp on octopus
+merges, marker-based per-block conflict resolution, blame gutter scroll sync,
+export destination pre-flight).

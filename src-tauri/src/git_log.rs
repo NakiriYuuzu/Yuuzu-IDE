@@ -1086,6 +1086,51 @@ mod tests {
         assert!(!page.has_more);
     }
 
+
+    #[test]
+    #[ignore = "manual measurement against the host repository"]
+    fn measure_log_blame_export_on_this_repo() {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+
+        let started = std::time::Instant::now();
+        let page = log_page(&repo, &GitLogFilter::default(), 200).expect("log page");
+        let log_ms = started.elapsed().as_millis();
+
+        let started = std::time::Instant::now();
+        let blame = crate::git::blame_file(&repo, "src/app/AppShell.tsx").expect("blame");
+        let blame_ms = started.elapsed().as_millis();
+
+        let dest = tempfile::tempdir().expect("dest");
+        let hash = page.rows[0].hash.clone();
+        let started = std::time::Instant::now();
+        let report = export_commit(
+            &repo,
+            &hash,
+            ExportScope::ChangedFiles,
+            ExportFormat::Folder,
+            dest.path(),
+            true,
+        )
+        .expect("export");
+        let export_ms = started.elapsed().as_millis();
+
+        println!(
+            "MEASURE git_log_page 200 rows: {log_ms} ms ({} rows)",
+            page.rows.len()
+        );
+        println!(
+            "MEASURE git_blame_file AppShell.tsx: {blame_ms} ms ({} segments)",
+            blame.segments.len()
+        );
+        println!(
+            "MEASURE export_commit changed-files: {export_ms} ms ({} files)",
+            report.written_files
+        );
+    }
+
     #[test]
     fn parses_refs_into_kinds() {
         let refs = parse_refs("HEAD -> main, tag: v0.4.1, origin/main");
