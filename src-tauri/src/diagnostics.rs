@@ -91,11 +91,12 @@ impl DiagnosticsStore {
             if line.trim().is_empty() {
                 continue;
             }
+            let Ok(event) = serde_json::from_str::<DiagnosticEvent>(&line) else {
+                continue;
+            };
             if events.len() == limit {
                 events.pop_front();
             }
-            let event =
-                serde_json::from_str::<DiagnosticEvent>(&line).map_err(|err| err.to_string())?;
             events.push_back(event);
         }
 
@@ -128,6 +129,40 @@ mod tests {
             .expect("append");
 
         let events = store.list(10).expect("list");
+        assert_eq!(events[0].source, "indexing");
+        assert_eq!(events[1].source, "startup");
+    }
+
+    #[test]
+    fn diagnostics_store_skips_corrupt_lines_when_listing_events() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("diagnostics.jsonl");
+        let store = DiagnosticsStore::new(path.clone());
+
+        store
+            .append(DiagnosticEventInput {
+                level: "info".to_string(),
+                source: "startup".to_string(),
+                message: "visible shell".to_string(),
+            })
+            .expect("append startup");
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("open diagnostics log");
+        writeln!(file, "{{malformed-json").expect("write corrupt line");
+        file.sync_all().expect("sync corrupt line");
+        store
+            .append(DiagnosticEventInput {
+                level: "warn".to_string(),
+                source: "indexing".to_string(),
+                message: "large workspace".to_string(),
+            })
+            .expect("append indexing");
+
+        let events = store.list(10).expect("list skips corrupt lines");
+
+        assert_eq!(events.len(), 2);
         assert_eq!(events[0].source, "indexing");
         assert_eq!(events[1].source, "startup");
     }
