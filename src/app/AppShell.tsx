@@ -413,6 +413,7 @@ import { useWorkspaceStore, workspaceStore } from "./workspace-store";
 import { WorkspaceSwitcher } from "./workspace-switcher";
 import {
   commandItemsForPalette,
+  isCoreExtensionContribution,
   registeredCoreCommandIds,
 } from "./command-registry";
 
@@ -2614,6 +2615,8 @@ export function AppShell() {
   const debugLoadRequestRef = useRef<Record<string, number>>({});
   const extensionStatusRequestRef = useRef<Record<string, number>>({});
   const extensionToggleRequestRef = useRef<Record<string, number>>({});
+  const extensionStateEpochRef = useRef<Record<string, number>>({});
+  const extensionPendingToggleRef = useRef<Record<string, number>>({});
   const docsLoadRequestRef = useRef<DocsLoadRequestState>({});
   const agentSessionsLoadRef = useRef<Record<string, number>>({});
   const languageRefreshRequestRef = useRef<LanguageRefreshRequestState>({});
@@ -6372,6 +6375,43 @@ export function AppShell() {
     return requestId;
   }
 
+  function currentExtensionStateEpoch(workspaceId: string): number {
+    return extensionStateEpochRef.current[workspaceId] ?? 0;
+  }
+
+  function bumpExtensionStateEpoch(workspaceId: string): number {
+    const epoch = currentExtensionStateEpoch(workspaceId) + 1;
+    extensionStateEpochRef.current = {
+      ...extensionStateEpochRef.current,
+      [workspaceId]: epoch,
+    };
+    return epoch;
+  }
+
+  function hasPendingExtensionToggle(workspaceId: string): boolean {
+    return (extensionPendingToggleRef.current[workspaceId] ?? 0) > 0;
+  }
+
+  function beginExtensionToggleMutation(workspaceId: string) {
+    bumpExtensionStateEpoch(workspaceId);
+    extensionPendingToggleRef.current = {
+      ...extensionPendingToggleRef.current,
+      [workspaceId]: (extensionPendingToggleRef.current[workspaceId] ?? 0) + 1,
+    };
+  }
+
+  function finishExtensionToggleMutation(workspaceId: string) {
+    const nextPending = Math.max(
+      0,
+      (extensionPendingToggleRef.current[workspaceId] ?? 0) - 1,
+    );
+    extensionPendingToggleRef.current = {
+      ...extensionPendingToggleRef.current,
+      [workspaceId]: nextPending,
+    };
+    bumpExtensionStateEpoch(workspaceId);
+  }
+
   function extensionToggleRequestKey(
     workspaceId: string,
     extensionId: string,
@@ -6416,9 +6456,12 @@ export function AppShell() {
     workspaceId: string,
     workspaceRoot: string,
     requestId: number,
+    requestEpoch: number,
   ): boolean {
     return (
       isLatestExtensionStatusRequest(workspaceId, requestId) &&
+      currentExtensionStateEpoch(workspaceId) === requestEpoch &&
+      !hasPendingExtensionToggle(workspaceId) &&
       hasRegisteredWorkspace(workspaceId) &&
       getWorkspaceRoot(workspaceId) === workspaceRoot
     );
@@ -6442,12 +6485,20 @@ export function AppShell() {
     workspaceRoot: string,
   ): Promise<void> {
     const requestId = nextExtensionStatusRequestId(workspaceId);
+    const requestEpoch = currentExtensionStateEpoch(workspaceId);
     updateExtension(workspaceId, setExtensionLoading);
 
     try {
       const statuses = await listExtensionStatuses(workspaceRoot);
 
-      if (!canApplyExtensionStatusSnapshot(workspaceId, workspaceRoot, requestId)) {
+      if (
+        !canApplyExtensionStatusSnapshot(
+          workspaceId,
+          workspaceRoot,
+          requestId,
+          requestEpoch,
+        )
+      ) {
         return;
       }
 
@@ -6468,6 +6519,13 @@ export function AppShell() {
           loading: false,
           error: null,
         }));
+        return;
+      }
+
+      if (
+        currentExtensionStateEpoch(workspaceId) !== requestEpoch ||
+        hasPendingExtensionToggle(workspaceId)
+      ) {
         return;
       }
 
@@ -6508,6 +6566,7 @@ export function AppShell() {
     const workspaceId = activeWorkspaceId;
     const workspaceRoot = activeWorkspace.path;
     const requestId = nextExtensionToggleRequestId(workspaceId, extensionId);
+    beginExtensionToggleMutation(workspaceId);
     updateExtension(workspaceId, (extension) =>
       toggleExtensionStatus(extension, extensionId, enabled),
     );
@@ -6518,6 +6577,7 @@ export function AppShell() {
       enabled,
     })
       .then((statuses) => {
+        finishExtensionToggleMutation(workspaceId);
         if (
           !canApplyExtensionToggleSnapshot(
             workspaceId,
@@ -6534,6 +6594,7 @@ export function AppShell() {
         );
       })
       .catch((error) => {
+        finishExtensionToggleMutation(workspaceId);
         if (
           !canApplyExtensionToggleSnapshot(
             workspaceId,
@@ -6572,7 +6633,7 @@ export function AppShell() {
       const command = status.manifest.contributes.commands.find(
         (item) => item.id === commandId,
       );
-      if (command) {
+      if (command && !isCoreExtensionContribution(command)) {
         return command;
       }
     }
@@ -6590,6 +6651,7 @@ export function AppShell() {
     const workspaceId = activeWorkspaceId;
     const workspaceRoot = activeWorkspace.path;
     const requestId = nextExtensionStatusRequestId(workspaceId);
+    const requestEpoch = currentExtensionStateEpoch(workspaceId);
     void recordExtensionPerformance({
       workspaceRoot,
       sample: {
@@ -6602,7 +6664,14 @@ export function AppShell() {
       },
     })
       .then((statuses) => {
-        if (!canApplyExtensionStatusSnapshot(workspaceId, workspaceRoot, requestId)) {
+        if (
+          !canApplyExtensionStatusSnapshot(
+            workspaceId,
+            workspaceRoot,
+            requestId,
+            requestEpoch,
+          )
+        ) {
           return;
         }
 
@@ -6611,7 +6680,14 @@ export function AppShell() {
         );
       })
       .catch((error) => {
-        if (!canApplyExtensionStatusSnapshot(workspaceId, workspaceRoot, requestId)) {
+        if (
+          !canApplyExtensionStatusSnapshot(
+            workspaceId,
+            workspaceRoot,
+            requestId,
+            requestEpoch,
+          )
+        ) {
           return;
         }
 

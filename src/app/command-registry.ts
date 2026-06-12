@@ -297,6 +297,12 @@ const coreCommandIdSet = new Set(
   coreCommandContributions.map((command) => command.id),
 );
 
+export function isCoreExtensionContribution(
+  command: Pick<CommandContribution, "owner_extension_id">,
+): boolean {
+  return command.owner_extension_id === "yuuzu.core";
+}
+
 export function registeredCoreCommandIds(): string[] {
   return coreCommandContributions.map((command) => command.id);
 }
@@ -319,6 +325,7 @@ export function extensionContributionsForPalette(
 
   for (const command of commands) {
     if (
+      isCoreExtensionContribution(command) ||
       disabledExtensionIds.has(command.owner_extension_id) ||
       usedCommandIds.has(command.id)
     ) {

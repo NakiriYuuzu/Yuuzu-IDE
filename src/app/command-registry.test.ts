@@ -92,6 +92,35 @@ describe("command registry", () => {
     ]);
   });
 
+  test("drops yuuzu.core manifest commands from extension palette items", () => {
+    const coreManifestCommand: ExtensionCommandContribution = {
+      id: "open-command-palette",
+      label: "Open Command Palette",
+      group: "Workbench",
+      description: "Open the command palette",
+      owner_extension_id: "yuuzu.core",
+    };
+    const extensionCommand: ExtensionCommandContribution = {
+      id: "yuuzu.debug-tools.inspect-session",
+      label: "Debug Tools: Inspect session",
+      group: "Extensions",
+      description: "Inspect the active debug session",
+      owner_extension_id: "yuuzu.debug-tools",
+    };
+
+    expect(
+      extensionContributionsForPalette(
+        [coreManifestCommand, extensionCommand],
+        new Set(),
+      ).map((command) => command.id),
+    ).toEqual(["yuuzu.debug-tools.inspect-session"]);
+    expect(
+      commandItemsForPalette([coreManifestCommand], new Set()).some(
+        (command) => command.id === "open-command-palette",
+      ),
+    ).toBe(false);
+  });
+
   test("keeps registry-built debug commands searchable by existing descriptions", () => {
     const commands = commandItemsForPalette([], new Set());
     const ids = filterCommands(commands, "launch configuration").map(

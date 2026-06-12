@@ -467,6 +467,9 @@ type AppShellTauriMockOptions = {
   setExtensionEnabledResponses?: Array<
     ExtensionWorkspaceStatus[] | Promise<ExtensionWorkspaceStatus[]>
   >;
+  recordExtensionPerformanceResponses?: Array<
+    ExtensionWorkspaceStatus[] | Promise<ExtensionWorkspaceStatus[]>
+  >;
 };
 
 function appShellGitStatus(workspaceRoot: string) {
@@ -491,6 +494,9 @@ function installAppShellTauriMock(options: AppShellTauriMockOptions) {
   let extensionStatuses = options.extensionStatuses ?? [];
   const setExtensionEnabledResponses = [
     ...(options.setExtensionEnabledResponses ?? []),
+  ];
+  const recordExtensionPerformanceResponses = [
+    ...(options.recordExtensionPerformanceResponses ?? []),
   ];
   const registry = {
     active_workspace_id: options.workspaceId,
@@ -573,6 +579,10 @@ function installAppShellTauriMock(options: AppShellTauriMockOptions) {
           );
           return extensionStatuses;
         case "record_extension_performance":
+          if (recordExtensionPerformanceResponses.length > 0) {
+            return recordExtensionPerformanceResponses.shift();
+          }
+
           return extensionStatuses;
         case "watch_workspace":
           return {
@@ -2036,6 +2046,37 @@ describe("AppShell AppShell helpers", () => {
     ).toBe(false);
   });
 
+  test("AppShell hides yuuzu.core manifest commands from extension palette", async () => {
+    const workspaceId = "extensions-core-command-manifest";
+    const workspaceRoot = "/repo-extensions-core-command-manifest";
+    const { renderResult, tauri } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot,
+      initialExtensionStatuses: [
+        extensionStatus({
+          id: "yuuzu.core",
+          name: "Yuuzu Core",
+          commandId: "open-command-palette",
+          commandLabel: "Open Command Palette",
+        }),
+      ],
+    });
+
+    fireEvent.click(
+      renderResult.getByRole("button", { name: /Search or run a command/ }),
+    );
+
+    const hasCoreManifestCommand = Boolean(
+      renderResult.queryByText("Open Command Palette"),
+    );
+    expect(hasCoreManifestCommand).toBe(false);
+    expect(
+      tauri.invokeCalls.some(
+        (call) => call.command === "record_extension_performance",
+      ),
+    ).toBe(false);
+  });
+
   test("AppShell records slow extension command performance", async () => {
     const workspaceId = "extensions-command-performance";
     const workspaceRoot = "/repo-extensions-command-performance";
@@ -2137,6 +2178,66 @@ describe("AppShell AppShell helpers", () => {
         extensionStatus({
           id: "yuuzu.profiler",
           name: "Profiler",
+          enabled: true,
+          commandId,
+          commandLabel,
+        }),
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await flushAppShellEffects();
+
+    const extension = workspaceViewStore.getState().viewFor(workspaceId).extension;
+    const debugTools = extension.statuses.find(
+      (status) => status.manifest.id === "yuuzu.debug-tools",
+    );
+    expect(debugTools?.enabled).toBe(false);
+    expect(renderResult.getByLabelText("Enable Debug Tools")).toBeTruthy();
+  });
+
+  test("AppShell ignores stale extension performance snapshot after newer toggle snapshot", async () => {
+    const workspaceId = "extensions-toggle-over-stale-performance";
+    const workspaceRoot = "/repo-extensions-toggle-over-stale-performance";
+    const stalePerformanceResponse = createDeferred<ExtensionWorkspaceStatus[]>();
+    const commandId = "yuuzu.debug-tools.profile";
+    const commandLabel = "Debug Tools: Profile Project";
+    const initialStatuses = [
+      extensionStatus({
+        id: "yuuzu.debug-tools",
+        name: "Debug Tools",
+        enabled: true,
+        commandId,
+        commandLabel,
+      }),
+    ];
+    const { renderResult } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot,
+      initialExtensionStatuses: initialStatuses,
+      extensionStatuses: initialStatuses,
+      recordExtensionPerformanceResponses: [stalePerformanceResponse.promise],
+    });
+
+    fireEvent.click(renderResult.getByRole("button", { name: "Extensions" }));
+    await flushAppShellEffects();
+
+    fireEvent.click(
+      renderResult.getByRole("button", { name: /Search or run a command/ }),
+    );
+    fireEvent.click(
+      renderResult.getByRole("button", { name: new RegExp(commandLabel) }),
+    );
+    await flushAppShellEffects();
+
+    fireEvent.click(renderResult.getByLabelText("Disable Debug Tools"));
+    await flushAppShellEffects();
+    expect(renderResult.getByLabelText("Enable Debug Tools")).toBeTruthy();
+
+    await act(async () => {
+      stalePerformanceResponse.resolve([
+        extensionStatus({
+          id: "yuuzu.debug-tools",
+          name: "Debug Tools",
           enabled: true,
           commandId,
           commandLabel,
