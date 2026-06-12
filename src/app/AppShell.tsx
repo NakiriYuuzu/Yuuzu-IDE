@@ -61,14 +61,12 @@ import {
   markDebugSessionEvent,
   removeDebugWatch,
   replaceDebugLaunchConfigs,
+  replaceDebugStackSnapshot,
   replaceDebugSessions,
   selectDebugConfig,
   setDebugBreakpoints,
   setDebugError,
   setDebugMode,
-  setDebugScopes,
-  setDebugStack,
-  storeDebugVariables,
   toggleDebugBreakpoint,
   updateDebugWatchResult,
   type DebugLaunchConfig,
@@ -6582,8 +6580,17 @@ export function AppShell() {
         return;
       }
 
+      const scopesByFrameId: Record<
+        number,
+        Awaited<ReturnType<typeof getDebugScopes>>
+      > = {};
+      const variablesByReference: Record<
+        number,
+        Awaited<ReturnType<typeof getDebugVariables>>
+      > = {};
+
       updateDebug(workspaceId, (state) =>
-        setDebugStack(state, event.session_id, frames),
+        replaceDebugStackSnapshot(state, event.session_id, frames),
       );
 
       for (const frame of frames) {
@@ -6603,9 +6610,7 @@ export function AppShell() {
           return;
         }
 
-        updateDebug(workspaceId, (state) =>
-          setDebugScopes(state, event.session_id, frame.id, scopes),
-        );
+        scopesByFrameId[frame.id] = scopes;
 
         for (const scope of scopes) {
           if (scope.variables_reference === 0) {
@@ -6622,19 +6627,26 @@ export function AppShell() {
             if (!isCurrentDebugSessionSequence(workspaceId, event)) {
               return;
             }
-            updateDebug(workspaceId, (state) =>
-              storeDebugVariables(
-                state,
-                event.session_id,
-                scope.variables_reference,
-                variables,
-              ),
-            );
+            variablesByReference[scope.variables_reference] = variables;
           } catch {
             // Variable refresh is best-effort per scope.
           }
         }
       }
+
+      if (!isCurrentDebugSessionSequence(workspaceId, event)) {
+        return;
+      }
+
+      updateDebug(workspaceId, (state) =>
+        replaceDebugStackSnapshot(
+          state,
+          event.session_id,
+          frames,
+          scopesByFrameId,
+          variablesByReference,
+        ),
+      );
     } catch {
       // Stack refresh is best-effort; session event state remains authoritative.
     }

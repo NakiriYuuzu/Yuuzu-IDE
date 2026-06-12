@@ -360,6 +360,50 @@ export function setDebugStack(
   };
 }
 
+export function replaceDebugStackSnapshot(
+  state: DebugViewState,
+  sessionId: string,
+  frames: DebugStackFrame[],
+  scopesByFrameId: Record<number, DebugScope[]> = {},
+  variablesByReference: Record<number, DebugVariable[]> = {},
+): DebugViewState {
+  const sessionKey = `${sessionId}:`;
+  const nextScopesByFrameId = Object.fromEntries(
+    Object.entries(state.scopesByFrameId).filter(
+      ([key]) => !key.startsWith(sessionKey),
+    ),
+  );
+  const nextVariablesByReference = Object.fromEntries(
+    Object.entries(state.variablesByReference).filter(
+      ([key]) => !key.startsWith(sessionKey),
+    ),
+  );
+
+  for (const [frameId, scopes] of Object.entries(scopesByFrameId)) {
+    nextScopesByFrameId[`${sessionId}:${frameId}`] = scopes.map((scope) => ({
+      ...scope,
+    }));
+  }
+
+  for (const [variablesReference, variables] of Object.entries(
+    variablesByReference,
+  )) {
+    nextVariablesByReference[`${sessionId}:${variablesReference}`] =
+      variables.map((variable) => ({ ...variable }));
+  }
+
+  return {
+    ...state,
+    activeSessionId: state.activeSessionId ?? sessionId,
+    stackBySessionId: {
+      ...state.stackBySessionId,
+      [sessionId]: frames.map((frame) => ({ ...frame })),
+    },
+    scopesByFrameId: nextScopesByFrameId,
+    variablesByReference: nextVariablesByReference,
+  };
+}
+
 export function setDebugScopes(
   state: DebugViewState,
   sessionId: string,

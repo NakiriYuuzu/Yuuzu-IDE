@@ -72,7 +72,9 @@ import { workspaceViewStore } from "./workspace-view-state";
 import {
   createDebugState,
   replaceDebugLaunchConfigs,
+  setDebugScopes,
   setDebugStack,
+  storeDebugVariables,
   type DebugScope,
   type DebugLaunchConfig,
   type DebugSessionInfo,
@@ -1984,6 +1986,110 @@ describe("AppShell AppShell helpers", () => {
     const debug = workspaceViewStore.getState().viewFor(workspaceId).debug;
     expect(debug.sessionSequenceById[sessionId]).toBe(3);
     expect(debug.variablesByReference[`${sessionId}:100`]).toBeUndefined();
+  });
+
+  test("AppShell replaces stale session variables when a newer stopped refresh has missing variables", async () => {
+    const workspaceId = "debug-stopped-replace-variables";
+    const workspaceRoot = "/repo-debug-stopped-replace-variables";
+    const sessionId = "session-replace-variables";
+    const failedVariables = createDeferred<DebugVariable[]>();
+    const session = debugSession({
+      id: sessionId,
+      workspace_id: workspaceId,
+      workspace_root: workspaceRoot,
+      status: "Stopped",
+      active_thread_id: 11,
+      sequence: 1,
+    });
+    const { renderResult, tauri } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot,
+      initialSessions: [session],
+      initialActiveSessionId: sessionId,
+      debugStackFrames: [
+        {
+          id: 8,
+          name: "next",
+          source_path: "src/app.py",
+          line: 20,
+          column: 1,
+        },
+      ],
+      debugScopesByFrameId: {
+        8: [{ name: "Locals", variables_reference: 200, expensive: false }],
+      },
+      debugVariablesByReference: {
+        200: failedVariables.promise,
+      },
+    });
+
+    await act(async () => {
+      workspaceViewStore.getState().updateDebug(workspaceId, (debug) =>
+        storeDebugVariables(
+          setDebugScopes(
+            setDebugStack(debug, sessionId, [
+              {
+                id: 7,
+                name: "previous",
+                source_path: "src/app.py",
+                line: 12,
+                column: 1,
+              },
+            ]),
+            sessionId,
+            7,
+            [{ name: "Locals", variables_reference: 100, expensive: false }],
+          ),
+          sessionId,
+          100,
+          [
+            {
+              name: "staleCounter",
+              value: "99",
+              type: "int",
+              variables_reference: 0,
+            },
+          ],
+        ),
+      );
+    });
+
+    fireEvent.click(renderResult.getByRole("button", { name: "Debug" }));
+    fireEvent.click(renderResult.getByRole("button", { name: "Variables" }));
+    expect(renderResult.getByText("staleCounter")).toBeTruthy();
+
+    await act(async () => {
+      tauri.emit("workspace://debug-stopped", {
+        session_id: sessionId,
+        workspace_id: workspaceId,
+        workspace_root: workspaceRoot,
+        sequence: 2,
+        status: "Stopped",
+        reason: "breakpoint",
+        thread_id: 11,
+        active_thread_id: 11,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await flushAppShellEffects();
+
+    expect(
+      tauri.invokeCalls.filter((call) => call.command === "debug_variables"),
+    ).toHaveLength(1);
+
+    await act(async () => {
+      failedVariables.reject(new Error("variables unavailable"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await flushAppShellEffects();
+
+    const debug = workspaceViewStore.getState().viewFor(workspaceId).debug;
+    expect(debug.stackBySessionId[sessionId]?.map((frame) => frame.id)).toEqual([
+      8,
+    ]);
+    expect(debug.scopesByFrameId[`${sessionId}:7`]).toBeUndefined();
+    expect(debug.variablesByReference[`${sessionId}:100`]).toBeUndefined();
+    expect(renderResult.queryByText("staleCounter")).toBeNull();
   });
 
   test("AppShell command palette starts debug with the active workspace identity", async () => {
