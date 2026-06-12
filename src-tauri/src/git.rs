@@ -1102,6 +1102,212 @@ fn path_to_git_string(path: &Path) -> String {
         .join("/")
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitBranchFull {
+    pub name: String,
+    pub current: bool,
+    pub remote: bool,
+    pub upstream: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
+    pub head_short: String,
+}
+
+const BRANCH_REF_FORMAT: &str =
+    "%(HEAD)%1f%(refname:short)%1f%(upstream:short)%1f%(upstream:track)%1f%(objectname:short)";
+
+fn parse_branch_full_lines(output: &[u8], remote: bool) -> Vec<GitBranchFull> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .filter_map(|line| {
+            let f: Vec<&str> = line.split('\u{1f}').collect();
+            if f.len() < 5 || f[1].is_empty() || f[1].ends_with("/HEAD") {
+                return None;
+            }
+            let (ahead, behind) =
+                parse_tracking_counts(f[3].trim_start_matches('[').trim_end_matches(']'));
+            Some(GitBranchFull {
+                name: f[1].to_string(),
+                current: f[0].trim() == "*",
+                remote,
+                upstream: non_empty(f[2]),
+                ahead,
+                behind,
+                head_short: f[4].to_string(),
+            })
+        })
+        .collect()
+}
+
+pub fn branches_full(workspace_root: &Path) -> Result<Vec<GitBranchFull>, String> {
+    let repository_root = repository_root(workspace_root)?;
+    let local = run_git(
+        &repository_root,
+        [
+            "for-each-ref",
+            "refs/heads",
+            "--count=500",
+            "--format",
+            BRANCH_REF_FORMAT,
+        ]
+        .iter(),
+    )?;
+    let remote = run_git(
+        &repository_root,
+        [
+            "for-each-ref",
+            "refs/remotes",
+            "--count=500",
+            "--format",
+            BRANCH_REF_FORMAT,
+        ]
+        .iter(),
+    )?;
+    let mut branches = parse_branch_full_lines(&local, false);
+    branches.extend(parse_branch_full_lines(&remote, true));
+    Ok(branches)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitStashEntry {
+    pub index: usize,
+    pub message: String,
+    pub when_unix: i64,
+}
+
+const MAX_STASH_ENTRIES: usize = 50;
+
+pub fn stash_list(workspace_root: &Path) -> Result<Vec<GitStashEntry>, String> {
+    let repository_root = repository_root(workspace_root)?;
+    let output = run_git(
+        &repository_root,
+        [
+            "stash",
+            "list",
+            // stash list uses log pretty-format syntax: hex literals are %x1f
+            "--format=%gd%x1f%at%x1f%gs",
+            "-n",
+            "50",
+        ]
+        .iter(),
+    )?;
+    Ok(String::from_utf8_lossy(&output)
+        .lines()
+        .filter_map(|line| {
+            let f: Vec<&str> = line.split('\u{1f}').collect();
+            if f.len() < 3 {
+                return None;
+            }
+            let index = f[0]
+                .trim_start_matches("stash@{")
+                .trim_end_matches('}')
+                .parse()
+                .ok()?;
+            Some(GitStashEntry {
+                index,
+                message: f[2].to_string(),
+                when_unix: f[1].parse().unwrap_or(0),
+            })
+        })
+        .collect())
+}
+
+fn stash_ref(index: usize) -> Result<String, String> {
+    if index >= MAX_STASH_ENTRIES {
+        return Err("stash index out of range".into());
+    }
+    Ok(format!("stash@{{{index}}}"))
+}
+
+pub fn stash_apply(workspace_root: &Path, index: usize) -> Result<GitRepositoryStatus, String> {
+    let reference = stash_ref(index)?;
+    let repository_root = repository_root(workspace_root)?;
+    let mut command = git_command(&repository_root);
+    command.arg("stash").arg("apply").arg(&reference);
+    run_git_command("git stash apply", &mut command)?;
+    repository_status(workspace_root)
+}
+
+pub fn stash_pop(workspace_root: &Path, index: usize) -> Result<GitRepositoryStatus, String> {
+    let reference = stash_ref(index)?;
+    let repository_root = repository_root(workspace_root)?;
+    let mut command = git_command(&repository_root);
+    command.arg("stash").arg("pop").arg(&reference);
+    run_git_command("git stash pop", &mut command)?;
+    repository_status(workspace_root)
+}
+
+pub fn stash_drop(
+    workspace_root: &Path,
+    index: usize,
+    confirmation: &str,
+) -> Result<GitRepositoryStatus, String> {
+    let reference = stash_ref(index)?;
+    require_confirmation(confirmation, &format!("DROP {reference}"))?;
+    let repository_root = repository_root(workspace_root)?;
+    let mut command = git_command(&repository_root);
+    command.arg("stash").arg("drop").arg(&reference);
+    run_git_command("git stash drop", &mut command)?;
+    repository_status(workspace_root)
+}
+
+pub fn stash_branch(
+    workspace_root: &Path,
+    index: usize,
+    name: &str,
+) -> Result<GitRepositoryStatus, String> {
+    let name = required_trimmed(name, "branch name")?;
+    let reference = stash_ref(index)?;
+    let repository_root = repository_root(workspace_root)?;
+    let mut command = git_command(&repository_root);
+    command.arg("stash").arg("branch").arg(name).arg(&reference);
+    run_git_command("git stash branch", &mut command)?;
+    repository_status(workspace_root)
+}
+
+pub fn merge_branch(workspace_root: &Path, name: &str) -> Result<GitRepositoryStatus, String> {
+    let name = required_trimmed(name, "branch name")?;
+    let repository_root = repository_root(workspace_root)?;
+    let mut command = git_command(&repository_root);
+    command.arg("merge").arg("--no-edit").arg(name);
+    let merge_result = run_git_command("git merge", &mut command);
+    let status = repository_status(workspace_root)?;
+    match merge_result {
+        Ok(_) => Ok(status),
+        // a conflicted merge is a valid outcome: has_conflicts drives the UI
+        Err(_) if status.has_conflicts => Ok(status),
+        Err(err) => Err(err),
+    }
+}
+
+pub fn delete_branch(
+    workspace_root: &Path,
+    name: &str,
+    confirmation: &str,
+) -> Result<Vec<GitBranchFull>, String> {
+    let name = required_trimmed(name, "branch name")?;
+    require_confirmation(confirmation, &format!("DELETE {name}"))?;
+    let repository_root = repository_root(workspace_root)?;
+    let mut command = git_command(&repository_root);
+    command.arg("branch").arg("-D").arg(name);
+    run_git_command("git branch -D", &mut command)?;
+    branches_full(workspace_root)
+}
+
+pub fn rename_branch(
+    workspace_root: &Path,
+    from: &str,
+    to: &str,
+) -> Result<Vec<GitBranchFull>, String> {
+    let from = required_trimmed(from, "branch name")?;
+    let to = required_trimmed(to, "branch name")?;
+    let repository_root = repository_root(workspace_root)?;
+    let mut command = git_command(&repository_root);
+    command.arg("branch").arg("-m").arg(from).arg(to);
+    run_git_command("git branch -m", &mut command)?;
+    branches_full(workspace_root)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -1385,6 +1591,49 @@ pub(crate) mod tests {
         )
         .expect("confirmed revert succeeds");
         assert_eq!(repo.read_file("f.ts"), "a\n");
+    }
+
+    #[test]
+    fn branches_full_reports_ahead_behind_and_current() {
+        let repo = TempGitRepo::new();
+        repo.write_file("a", "1\n");
+        repo.run(["add", "."]);
+        repo.run(["commit", "-m", "c1"]);
+        repo.run(["branch", "feat"]);
+        let branches = branches_full(repo.path()).expect("branches");
+        let main = branches
+            .iter()
+            .find(|b| b.current)
+            .expect("current branch present");
+        assert!(!main.name.is_empty());
+        assert!(branches.iter().any(|b| b.name == "feat" && !b.current));
+    }
+
+    #[test]
+    fn stash_list_apply_pop_drop_round_trip_with_confirmation() {
+        let repo = TempGitRepo::new();
+        repo.write_file("a", "1\n");
+        repo.run(["add", "."]);
+        repo.run(["commit", "-m", "c1"]);
+        repo.write_file("a", "2\n");
+        stash(repo.path(), "wip-1", false).expect("stash push");
+
+        let stashes = stash_list(repo.path()).expect("list");
+        assert_eq!(stashes.len(), 1);
+        assert_eq!(stashes[0].index, 0);
+        assert!(stashes[0].message.contains("wip-1"));
+
+        stash_apply(repo.path(), 0).expect("apply keeps stash");
+        assert_eq!(stash_list(repo.path()).unwrap().len(), 1);
+        assert_eq!(repo.read_file("a"), "2\n");
+
+        repo.run(["checkout", "--", "a"]);
+        assert!(
+            stash_drop(repo.path(), 0, "").is_err(),
+            "drop needs confirmation"
+        );
+        stash_drop(repo.path(), 0, "DROP stash@{0}").expect("confirmed drop");
+        assert!(stash_list(repo.path()).unwrap().is_empty());
     }
 
     pub(crate) struct TempGitRepo {

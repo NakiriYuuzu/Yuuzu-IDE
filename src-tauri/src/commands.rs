@@ -1756,6 +1756,98 @@ pub async fn git_log_page(
 }
 
 #[tauri::command]
+pub async fn git_branches_full(
+    state: State<'_, AppState>,
+    workspace_root: String,
+) -> Result<Vec<crate::git::GitBranchFull>, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git::branches_full(&workspace_root)).await
+}
+
+#[tauri::command]
+pub async fn git_merge_branch(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    name: String,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git::merge_branch(&workspace_root, &name)).await
+}
+
+#[tauri::command]
+pub async fn git_branch_delete(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    name: String,
+    confirmation: String,
+) -> Result<Vec<crate::git::GitBranchFull>, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git::delete_branch(&workspace_root, &name, &confirmation)).await
+}
+
+#[tauri::command]
+pub async fn git_branch_rename(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    from: String,
+    to: String,
+) -> Result<Vec<crate::git::GitBranchFull>, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git::rename_branch(&workspace_root, &from, &to)).await
+}
+
+#[tauri::command]
+pub async fn git_stash_list(
+    state: State<'_, AppState>,
+    workspace_root: String,
+) -> Result<Vec<crate::git::GitStashEntry>, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git::stash_list(&workspace_root)).await
+}
+
+#[tauri::command]
+pub async fn git_stash_apply(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    index: usize,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git::stash_apply(&workspace_root, index)).await
+}
+
+#[tauri::command]
+pub async fn git_stash_pop(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    index: usize,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git::stash_pop(&workspace_root, index)).await
+}
+
+#[tauri::command]
+pub async fn git_stash_drop(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    index: usize,
+    confirmation: String,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git::stash_drop(&workspace_root, index, &confirmation)).await
+}
+
+#[tauri::command]
+pub async fn git_stash_branch(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    index: usize,
+    name: String,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git::stash_branch(&workspace_root, index, &name)).await
+}
+
+#[tauri::command]
 pub async fn git_commit_detail(
     state: State<'_, AppState>,
     workspace_root: String,
