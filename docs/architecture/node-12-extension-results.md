@@ -32,7 +32,7 @@ All Node 12 implementer, spec-compliance, and code-quality agents used `gpt-5.5`
 
 ## Full Verification Evidence
 
-Final verification ran on 2026-06-12 from `/Users/yuuzu/HanaokaYuuzu/Ai/yuuzu-ide` at HEAD `1736b1d0e2573a789ade9a60ed11579d854015a6`.
+Final verification ran on 2026-06-12 from `/Users/yuuzu/HanaokaYuuzu/Ai/yuuzu-ide` immediately before this results commit, against implementation head `1736b1d0e2573a789ade9a60ed11579d854015a6`.
 
 - `bun test`: PASS.
 
