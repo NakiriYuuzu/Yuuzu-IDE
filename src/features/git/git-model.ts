@@ -89,6 +89,53 @@ export type GitTaskRefreshCheck = {
   exitCode: number | null;
 };
 
+export type GitBranchFull = {
+  name: string;
+  current: boolean;
+  remote: boolean;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  head_short: string;
+};
+
+export type GitStashEntry = {
+  index: number;
+  message: string;
+  when_unix: number;
+};
+
+export type BlameSegment = {
+  hash: string;
+  short_hash: string;
+  author: string;
+  when_unix: number;
+  line_start: number;
+  line_count: number;
+};
+
+export type GitBlameFile = {
+  path: string;
+  segments: BlameSegment[];
+  truncated: boolean;
+};
+
+export type ConflictBlock = {
+  start_line: number;
+  ours: string[];
+  theirs: string[];
+};
+
+export type GitConflictFile = {
+  path: string;
+  base: string | null;
+  ours: string;
+  theirs: string;
+  working: string;
+  blocks: ConflictBlock[];
+  truncated: boolean;
+};
+
 export type GitViewState = {
   status: GitRepositoryStatus | null;
   loading: boolean;
@@ -98,6 +145,10 @@ export type GitViewState = {
   diffByKey: Record<string, GitDiffHunks>;
   branches: GitBranch[];
   graph: GitCommitSummary[];
+  branchesFull: GitBranchFull[];
+  stashes: GitStashEntry[];
+  blame: GitBlameFile | null;
+  favoriteBranches: string[];
 };
 
 const MAX_GRAPH_COMMITS = 120;
@@ -112,6 +163,10 @@ export function createGitState(): GitViewState {
     diffByKey: {},
     branches: [],
     graph: [],
+    branchesFull: [],
+    stashes: [],
+    blame: null,
+    favoriteBranches: [],
   };
 }
 
@@ -168,6 +223,48 @@ export function storeDiff(
       [diffKey(diff.path, diff.staged)]: diff,
     },
   };
+}
+
+export function storeBranchesFull(
+  state: GitViewState,
+  branchesFull: GitBranchFull[],
+): GitViewState {
+  return {
+    ...state,
+    branchesFull: [...branchesFull].sort((left, right) => {
+      if (left.remote !== right.remote) {
+        return left.remote ? 1 : -1;
+      }
+      if (left.current !== right.current) {
+        return left.current ? -1 : 1;
+      }
+      return left.name.localeCompare(right.name);
+    }),
+  };
+}
+
+export function storeStashes(
+  state: GitViewState,
+  stashes: GitStashEntry[],
+): GitViewState {
+  return { ...state, stashes };
+}
+
+export function storeBlame(
+  state: GitViewState,
+  blame: GitBlameFile | null,
+): GitViewState {
+  return { ...state, blame };
+}
+
+export function toggleFavoriteBranch(
+  state: GitViewState,
+  name: string,
+): GitViewState {
+  const favoriteBranches = state.favoriteBranches.includes(name)
+    ? state.favoriteBranches.filter((branch) => branch !== name)
+    : [...state.favoriteBranches, name];
+  return { ...state, favoriteBranches };
 }
 
 export function storeBranches(

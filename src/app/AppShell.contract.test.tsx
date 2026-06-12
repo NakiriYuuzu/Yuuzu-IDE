@@ -309,6 +309,10 @@ function panelBodyProps(overrides: Partial<PanelBodyProps> = {}): PanelBodyProps
       diffByKey: {},
       branches: [],
       graph: [],
+      branchesFull: [],
+      stashes: [],
+      blame: null,
+      favoriteBranches: [],
     },
     docsState: createDocsState(),
     contextPackNameById: {},
@@ -1575,6 +1579,10 @@ describe("AppShell AppShell helpers", () => {
           diffByKey: {},
           branches: [],
           graph: [],
+          branchesFull: [],
+          stashes: [],
+          blame: null,
+          favoriteBranches: [],
         }}
         docsState={createDocsState()}
         contextPackNameById={{}}
@@ -1772,6 +1780,10 @@ describe("AppShell AppShell helpers", () => {
           diffByKey: {},
           branches: [],
           graph: [],
+          branchesFull: [],
+          stashes: [],
+          blame: null,
+          favoriteBranches: [],
         }}
         docsState={createDocsState()}
         contextPackNameById={{}}
@@ -4940,6 +4952,10 @@ describe("AppShell AppShell helpers", () => {
           diffByKey: {},
           branches: [],
           graph: [],
+          branchesFull: [],
+          stashes: [],
+          blame: null,
+          favoriteBranches: [],
         }}
         docsState={createDocsState()}
         contextPackNameById={{}}
@@ -5073,6 +5089,10 @@ describe("AppShell AppShell helpers", () => {
           diffByKey: {},
           branches: [],
           graph: [],
+          branchesFull: [],
+          stashes: [],
+          blame: null,
+          favoriteBranches: [],
         }}
         docsState={createDocsState()}
         contextPackNameById={{}}

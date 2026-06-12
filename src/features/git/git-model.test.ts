@@ -340,3 +340,44 @@ describe("git-model", () => {
     ).toBe(true);
   });
 });
+
+import {
+  storeBranchesFull,
+  storeStashes,
+  storeBlame,
+  toggleFavoriteBranch,
+} from "./git-model";
+
+describe("branch popup, stash, and blame state", () => {
+  test("storeBranchesFull keeps current branch first within locals", () => {
+    const state = storeBranchesFull(createGitState(), [
+      { name: "topic", current: false, remote: false, upstream: null, ahead: 0, behind: 0, head_short: "abc1111" },
+      { name: "main", current: true, remote: false, upstream: "origin/main", ahead: 2, behind: 1, head_short: "abc2222" },
+      { name: "origin/main", current: false, remote: true, upstream: null, ahead: 0, behind: 0, head_short: "abc2222" },
+    ]);
+    expect(state.branchesFull[0]?.name).toBe("main");
+    expect(state.branchesFull.filter((branch) => branch.remote).length).toBe(1);
+  });
+
+  test("storeStashes and storeBlame replace their slices", () => {
+    let state = storeStashes(createGitState(), [
+      { index: 0, message: "wip-1", when_unix: 100 },
+    ]);
+    state = storeBlame(state, {
+      path: "src/a.ts",
+      segments: [
+        { hash: "a".repeat(40), short_hash: "aaaaaaa", author: "mina", when_unix: 5, line_start: 1, line_count: 3 },
+      ],
+      truncated: false,
+    });
+    expect(state.stashes[0]?.message).toBe("wip-1");
+    expect(state.blame?.segments[0]?.line_count).toBe(3);
+  });
+
+  test("toggleFavoriteBranch flips membership", () => {
+    let state = toggleFavoriteBranch(createGitState(), "main");
+    expect(state.favoriteBranches).toEqual(["main"]);
+    state = toggleFavoriteBranch(state, "main");
+    expect(state.favoriteBranches).toEqual([]);
+  });
+});

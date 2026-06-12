@@ -1,9 +1,13 @@
 import { call } from "../../lib/tauri";
 import type {
+  GitBlameFile,
   GitBranch,
+  GitBranchFull,
   GitCommitSummary,
+  GitConflictFile,
   GitDiff,
   GitRepositoryStatus,
+  GitStashEntry,
 } from "./git-model";
 import type {
   GitDiffHunks,
@@ -228,4 +232,112 @@ export function getGitCommitFileDiff(
   path: string,
 ): Promise<GitDiffHunks> {
   return call("git_commit_file_diff", { workspaceRoot, hash, path });
+}
+
+export function getGitBranchesFull(
+  workspaceRoot: string,
+): Promise<GitBranchFull[]> {
+  return call("git_branches_full", { workspaceRoot });
+}
+
+export function mergeGitBranch(
+  workspaceRoot: string,
+  name: string,
+): Promise<GitRepositoryStatus> {
+  return call("git_merge_branch", { workspaceRoot, name });
+}
+
+export function deleteGitBranch(
+  workspaceRoot: string,
+  name: string,
+  confirmation: string,
+): Promise<GitBranchFull[]> {
+  return call("git_branch_delete", { workspaceRoot, name, confirmation });
+}
+
+export function renameGitBranch(
+  workspaceRoot: string,
+  from: string,
+  to: string,
+): Promise<GitBranchFull[]> {
+  return call("git_branch_rename", { workspaceRoot, from, to });
+}
+
+export function getGitStashList(
+  workspaceRoot: string,
+): Promise<GitStashEntry[]> {
+  return call("git_stash_list", { workspaceRoot });
+}
+
+export function applyGitStash(
+  workspaceRoot: string,
+  index: number,
+): Promise<GitRepositoryStatus> {
+  return call("git_stash_apply", { workspaceRoot, index });
+}
+
+export function popGitStash(
+  workspaceRoot: string,
+  index: number,
+): Promise<GitRepositoryStatus> {
+  return call("git_stash_pop", { workspaceRoot, index });
+}
+
+export function dropGitStash(
+  workspaceRoot: string,
+  index: number,
+  confirmation: string,
+): Promise<GitRepositoryStatus> {
+  return call("git_stash_drop", { workspaceRoot, index, confirmation });
+}
+
+export function branchFromGitStash(
+  workspaceRoot: string,
+  index: number,
+  name: string,
+): Promise<GitRepositoryStatus> {
+  return call("git_stash_branch", { workspaceRoot, index, name });
+}
+
+export function getGitConflictFile(
+  workspaceRoot: string,
+  path: string,
+): Promise<GitConflictFile> {
+  return call("git_conflict_file", { workspaceRoot, path });
+}
+
+export function markGitResolved(
+  workspaceRoot: string,
+  path: string,
+): Promise<GitRepositoryStatus> {
+  return call("git_mark_resolved", { workspaceRoot, path });
+}
+
+export function acceptGitConflictSide(
+  workspaceRoot: string,
+  path: string,
+  side: "ours" | "theirs",
+  confirmation: string,
+): Promise<GitRepositoryStatus> {
+  return call("git_accept_conflict_side", {
+    workspaceRoot,
+    path,
+    side,
+    confirmation,
+  });
+}
+
+export function getGitBlameFile(
+  workspaceRoot: string,
+  path: string,
+): Promise<GitBlameFile> {
+  return call("git_blame_file", { workspaceRoot, path });
+}
+
+export function getGitFileHistory(
+  workspaceRoot: string,
+  path: string,
+  limit: number,
+): Promise<GitLogPage> {
+  return call("git_file_history", { workspaceRoot, path, limit });
 }

@@ -2273,6 +2273,318 @@ circle.lane-5 {
   border-left: 1px solid var(--line);
 }
 
+.git-conflict-view {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.conflict3 {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  overflow: auto;
+}
+
+.ccol {
+  border-right: 1px solid var(--line);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ccol:last-child {
+  border-right: 0;
+}
+
+.ccol-head {
+  position: sticky;
+  top: 0;
+  padding: 6px 12px;
+  background: var(--chrome-2);
+  border-bottom: 1px solid var(--line);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--txt-dim);
+}
+
+.cblock {
+  margin: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.cblock.ours {
+  border-color: color-mix(in srgb, var(--git-added, #c3e88d) 45%, var(--line));
+}
+
+.cblock.theirs {
+  border-color: color-mix(in srgb, #82aaff 45%, var(--line));
+}
+
+.cblock.resolved {
+  opacity: 0.55;
+}
+
+.cblock-text {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: var(--txt);
+}
+
+.cacts {
+  display: flex;
+  gap: 6px;
+  padding: 5px 8px;
+  background: var(--chrome-2);
+  border-top: 1px solid var(--line);
+}
+
+.cacts button {
+  border: 1px solid var(--line);
+  background: var(--editor);
+  color: var(--txt-dim);
+  font: inherit;
+  font-size: 10.5px;
+  border-radius: 4px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+
+.cacts button:hover:not(:disabled) {
+  color: var(--txt);
+}
+
+.cacts button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.branch-popup {
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+  max-width: 420px;
+  max-height: 480px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+
+.branch-popup-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.branch-popup-head .input2 {
+  flex: 1;
+}
+
+.branch-popup-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 0;
+}
+
+.branch-popup .mlabel {
+  padding: 6px 12px 2px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--txt-faint, var(--txt-dim));
+}
+
+.branch-popup .msep {
+  height: 1px;
+  margin: 6px 0;
+  background: var(--line);
+}
+
+.branch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.branch-row:hover {
+  background: var(--chrome-2);
+}
+
+.branch-row.current {
+  color: var(--yuzu);
+  background: var(--yuzu-wash);
+}
+
+.branch-fav {
+  border: 0;
+  background: transparent;
+  color: var(--txt-faint, var(--txt-dim));
+  padding: 0;
+  display: inline-flex;
+  cursor: pointer;
+}
+
+.branch-fav svg {
+  width: 13px;
+  height: 13px;
+}
+
+.branch-fav.on {
+  color: var(--yuzu);
+}
+
+.branch-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch-tracking {
+  flex: none;
+  font-size: 11px;
+  color: var(--txt-dim);
+}
+
+.branch-head {
+  flex: none;
+  font-size: 11px;
+  color: var(--txt-faint, var(--txt-dim));
+}
+
+.branch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 12px 8px 32px;
+}
+
+.branch-actions .mi {
+  border: 1px solid var(--line);
+  background: var(--editor);
+  color: var(--txt-dim);
+  font: inherit;
+  font-size: 11px;
+  border-radius: 4px;
+  padding: 2px 9px;
+  cursor: pointer;
+}
+
+.branch-actions .mi:hover {
+  color: var(--txt);
+}
+
+.branch-actions .mi.danger {
+  color: var(--git-deleted, #f07178);
+}
+
+.branch-empty {
+  margin: 0;
+  padding: 4px 12px;
+  font-size: 11.5px;
+  color: var(--txt-dim);
+}
+
+.stashrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  font-size: 12px;
+}
+
+.stashrow:hover {
+  background: var(--chrome-2);
+}
+
+.stash-message {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stash-actions {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.stash-actions button {
+  border: 1px solid var(--line);
+  background: var(--editor);
+  color: var(--txt-dim);
+  font: inherit;
+  font-size: 10.5px;
+  border-radius: 4px;
+  padding: 1px 7px;
+  cursor: pointer;
+}
+
+.stash-actions button:hover {
+  color: var(--txt);
+}
+
+.stash-actions button.danger {
+  color: var(--git-deleted, #f07178);
+}
+
+.blame {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line);
+  background: var(--chrome-2);
+  font-size: 10.5px;
+  overflow: hidden;
+  width: 150px;
+  flex: none;
+}
+
+.brow {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--line);
+  color: var(--txt-dim);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.brow:hover {
+  background: var(--yuzu-wash);
+  color: var(--yuzu);
+}
+
+.brow-hash {
+  flex: none;
+}
+
+.brow-author {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .database-panel {
   min-height: 0;
   display: flex;
