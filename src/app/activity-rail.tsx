@@ -8,6 +8,7 @@ import {
   Languages,
   Globe,
   Bot,
+  Puzzle,
   Search,
   Server,
   Settings,
@@ -27,6 +28,7 @@ export type KnownActivityId =
   | "agents"
   | "remote"
   | "database"
+  | "extensions"
   | "settings"
   | "browser";
 
@@ -51,6 +53,7 @@ const activities: ActivityItem[] = [
   { id: "browser", label: "Browser", icon: Globe },
   { id: "remote", label: "Remotes", icon: Server },
   { id: "database", label: "Database", icon: Database },
+  { id: "extensions", label: "Extensions", icon: Puzzle },
   { id: "settings", label: "Settings", icon: Settings },
 ];
 

@@ -81,6 +81,23 @@ import {
   DatabasePanel,
 } from "../features/database/DatabasePanel";
 import { DatabaseResultView } from "../features/database/DatabaseResultView";
+import { ExtensionPanel } from "../features/extensions/ExtensionPanel";
+import {
+  listExtensionStatuses,
+  recordExtensionPerformance,
+  setExtensionEnabled,
+} from "../features/extensions/extension-api";
+import {
+  createExtensionState,
+  extensionBadgeCount,
+  extensionCommands,
+  replaceExtensionStatuses,
+  setExtensionError,
+  setExtensionLoading,
+  toggleExtensionStatus,
+  type ExtensionCommandContribution,
+  type ExtensionViewState,
+} from "../features/extensions/extension-model";
 import { RemotePanel } from "../features/remote/RemotePanel";
 import { SshTerminalSurface } from "../features/remote/SshTerminalSurface";
 import {
@@ -394,6 +411,7 @@ import {
 } from "./workspace-view-state";
 import { useWorkspaceStore, workspaceStore } from "./workspace-store";
 import { WorkspaceSwitcher } from "./workspace-switcher";
+import { commandItemsForPalette } from "./command-registry";
 
 type FileChangedPayload = {
   workspace_root: string;
@@ -432,6 +450,7 @@ const panelTitles: Record<ActivityId, string> = {
   agents: "Agents",
   remote: "Remote",
   database: "Database",
+  extensions: "Extensions",
   browser: "Browser",
   settings: "Settings",
 };
@@ -2199,6 +2218,10 @@ export function PanelBody({
   onDatabaseCancelConfirmation,
   onDatabaseExportResult,
   onDatabaseSelectHistory,
+  extensionState,
+  onExtensionRefresh = () => {},
+  onExtensionSelect = () => {},
+  onExtensionToggle = () => {},
   remoteState,
   onRemoteModeChange = () => {},
   onRemoteSelectHost = () => {},
@@ -2315,6 +2338,10 @@ export function PanelBody({
   onDatabaseCancelConfirmation: () => void;
   onDatabaseExportResult: () => void;
   onDatabaseSelectHistory: (entry: DatabaseQueryHistoryEntry) => void;
+  extensionState?: ExtensionViewState;
+  onExtensionRefresh?: () => void;
+  onExtensionSelect?: (extensionId: string) => void;
+  onExtensionToggle?: (extensionId: string, enabled: boolean) => void;
   remoteState?: RemoteViewState;
   onRemoteModeChange?: (mode: RemoteViewState["mode"]) => void;
   onRemoteSelectHost?: (hostId: string) => void;
@@ -2341,6 +2368,17 @@ export function PanelBody({
   onDebugRemoveWatch?: (watch: number | string) => void;
   onDebugEvaluate?: (expression: string) => void;
 }) {
+  if (active === "extensions") {
+    return (
+      <ExtensionPanel
+        state={extensionState ?? createExtensionState()}
+        onRefresh={onExtensionRefresh}
+        onSelectExtension={onExtensionSelect}
+        onToggleExtension={onExtensionToggle}
+      />
+    );
+  }
+
   if (active === "debug") {
     return (
       <DebugPanel
@@ -2569,6 +2607,7 @@ export function AppShell() {
   const databaseExportRequestRef = useRef<Record<string, number>>({});
   const remoteHostsLoadRef = useRef<Record<string, number>>({});
   const debugLoadRequestRef = useRef<Record<string, number>>({});
+  const extensionLoadRequestRef = useRef<Record<string, number>>({});
   const docsLoadRequestRef = useRef<DocsLoadRequestState>({});
   const agentSessionsLoadRef = useRef<Record<string, number>>({});
   const languageRefreshRequestRef = useRef<LanguageRefreshRequestState>({});
@@ -2628,6 +2667,19 @@ export function AppShell() {
     : [];
   const languageDiagnosticBadge = selectDiagnosticBadge(view.language);
   const databaseBadge = databaseBadgeCount(view.database);
+  const extensionBadge = extensionBadgeCount(view.extension);
+  const commandPaletteCommands = useMemo(() => {
+    const disabledExtensionIds = new Set(
+      view.extension.statuses
+        .filter((status) => !status.enabled)
+        .map((status) => status.manifest.id),
+    );
+
+    return commandItemsForPalette(
+      extensionCommands(view.extension),
+      disabledExtensionIds,
+    );
+  }, [view.extension]);
   const contextPackNameById = useMemo(
     () =>
       Object.fromEntries(
@@ -2673,6 +2725,9 @@ export function AppShell() {
   const updateDatabase = useWorkspaceViewStore((state) => state.updateDatabase);
   const updateRemote = useWorkspaceViewStore((state) => state.updateRemote);
   const updateDebug = useWorkspaceViewStore((state) => state.updateDebug);
+  const updateExtension = useWorkspaceViewStore(
+    (state) => state.updateExtension,
+  );
 
   const activeWorkspace = useMemo(
     () =>
@@ -2808,6 +2863,19 @@ export function AppShell() {
 
     void refreshDebugForWorkspace(activeWorkspaceId, activeWorkspace.path);
   }, [activeWorkspaceId, activeWorkspace?.path]);
+
+  useEffect(() => {
+    if (
+      activeActivity !== "extensions" ||
+      !panelOpen ||
+      !activeWorkspace ||
+      !activeWorkspaceId
+    ) {
+      return;
+    }
+
+    void refreshExtensionsForWorkspace(activeWorkspaceId, activeWorkspace.path);
+  }, [activeActivity, panelOpen, activeWorkspaceId, activeWorkspace?.path]);
 
   useEffect(() => {
     let disposed = false;
@@ -6288,6 +6356,197 @@ export function AppShell() {
     });
   }
 
+  function isLatestExtensionLoadRequest(workspaceId: string, requestId: number) {
+    return extensionLoadRequestRef.current[workspaceId] === requestId;
+  }
+
+  async function refreshExtensionsForWorkspace(
+    workspaceId: string,
+    workspaceRoot: string,
+  ): Promise<void> {
+    const requestId = (extensionLoadRequestRef.current[workspaceId] ?? 0) + 1;
+    extensionLoadRequestRef.current = {
+      ...extensionLoadRequestRef.current,
+      [workspaceId]: requestId,
+    };
+    updateExtension(workspaceId, setExtensionLoading);
+
+    try {
+      const statuses = await listExtensionStatuses(workspaceRoot);
+
+      if (
+        !isLatestExtensionLoadRequest(workspaceId, requestId) ||
+        !hasRegisteredWorkspace(workspaceId) ||
+        getWorkspaceRoot(workspaceId) !== workspaceRoot
+      ) {
+        return;
+      }
+
+      updateExtension(workspaceId, (extension) =>
+        replaceExtensionStatuses(extension, statuses),
+      );
+    } catch (error) {
+      if (!isLatestExtensionLoadRequest(workspaceId, requestId)) {
+        return;
+      }
+
+      if (
+        !hasRegisteredWorkspace(workspaceId) ||
+        getWorkspaceRoot(workspaceId) !== workspaceRoot
+      ) {
+        updateExtension(workspaceId, (extension) => ({
+          ...extension,
+          loading: false,
+          error: null,
+        }));
+        return;
+      }
+
+      updateExtension(workspaceId, (extension) =>
+        setExtensionError(
+          extension,
+          `Load extensions failed: ${terminalErrorMessage(error)}`,
+        ),
+      );
+    }
+  }
+
+  function refreshExtensions() {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    void refreshExtensionsForWorkspace(activeWorkspaceId, activeWorkspace.path);
+  }
+
+  function openExtensionsPanel() {
+    setActiveActivity("extensions");
+    setPanelOpen(true);
+  }
+
+  function selectExtension(extensionId: string) {
+    updateExtension(activeWorkspaceId, (extension) => ({
+      ...extension,
+      activeExtensionId: extensionId,
+    }));
+  }
+
+  function toggleExtensionEnabled(extensionId: string, enabled: boolean) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    updateExtension(workspaceId, (extension) =>
+      toggleExtensionStatus(extension, extensionId, enabled),
+    );
+
+    void setExtensionEnabled({
+      workspaceRoot,
+      extensionId,
+      enabled,
+    })
+      .then((statuses) => {
+        if (
+          !hasRegisteredWorkspace(workspaceId) ||
+          getWorkspaceRoot(workspaceId) !== workspaceRoot
+        ) {
+          return;
+        }
+
+        updateExtension(workspaceId, (extension) =>
+          replaceExtensionStatuses(extension, statuses),
+        );
+      })
+      .catch((error) => {
+        if (
+          !hasRegisteredWorkspace(workspaceId) ||
+          getWorkspaceRoot(workspaceId) !== workspaceRoot
+        ) {
+          return;
+        }
+
+        updateExtension(workspaceId, (extension) =>
+          setExtensionError(
+            extension,
+            `Toggle extension failed: ${terminalErrorMessage(error)}`,
+          ),
+        );
+      });
+  }
+
+  function enabledExtensionCommandForId(
+    commandId: string,
+  ): ExtensionCommandContribution | null {
+    const extension = workspaceViewStore.getState().viewFor(activeWorkspaceId)
+      .extension;
+
+    for (const status of extension.statuses) {
+      if (!status.enabled) {
+        continue;
+      }
+
+      const command = status.manifest.contributes.commands.find(
+        (item) => item.id === commandId,
+      );
+      if (command) {
+        return command;
+      }
+    }
+
+    return null;
+  }
+
+  function recordExtensionCommandPerformance(
+    command: ExtensionCommandContribution,
+  ) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const workspaceRoot = activeWorkspace.path;
+    void recordExtensionPerformance({
+      workspaceRoot,
+      sample: {
+        extension_id: command.owner_extension_id,
+        workspace_root: workspaceRoot,
+        operation: `command:${command.id}`,
+        duration_ms: 5,
+        budget_ms: 50,
+        recorded_ms: 0,
+      },
+    })
+      .then((statuses) => {
+        if (
+          !hasRegisteredWorkspace(workspaceId) ||
+          getWorkspaceRoot(workspaceId) !== workspaceRoot
+        ) {
+          return;
+        }
+
+        updateExtension(workspaceId, (extension) =>
+          replaceExtensionStatuses(extension, statuses),
+        );
+      })
+      .catch((error) => {
+        if (
+          !hasRegisteredWorkspace(workspaceId) ||
+          getWorkspaceRoot(workspaceId) !== workspaceRoot
+        ) {
+          return;
+        }
+
+        updateExtension(workspaceId, (extension) =>
+          setExtensionError(
+            extension,
+            `Record extension performance failed: ${terminalErrorMessage(error)}`,
+          ),
+        );
+      });
+  }
+
   function isLatestDebugLoadRequest(workspaceId: string, requestId: number) {
     return debugLoadRequestRef.current[workspaceId] === requestId;
   }
@@ -6682,6 +6941,13 @@ export function AppShell() {
       return;
     }
 
+    const extensionCommand = enabledExtensionCommandForId(id);
+    if (extensionCommand) {
+      recordExtensionCommandPerformance(extensionCommand);
+      setPaletteOpen(false);
+      return;
+    }
+
     switch (id) {
       case "save-file":
         void saveActiveFile();
@@ -6779,6 +7045,12 @@ export function AppShell() {
       case "database-refresh":
         refreshDatabaseProfiles();
         break;
+      case "open-extensions":
+        openExtensionsPanel();
+        break;
+      case "extension-refresh":
+        refreshExtensions();
+        break;
       case "agent-start-session": {
         if (!activeWorkspaceId) {
           openAgentsPanel();
@@ -6865,11 +7137,12 @@ export function AppShell() {
             agents: agentBadgeCount(view.agent),
             language: languageDiagnosticBadge,
             database: databaseBadge,
+            extensions: extensionBadge,
             debug: activeDebugSession ? "1" : null,
           }}
           onSelect={(activity) => {
             setActiveActivity(activity);
-            if (activity === "debug") {
+            if (activity === "debug" || activity === "extensions") {
               setPanelOpen(true);
             }
           }}
@@ -6880,7 +7153,8 @@ export function AppShell() {
             activeActivity === "docs" ||
             activeActivity === "language" ||
             activeActivity === "debug" ||
-            activeActivity === "remote" ? null : (
+            activeActivity === "remote" ||
+            activeActivity === "extensions" ? null : (
               <div className="panel-head">
                 <span className="panel-title">{panelTitles[activeActivity]}</span>
                 <div className="panel-acts">
@@ -7024,6 +7298,10 @@ export function AppShell() {
               }
               onDatabaseExportResult={() => void exportDatabaseResult()}
               onDatabaseSelectHistory={(entry) => selectDatabaseHistory(entry)}
+              extensionState={view.extension}
+              onExtensionRefresh={() => refreshExtensions()}
+              onExtensionSelect={selectExtension}
+              onExtensionToggle={toggleExtensionEnabled}
               remoteState={view.remote}
               onRemoteModeChange={setRemoteWorkbenchMode}
               onRemoteSelectHost={selectRemoteHostById}
@@ -7740,6 +8018,7 @@ export function AppShell() {
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         onRun={runCommand}
+        commands={commandPaletteCommands}
       />
       {gitConfirmation ? (
         <div className="git-confirm-backdrop">

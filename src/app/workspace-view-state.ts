@@ -26,6 +26,10 @@ import {
   type DebugViewState,
 } from "../features/debug/debug-model";
 import {
+  createExtensionState,
+  type ExtensionViewState,
+} from "../features/extensions/extension-model";
+import {
   createRemoteState,
   type RemoteViewState,
 } from "../features/remote/remote-model";
@@ -71,6 +75,7 @@ export type WorkspaceViewState = {
   database: DatabaseViewState;
   remote: RemoteViewState;
   debug: DebugViewState;
+  extension: ExtensionViewState;
 };
 
 type WorkspaceViewStore = {
@@ -124,6 +129,10 @@ type WorkspaceViewStore = {
     workspaceId: string | null,
     update: (debug: DebugViewState) => DebugViewState,
   ) => void;
+  updateExtension: (
+    workspaceId: string | null,
+    update: (extension: ExtensionViewState) => ExtensionViewState,
+  ) => void;
 };
 
 function defaultWorkspaceView(): WorkspaceViewState {
@@ -142,6 +151,7 @@ function defaultWorkspaceView(): WorkspaceViewState {
     database: createDatabaseState(),
     remote: createRemoteState(),
     debug: createDebugState(),
+    extension: createExtensionState(),
   };
 }
 
@@ -321,6 +331,35 @@ function freezeWorkspaceView(view: WorkspaceViewState): WorkspaceViewState {
   Object.freeze(view.debug.consoleSequenceById);
   Object.freeze(view.debug.ignoredSessionIds);
   Object.freeze(view.debug);
+  for (const status of view.extension.statuses) {
+    for (const command of status.manifest.contributes.commands) {
+      Object.freeze(command);
+    }
+    Object.freeze(status.manifest.contributes.commands);
+    for (const theme of status.manifest.contributes.themes) {
+      Object.freeze(theme);
+    }
+    Object.freeze(status.manifest.contributes.themes);
+    for (const keybinding of status.manifest.contributes.keybindings) {
+      Object.freeze(keybinding);
+    }
+    Object.freeze(status.manifest.contributes.keybindings);
+    for (const snippet of status.manifest.contributes.snippets) {
+      Object.freeze(snippet.body);
+      Object.freeze(snippet);
+    }
+    Object.freeze(status.manifest.contributes.snippets);
+    for (const hook of status.manifest.contributes.workspace_hooks) {
+      Object.freeze(hook);
+    }
+    Object.freeze(status.manifest.contributes.workspace_hooks);
+    Object.freeze(status.manifest.contributes);
+    Object.freeze(status.manifest);
+    Object.freeze(status.performance);
+    Object.freeze(status);
+  }
+  Object.freeze(view.extension.statuses);
+  Object.freeze(view.extension);
   Object.freeze(view.agent.selectedContextIds);
   for (const session of view.agent.sessions) {
     Object.freeze(session.context_items);
@@ -500,6 +539,18 @@ export function createWorkspaceViewStore() {
           views: {
             ...state.views,
             [key]: { ...current, debug: update(current.debug) },
+          },
+        };
+      }),
+    updateExtension: (workspaceId, update) =>
+      set((state) => {
+        const key = workspaceId ?? shellKey;
+        const current = state.views[key] ?? defaultViewForKey(key);
+
+        return {
+          views: {
+            ...state.views,
+            [key]: { ...current, extension: update(current.extension) },
           },
         };
       }),

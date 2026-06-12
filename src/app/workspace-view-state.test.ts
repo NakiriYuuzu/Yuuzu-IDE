@@ -15,6 +15,7 @@ import {
   type DatabaseProfile,
 } from "../features/database/database-model";
 import { createDebugState } from "../features/debug/debug-model";
+import { replaceExtensionStatuses } from "../features/extensions/extension-model";
 import { upsertTaskRun } from "../features/tasks/task-model";
 import { upsertTerminal } from "../features/terminal/terminal-model";
 import { createWorkspaceViewStore } from "./workspace-view-state";
@@ -270,6 +271,90 @@ describe("createWorkspaceViewStore", () => {
       "session-a",
     );
     expect(store.getState().viewFor("workspace-b").debug.activeSessionId).toBeNull();
+  });
+
+  test("extension state is restored per workspace", () => {
+    const store = createWorkspaceViewStore();
+
+    store.getState().updateExtension("workspace-a", (extension) =>
+      replaceExtensionStatuses(extension, [
+        {
+          manifest: {
+            id: "yuuzu.core",
+            name: "Yuuzu Core",
+            version: "0.1.0",
+            api_version: "0.1",
+            description: "Core extension",
+            builtin: true,
+            contributes: {
+              commands: [
+                {
+                  id: "yuuzu.core.reload",
+                  label: "Reload Core",
+                  group: "Extensions",
+                  description: "Reload core extension",
+                  owner_extension_id: "yuuzu.core",
+                },
+              ],
+              themes: [
+                {
+                  id: "yuuzu-dark",
+                  label: "Yuuzu Dark",
+                  mode: "dark",
+                  accent: "#a8e23f",
+                },
+              ],
+              keybindings: [
+                {
+                  command: "yuuzu.core.reload",
+                  key: "cmd+shift+r",
+                  when: "workspace",
+                },
+              ],
+              snippets: [
+                {
+                  id: "core-log",
+                  language: "typescript",
+                  prefix: "yclog",
+                  body: ["console.log($1);"],
+                  description: "Core log",
+                },
+              ],
+              workspace_hooks: [
+                {
+                  id: "workspace-opened",
+                  event: "WorkspaceOpened",
+                  command: "yuuzu.core.reload",
+                  budget_ms: 50,
+                },
+              ],
+            },
+          },
+          enabled: true,
+          disabled_by_workspace: false,
+          performance: {
+            last_duration_ms: 12,
+            slow_operation_count: 0,
+            sample_count: 1,
+            class: "Ok",
+          },
+        },
+      ]),
+    );
+
+    expect(store.getState().viewFor("workspace-a").extension.activeExtensionId).toBe(
+      "yuuzu.core",
+    );
+    expect(store.getState().viewFor("workspace-b").extension.statuses).toEqual([]);
+
+    const unknownView = store.getState().viewFor("unknown-extension");
+    expect(() => {
+      unknownView.extension.statuses.push(
+        store.getState().viewFor("workspace-a").extension.statuses[0],
+      );
+    }).toThrow(TypeError);
+    expect(Object.isFrozen(unknownView.extension)).toBe(true);
+    expect(Object.isFrozen(unknownView.extension.statuses)).toBe(true);
   });
 
   test("unknown workspace debug defaults cannot be mutated across future defaults", () => {

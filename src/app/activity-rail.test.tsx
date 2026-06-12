@@ -97,4 +97,22 @@ describe("ActivityRail", () => {
 
     expect(onSelect).toHaveBeenCalledWith("debug");
   });
+
+  test("renders extensions activity and notifies callback", () => {
+    const onSelect = mock(() => {});
+    const result = render(
+      <ActivityRail
+        active="explorer"
+        badges={{ extensions: "1" }}
+        onSelect={onSelect}
+      />,
+    );
+
+    expect(result.getByLabelText("Extensions")).toBeTruthy();
+    expect(result.getByText("1")).toBeTruthy();
+
+    fireEvent.click(result.getByLabelText("Extensions"));
+
+    expect(onSelect).toHaveBeenCalledWith("extensions");
+  });
 });
