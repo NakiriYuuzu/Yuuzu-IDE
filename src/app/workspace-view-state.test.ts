@@ -15,8 +15,17 @@ import {
   type DatabaseProfile,
 } from "../features/database/database-model";
 import { createDebugState } from "../features/debug/debug-model";
+import {
+  createDiagnosticsState,
+  storeMetricSnapshot,
+} from "../features/diagnostics/diagnostics-model";
 import { replaceExtensionStatuses } from "../features/extensions/extension-model";
 import { storeRecoveryBackups } from "../features/recovery/recovery-model";
+import {
+  createSettingsState,
+  selectSettingsCategory,
+  storeSettings,
+} from "../features/settings/settings-model";
 import { upsertTaskRun } from "../features/tasks/task-model";
 import { upsertTerminal } from "../features/terminal/terminal-model";
 import { createWorkspaceViewStore } from "./workspace-view-state";
@@ -381,6 +390,53 @@ describe("createWorkspaceViewStore", () => {
     expect(store.getState().viewFor("workspace-b").recovery.backups).toEqual([]);
   });
 
+  test("diagnostics state is restored per workspace", () => {
+    const store = createWorkspaceViewStore();
+
+    store.getState().updateDiagnostics("workspace-a", (diagnostics) =>
+      storeMetricSnapshot(diagnostics, {
+        timestamp_ms: 1,
+        process_id: 42,
+        memory_bytes: 104_857_600,
+        uptime_ms: 12_000,
+        workspace_count: 2,
+        active_workspace_id: "workspace-a",
+        docs_index_entries: 17,
+        file_tree_entries: 0,
+      }),
+    );
+
+    expect(store.getState().viewFor("workspace-a").diagnostics.metric?.process_id).toBe(
+      42,
+    );
+    expect(store.getState().viewFor("workspace-b").diagnostics.metric).toBeNull();
+  });
+
+  test("settings state is restored per workspace", () => {
+    const store = createWorkspaceViewStore();
+
+    store.getState().updateSettings("workspace-a", (settings) =>
+      selectSettingsCategory(
+        storeSettings(settings, {
+          schema_version: 2,
+          density: "compact",
+          color_theme: "dark",
+          accent_color: "yuzu",
+          update_channel: "manual",
+          keybindings: [],
+        }),
+        "diagnostics",
+      ),
+    );
+
+    expect(store.getState().viewFor("workspace-a").settings.activeCategory).toBe(
+      "diagnostics",
+    );
+    expect(store.getState().viewFor("workspace-b").settings).toEqual(
+      createSettingsState(),
+    );
+  });
+
   test("unknown workspace debug defaults cannot be mutated across future defaults", () => {
     const store = createWorkspaceViewStore();
 
@@ -461,6 +517,47 @@ describe("createWorkspaceViewStore", () => {
       loading: false,
       error: null,
     });
+  });
+
+  test("unknown workspace diagnostics defaults cannot be mutated across future defaults", () => {
+    const store = createWorkspaceViewStore();
+
+    const unknownView = store.getState().viewFor("unknown-diagnostics");
+
+    expect(() => {
+      unknownView.diagnostics.events.push({
+        id: "event-1",
+        timestamp_ms: 1,
+        level: "info",
+        source: "app",
+        message: "boot",
+      });
+    }).toThrow(TypeError);
+
+    expect(Object.isFrozen(unknownView.diagnostics)).toBe(true);
+    expect(Object.isFrozen(unknownView.diagnostics.events)).toBe(true);
+    expect(store.getState().viewFor("other-unknown-diagnostics").diagnostics).toEqual(
+      createDiagnosticsState(),
+    );
+  });
+
+  test("unknown workspace settings defaults cannot be mutated across future defaults", () => {
+    const store = createWorkspaceViewStore();
+
+    const unknownView = store.getState().viewFor("unknown-settings");
+
+    expect(() => {
+      unknownView.settings.activeCategory = "diagnostics";
+    }).toThrow(TypeError);
+
+    expect(() => {
+      unknownView.settings.keybindingImportDraft = "[{}]";
+    }).toThrow(TypeError);
+
+    expect(Object.isFrozen(unknownView.settings)).toBe(true);
+    expect(store.getState().viewFor("other-unknown-settings").settings).toEqual(
+      createSettingsState(),
+    );
   });
 
   test("unknown workspace task defaults cannot be mutated across future defaults", () => {

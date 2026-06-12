@@ -822,6 +822,147 @@ button {
   height: 14px;
 }
 
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-category-list {
+  flex: 0 0 auto;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-category-row {
+  width: 100%;
+  height: 30px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.settings-category-row svg,
+.settings-static-row svg,
+.diagnostics-metric-row svg {
+  color: var(--txt-dim);
+}
+
+.settings-category-row.sel svg {
+  color: var(--yuzu);
+}
+
+.settings-detail {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-detail > .panel-head,
+.settings-detail-head {
+  background: var(--panel);
+}
+
+.settings-detail-body {
+  min-height: 0;
+  flex: 1;
+  padding-bottom: 10px;
+  overflow-y: auto;
+}
+
+.settings-static-row,
+.diagnostics-metric-row {
+  cursor: default;
+}
+
+.settings-static-row:hover,
+.diagnostics-metric-row:hover {
+  background: transparent;
+}
+
+.settings-keybinding-import {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px 12px;
+}
+
+.settings-keybinding-import .input2 {
+  height: auto;
+  min-height: 112px;
+  padding: 8px;
+  resize: vertical;
+  line-height: 1.45;
+  user-select: text;
+}
+
+.settings-keybinding-import .btn {
+  width: 100%;
+  justify-content: center;
+}
+
+.diagnostics-panel {
+  padding-bottom: 10px;
+}
+
+.diagnostics-metrics {
+  padding: 2px 0 4px;
+}
+
+.diagnostics-logs-label {
+  margin-top: 4px;
+}
+
+.diagnostics-event-row {
+  height: auto;
+  min-height: 34px;
+  align-items: center;
+  gap: 7px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  cursor: default;
+}
+
+.diagnostics-event-row:hover {
+  background: transparent;
+}
+
+.diagnostics-event-message {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.diagnostics-event-row .badge2 {
+  flex: 0 0 auto;
+  min-width: 64px;
+  justify-content: center;
+  text-transform: uppercase;
+}
+
+.diagnostics-event-row .badge2 svg {
+  width: 12px;
+  height: 12px;
+}
+
+.diagnostics-level-info,
+.diagnostics-level-debug {
+  color: var(--txt-dim);
+  background: var(--chrome);
+}
+
+.diagnostics-level-warn {
+  color: var(--c-attr);
+  background: color-mix(in srgb, var(--c-attr) 12%, transparent);
+  border-color: color-mix(in srgb, var(--c-attr) 45%, var(--line));
+}
+
+.diagnostics-level-error {
+  color: var(--c-tag);
+  background: color-mix(in srgb, var(--c-tag) 12%, transparent);
+  border-color: color-mix(in srgb, var(--c-tag) 45%, var(--line));
+}
+
 .tree-item {
   position: relative;
 }

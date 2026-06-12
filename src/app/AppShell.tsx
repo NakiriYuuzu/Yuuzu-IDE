@@ -99,6 +99,18 @@ import {
   type ExtensionViewState,
   type ExtensionWorkspaceStatus,
 } from "../features/extensions/extension-model";
+import {
+  appendDiagnosticEvent,
+  listDiagnosticEvents,
+  metricSnapshot,
+} from "../features/diagnostics/diagnostics-api";
+import {
+  createDiagnosticsState,
+  formatBytes,
+  storeDiagnosticEvents,
+  storeMetricSnapshot,
+  type DiagnosticsViewState,
+} from "../features/diagnostics/diagnostics-model";
 import { RemotePanel } from "../features/remote/RemotePanel";
 import { SshTerminalSurface } from "../features/remote/SshTerminalSurface";
 import {
@@ -134,7 +146,6 @@ import {
   type RemoteViewState,
   type SshTerminalSessionInfo,
 } from "../features/remote/remote-model";
-import { RecoveryPanel } from "../features/recovery/RecoveryPanel";
 import {
   discardUnsavedBackup,
   listUnsavedBackups,
@@ -147,6 +158,17 @@ import {
   storeRecoveryBackups,
   type RecoveryViewState,
 } from "../features/recovery/recovery-model";
+import { loadSettings } from "../features/settings/settings-api";
+import { SettingsPanel } from "../features/settings/SettingsPanel";
+import {
+  createSettingsState,
+  selectSettingsCategory,
+  setKeybindingImportDraft,
+  setSettingsError,
+  storeSettings,
+  type SettingsCategory,
+  type SettingsViewState,
+} from "../features/settings/settings-model";
 import {
   beginDatabaseQuery,
   databaseBadgeCount,
@@ -2259,6 +2281,11 @@ export function PanelBody({
   onRecoveryRefresh = () => {},
   onRecoveryRestore = () => {},
   onRecoveryDiscard = () => {},
+  diagnosticsState = createDiagnosticsState(),
+  settingsState = createSettingsState(),
+  onSettingsSelectCategory = () => {},
+  onDiagnosticsRefresh = () => {},
+  onKeybindingImportDraftChange = () => {},
   debugState,
   onDebugModeChange = () => {},
   onDebugSelectConfig = () => {},
@@ -2383,6 +2410,11 @@ export function PanelBody({
   onRecoveryRefresh?: () => void;
   onRecoveryRestore?: (backupId: string) => void;
   onRecoveryDiscard?: (backupId: string) => void;
+  diagnosticsState?: DiagnosticsViewState;
+  settingsState?: SettingsViewState;
+  onSettingsSelectCategory?: (category: SettingsCategory) => void;
+  onDiagnosticsRefresh?: () => void;
+  onKeybindingImportDraftChange?: (draft: string) => void;
   debugState?: DebugViewState;
   onDebugModeChange?: (mode: DebugViewState["mode"]) => void;
   onDebugSelectConfig?: (configId: string) => void;
@@ -2594,11 +2626,16 @@ export function PanelBody({
 
   if (active === "settings") {
     return (
-      <RecoveryPanel
-        state={recoveryState}
-        onRefresh={onRecoveryRefresh}
-        onRestore={onRecoveryRestore}
-        onDiscard={onRecoveryDiscard}
+      <SettingsPanel
+        state={settingsState}
+        recoveryState={recoveryState}
+        diagnosticsState={diagnosticsState}
+        onSelectCategory={onSettingsSelectCategory}
+        onRecoveryRefresh={onRecoveryRefresh}
+        onRecoveryRestore={onRecoveryRestore}
+        onRecoveryDiscard={onRecoveryDiscard}
+        onDiagnosticsRefresh={onDiagnosticsRefresh}
+        onKeybindingImportDraftChange={onKeybindingImportDraftChange}
       />
     );
   }
@@ -2652,6 +2689,8 @@ export function AppShell() {
   const extensionPendingToggleRef = useRef<Record<string, number>>({});
   const recoveryLoadRequestRef = useRef<Record<string, number>>({});
   const recoverySaveEpochRef = useRef<Record<string, number>>({});
+  const settingsLoadedRef = useRef(false);
+  const diagnosticsStartupEventRef = useRef(false);
   const docsLoadRequestRef = useRef<DocsLoadRequestState>({});
   const agentSessionsLoadRef = useRef<Record<string, number>>({});
   const languageRefreshRequestRef = useRef<LanguageRefreshRequestState>({});
@@ -2769,6 +2808,10 @@ export function AppShell() {
   const updateDatabase = useWorkspaceViewStore((state) => state.updateDatabase);
   const updateRemote = useWorkspaceViewStore((state) => state.updateRemote);
   const updateRecovery = useWorkspaceViewStore((state) => state.updateRecovery);
+  const updateDiagnostics = useWorkspaceViewStore(
+    (state) => state.updateDiagnostics,
+  );
+  const updateSettings = useWorkspaceViewStore((state) => state.updateSettings);
   const updateDebug = useWorkspaceViewStore((state) => state.updateDebug);
   const updateExtension = useWorkspaceViewStore(
     (state) => state.updateExtension,
@@ -2886,6 +2929,31 @@ export function AppShell() {
   }, [activeWorkspaceId]);
 
   useEffect(() => {
+    if (settingsLoadedRef.current || !activeWorkspaceId) {
+      return;
+    }
+
+    settingsLoadedRef.current = true;
+    updateSettings(activeWorkspaceId, (settings) => ({
+      ...settings,
+      loading: true,
+      error: null,
+    }));
+
+    void loadSettings()
+      .then((settings) => {
+        updateSettings(activeWorkspaceId, (state) =>
+          storeSettings(state, settings),
+        );
+      })
+      .catch((error) => {
+        updateSettings(activeWorkspaceId, (state) =>
+          setSettingsError(state, String(error)),
+        );
+      });
+  }, [activeWorkspaceId, updateSettings]);
+
+  useEffect(() => {
     if (!activeWorkspace || !activeWorkspaceId) {
       return;
     }
@@ -2916,6 +2984,14 @@ export function AppShell() {
 
     void refreshRecoveryForWorkspace(activeWorkspaceId, activeWorkspace.path);
   }, [activeWorkspaceId, activeWorkspace?.path]);
+
+  useEffect(() => {
+    if (activeActivity !== "settings" || !panelOpen || !activeWorkspaceId) {
+      return;
+    }
+
+    void refreshDiagnosticsForWorkspace(activeWorkspaceId);
+  }, [activeActivity, panelOpen, activeWorkspaceId]);
 
   useEffect(() => {
     if (
@@ -3564,6 +3640,51 @@ export function AppShell() {
         ...recovery,
         loading: false,
         error: `Recovery failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
+  async function refreshDiagnosticsForWorkspace(workspaceId: string) {
+    updateDiagnostics(workspaceId, (diagnostics) => ({
+      ...diagnostics,
+      loading: true,
+      error: null,
+    }));
+
+    try {
+      const registrySnapshot = workspaceStore.getState().registry;
+      const viewSnapshot = workspaceViewStore.getState().viewFor(workspaceId);
+      const [metric, events] = await Promise.all([
+        metricSnapshot({
+          workspaceCount: registrySnapshot.workspaces.length,
+          activeWorkspaceId: registrySnapshot.active_workspace_id,
+          docsIndexEntries: viewSnapshot.docs.index.length,
+          fileTreeEntries: 0,
+        }),
+        listDiagnosticEvents({ limit: 50 }),
+      ]);
+
+      if (!hasRegisteredWorkspace(workspaceId)) {
+        return;
+      }
+
+      updateDiagnostics(workspaceId, (diagnostics) =>
+        storeDiagnosticEvents(storeMetricSnapshot(diagnostics, metric), events),
+      );
+
+      if (!diagnosticsStartupEventRef.current) {
+        diagnosticsStartupEventRef.current = true;
+        void appendDiagnosticEvent({
+          level: "info",
+          source: "frontend",
+          message: "Diagnostics refreshed",
+        }).catch(() => {});
+      }
+    } catch (error) {
+      updateDiagnostics(workspaceId, (diagnostics) => ({
+        ...diagnostics,
+        loading: false,
+        error: `Diagnostics failed: ${terminalErrorMessage(error)}`,
       }));
     }
   }
@@ -7435,6 +7556,21 @@ export function AppShell() {
     );
   }
 
+  function openSettingsCategory(category: SettingsCategory) {
+    updateSettings(activeWorkspaceId, (settings) =>
+      selectSettingsCategory(settings, category),
+    );
+    setActiveActivity("settings");
+    setPanelOpen(true);
+
+    if (
+      (category === "diagnostics" || category === "performance") &&
+      activeWorkspaceId
+    ) {
+      void refreshDiagnosticsForWorkspace(activeWorkspaceId);
+    }
+  }
+
   function runCommand(id: string) {
     if (
       runDebugCommandFromPalette(id, {
@@ -7502,7 +7638,22 @@ export function AppShell() {
         setPanelOpen(!panelOpen);
         break;
       case "open-settings":
-        setActiveActivity("settings");
+        openSettingsCategory(view.settings.activeCategory);
+        break;
+      case "open-diagnostics":
+        openSettingsCategory("diagnostics");
+        break;
+      case "refresh-diagnostics":
+        openSettingsCategory("diagnostics");
+        if (activeWorkspaceId) {
+          void refreshDiagnosticsForWorkspace(activeWorkspaceId);
+        }
+        break;
+      case "open-recovery":
+        openSettingsCategory("recovery");
+        break;
+      case "import-keybindings":
+        openSettingsCategory("keybindings");
         break;
       case "open-docs":
         openDocsPanel();
@@ -7846,6 +7997,29 @@ export function AppShell() {
               }
               onRecoveryDiscard={(backupId) =>
                 void discardRecoveryBackupById(backupId)
+              }
+              diagnosticsState={view.diagnostics}
+              settingsState={view.settings}
+              onSettingsSelectCategory={(category) => {
+                updateSettings(activeWorkspaceId, (settings) =>
+                  selectSettingsCategory(settings, category),
+                );
+                if (
+                  (category === "diagnostics" || category === "performance") &&
+                  activeWorkspaceId
+                ) {
+                  void refreshDiagnosticsForWorkspace(activeWorkspaceId);
+                }
+              }}
+              onDiagnosticsRefresh={() => {
+                if (activeWorkspaceId) {
+                  void refreshDiagnosticsForWorkspace(activeWorkspaceId);
+                }
+              }}
+              onKeybindingImportDraftChange={(draft) =>
+                updateSettings(activeWorkspaceId, (settings) =>
+                  setKeybindingImportDraft(settings, draft),
+                )
               }
               languageState={view.language}
               debugState={view.debug}
@@ -8531,6 +8705,16 @@ export function AppShell() {
         <div className="sb">problems {activeTaskProblems.length}</div>
         {languageDiagnosticBadge ? (
           <div className="sb">diagnostics {languageDiagnosticBadge}</div>
+        ) : null}
+        {view.diagnostics.metric ? (
+          <>
+            <div className="sb">
+              mem {formatBytes(view.diagnostics.metric.memory_bytes)}
+            </div>
+            <div className="sb">
+              docs {view.diagnostics.metric.docs_index_entries}
+            </div>
+          </>
         ) : null}
         <div className="sb-spacer" />
         <div className="sb">

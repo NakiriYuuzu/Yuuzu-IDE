@@ -115,6 +115,21 @@ export const node12Commands: CommandItem[] = coreCommandsById(
   },
 );
 
+export const node13Commands: CommandItem[] = coreCommandsById(
+  [
+    "open-diagnostics",
+    "refresh-diagnostics",
+    "open-recovery",
+    "import-keybindings",
+  ],
+  {
+    "open-diagnostics": "Open Settings diagnostics",
+    "refresh-diagnostics": "Refresh diagnostics metrics and logs",
+    "open-recovery": "Open Settings recovery backups",
+    "import-keybindings": "Open keybinding import settings",
+  },
+);
+
 export const allCommands: CommandItem[] = [
   ...node1Commands,
   ...node5Commands,
@@ -125,6 +140,7 @@ export const allCommands: CommandItem[] = [
   ...node10Commands,
   ...node11Commands,
   ...node12Commands,
+  ...node13Commands,
 ];
 
 export function filterCommands(

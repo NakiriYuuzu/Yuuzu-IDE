@@ -26,6 +26,10 @@ import {
   type DebugViewState,
 } from "../features/debug/debug-model";
 import {
+  createDiagnosticsState,
+  type DiagnosticsViewState,
+} from "../features/diagnostics/diagnostics-model";
+import {
   createExtensionState,
   type ExtensionViewState,
 } from "../features/extensions/extension-model";
@@ -37,6 +41,10 @@ import {
   createRecoveryState,
   type RecoveryViewState,
 } from "../features/recovery/recovery-model";
+import {
+  createSettingsState,
+  type SettingsViewState,
+} from "../features/settings/settings-model";
 import {
   createGitState,
   type GitViewState,
@@ -79,6 +87,8 @@ export type WorkspaceViewState = {
   database: DatabaseViewState;
   remote: RemoteViewState;
   recovery: RecoveryViewState;
+  diagnostics: DiagnosticsViewState;
+  settings: SettingsViewState;
   debug: DebugViewState;
   extension: ExtensionViewState;
 };
@@ -134,6 +144,14 @@ type WorkspaceViewStore = {
     workspaceId: string | null,
     update: (recovery: RecoveryViewState) => RecoveryViewState,
   ) => void;
+  updateDiagnostics: (
+    workspaceId: string | null,
+    update: (diagnostics: DiagnosticsViewState) => DiagnosticsViewState,
+  ) => void;
+  updateSettings: (
+    workspaceId: string | null,
+    update: (settings: SettingsViewState) => SettingsViewState,
+  ) => void;
   updateDebug: (
     workspaceId: string | null,
     update: (debug: DebugViewState) => DebugViewState,
@@ -160,6 +178,8 @@ function defaultWorkspaceView(): WorkspaceViewState {
     database: createDatabaseState(),
     remote: createRemoteState(),
     recovery: createRecoveryState(),
+    diagnostics: createDiagnosticsState(),
+    settings: createSettingsState(),
     debug: createDebugState(),
     extension: createExtensionState(),
   };
@@ -290,6 +310,22 @@ function freezeWorkspaceView(view: WorkspaceViewState): WorkspaceViewState {
   Object.freeze(view.remote);
   Object.freeze(view.recovery.backups);
   Object.freeze(view.recovery);
+  if (view.diagnostics.metric) {
+    Object.freeze(view.diagnostics.metric);
+  }
+  for (const event of view.diagnostics.events) {
+    Object.freeze(event);
+  }
+  Object.freeze(view.diagnostics.events);
+  Object.freeze(view.diagnostics);
+  if (view.settings.settings) {
+    for (const keybinding of view.settings.settings.keybindings) {
+      Object.freeze(keybinding);
+    }
+    Object.freeze(view.settings.settings.keybindings);
+    Object.freeze(view.settings.settings);
+  }
+  Object.freeze(view.settings);
   for (const config of view.debug.launchConfigs) {
     Object.freeze(config.args);
     for (const env of config.env) {
@@ -551,6 +587,30 @@ export function createWorkspaceViewStore() {
           views: {
             ...state.views,
             [key]: { ...current, recovery: update(current.recovery) },
+          },
+        };
+      }),
+    updateDiagnostics: (workspaceId, update) =>
+      set((state) => {
+        const key = workspaceId ?? shellKey;
+        const current = state.views[key] ?? defaultViewForKey(key);
+
+        return {
+          views: {
+            ...state.views,
+            [key]: { ...current, diagnostics: update(current.diagnostics) },
+          },
+        };
+      }),
+    updateSettings: (workspaceId, update) =>
+      set((state) => {
+        const key = workspaceId ?? shellKey;
+        const current = state.views[key] ?? defaultViewForKey(key);
+
+        return {
+          views: {
+            ...state.views,
+            [key]: { ...current, settings: update(current.settings) },
           },
         };
       }),

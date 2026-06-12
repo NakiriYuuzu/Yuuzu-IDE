@@ -11,6 +11,12 @@ import {
 import { createLanguageState } from "../features/language/language-model";
 import { createDocsState } from "../features/docs/docs-model";
 import {
+  createDiagnosticsState,
+  storeMetricSnapshot,
+  type AppMetricSnapshot,
+  type DiagnosticEvent,
+} from "../features/diagnostics/diagnostics-model";
+import {
   createBrowserState,
   type BrowserUrl,
   type BrowserScreenshot,
@@ -92,6 +98,11 @@ import {
   createRecoveryState,
   type UnsavedBackup,
 } from "../features/recovery/recovery-model";
+import {
+  createSettingsState,
+  selectSettingsCategory,
+  type AppSettingsInput,
+} from "../features/settings/settings-model";
 
 ensureTestDom();
 
@@ -368,6 +379,11 @@ function panelBodyProps(overrides: Partial<PanelBodyProps> = {}): PanelBodyProps
     onRecoveryRefresh: () => {},
     onRecoveryRestore: () => {},
     onRecoveryDiscard: () => {},
+    diagnosticsState: createDiagnosticsState(),
+    settingsState: createSettingsState(),
+    onSettingsSelectCategory: () => {},
+    onDiagnosticsRefresh: () => {},
+    onKeybindingImportDraftChange: () => {},
     debugState: createDebugState(),
     onDebugModeChange: () => {},
     onDebugSelectConfig: () => {},
@@ -484,6 +500,9 @@ type AppShellTauriMockOptions = {
   workspaceRoot: string;
   textFiles?: Record<string, TextFileRead>;
   recoveryBackups?: UnsavedBackup[];
+  settings?: AppSettingsInput;
+  metricSnapshot?: AppMetricSnapshot;
+  diagnosticEvents?: DiagnosticEvent[];
   listUnsavedBackupsResponses?: Array<
     UnsavedBackup[] | Promise<UnsavedBackup[]>
   >;
@@ -593,6 +612,44 @@ function installAppShellTauriMock(options: AppShellTauriMockOptions) {
         case "scan_workspace":
         case "scan_directory":
           return [];
+        case "load_settings":
+          return (
+            options.settings ?? {
+              schema_version: 2,
+              density: "compact",
+              color_theme: "dark",
+              accent_color: "yuzu",
+              update_channel: "manual",
+              keybindings: [],
+            }
+          );
+        case "save_settings":
+          return args.settings;
+        case "metric_snapshot":
+          return (
+            options.metricSnapshot ?? {
+              timestamp_ms: 1,
+              process_id: 42,
+              memory_bytes: 104_857_600,
+              uptime_ms: 120_000,
+              workspace_count: Number(args.workspaceCount ?? 0),
+              active_workspace_id: (args.activeWorkspaceId ?? null) as
+                | string
+                | null,
+              docs_index_entries: Number(args.docsIndexEntries ?? 0),
+              file_tree_entries: Number(args.fileTreeEntries ?? 0),
+            }
+          );
+        case "list_diagnostic_events":
+          return options.diagnosticEvents ?? [];
+        case "append_diagnostic_event":
+          return {
+            id: "event-startup",
+            timestamp_ms: 1,
+            level: String(args.level ?? "info"),
+            source: String(args.source ?? "app"),
+            message: String(args.message ?? "startup"),
+          };
         case "read_text_file": {
           const path = String(args.path);
           return (
@@ -1462,6 +1519,35 @@ describe("AppShell AppShell helpers", () => {
     expect(renderResult.getByText("src/main.ts")).toBeTruthy();
   });
 
+  test("PanelBody renders diagnostics from settings diagnostics category", () => {
+    const renderResult = render(
+      <PanelBody
+        {...panelBodyProps({
+          active: "settings",
+          settingsState: selectSettingsCategory(
+            createSettingsState(),
+            "diagnostics",
+          ),
+          diagnosticsState: storeMetricSnapshot(createDiagnosticsState(), {
+            timestamp_ms: 1,
+            process_id: 42,
+            memory_bytes: 104_857_600,
+            uptime_ms: 120_000,
+            workspace_count: 1,
+            active_workspace_id: "workspace-a",
+            docs_index_entries: 17,
+            file_tree_entries: 0,
+          }),
+        })}
+      />,
+    );
+
+    expect(renderResult.getAllByText("Diagnostics").length).toBeGreaterThanOrEqual(
+      1,
+    );
+    expect(renderResult.getByText("100.0 MB")).toBeTruthy();
+  });
+
   test("PanelBody disables browser capture when capture is unavailable", () => {
     const renderResult = render(
       <PanelBody
@@ -2014,6 +2100,122 @@ describe("AppShell AppShell helpers", () => {
     expect(view.activeActivity).toBe("debug");
     expect(view.panelOpen).toBe(true);
     expect(renderResult.getByLabelText("Start debug session")).toBeTruthy();
+  });
+
+  test("AppShell command palette opens and refreshes diagnostics metrics", async () => {
+    const workspaceId = "diagnostics-palette-open";
+    const workspaceRoot = "/repo-diagnostics-palette-open";
+    const metricSnapshot: AppMetricSnapshot = {
+      timestamp_ms: 1,
+      process_id: 42,
+      memory_bytes: 104_857_600,
+      uptime_ms: 120_000,
+      workspace_count: 1,
+      active_workspace_id: workspaceId,
+      docs_index_entries: 17,
+      file_tree_entries: 0,
+    };
+    const { renderResult, tauri } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot,
+      metricSnapshot,
+      diagnosticEvents: [
+        {
+          id: "event-1",
+          timestamp_ms: 1,
+          level: "info",
+          source: "app",
+          message: "Diagnostics refreshed",
+        },
+      ],
+    });
+
+    fireEvent.click(
+      renderResult.getByRole("button", { name: /Search or run a command/ }),
+    );
+    fireEvent.click(
+      renderResult.getByRole("button", { name: /Diagnostics: Open panel/ }),
+    );
+    await flushAppShellEffects();
+
+    let view = workspaceViewStore.getState().viewFor(workspaceId);
+    expect(view.activeActivity).toBe("settings");
+    expect(view.settings.activeCategory).toBe("diagnostics");
+    expect(view.panelOpen).toBe(true);
+    expect(renderResult.getByText("mem 100.0 MB")).toBeTruthy();
+    expect(renderResult.getByText("docs 17")).toBeTruthy();
+    expect(
+      tauri.invokeCalls.some(
+        (call) =>
+          call.command === "metric_snapshot" &&
+          call.args.activeWorkspaceId === workspaceId &&
+          call.args.docsIndexEntries === 0 &&
+          call.args.fileTreeEntries === 0,
+      ),
+    ).toBe(true);
+    const firstMetricCount = tauri.invokeCalls.filter(
+      (call) => call.command === "metric_snapshot",
+    ).length;
+
+    fireEvent.click(
+      renderResult.getByRole("button", { name: /Search or run a command/ }),
+    );
+    fireEvent.click(
+      renderResult.getByRole("button", {
+        name: /Diagnostics: Refresh metrics/,
+      }),
+    );
+    await flushAppShellEffects();
+
+    view = workspaceViewStore.getState().viewFor(workspaceId);
+    expect(view.settings.activeCategory).toBe("diagnostics");
+    expect(
+      tauri.invokeCalls.filter((call) => call.command === "metric_snapshot")
+        .length,
+    ).toBeGreaterThan(firstMetricCount);
+    expect(
+      tauri.invokeCalls.some(
+        (call) =>
+          call.command === "list_diagnostic_events" && call.args.limit === 50,
+      ),
+    ).toBe(true);
+  });
+
+  test("AppShell command palette opens recovery and keybinding settings categories", async () => {
+    const workspaceId = "settings-node13-palette";
+    const workspaceRoot = "/repo-settings-node13-palette";
+    const { renderResult } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot,
+    });
+
+    fireEvent.click(
+      renderResult.getByRole("button", { name: /Search or run a command/ }),
+    );
+    fireEvent.click(
+      renderResult.getByRole("button", { name: /Recovery: Open backups/ }),
+    );
+    await flushAppShellEffects();
+
+    expect(workspaceViewStore.getState().viewFor(workspaceId).activeActivity).toBe(
+      "settings",
+    );
+    expect(
+      workspaceViewStore.getState().viewFor(workspaceId).settings.activeCategory,
+    ).toBe("recovery");
+
+    fireEvent.click(
+      renderResult.getByRole("button", { name: /Search or run a command/ }),
+    );
+    fireEvent.click(
+      renderResult.getByRole("button", { name: /Keybindings: Import/ }),
+    );
+    await flushAppShellEffects();
+
+    expect(
+      workspaceViewStore.getState().viewFor(workspaceId).settings.activeCategory,
+    ).toBe("keybindings");
+    expect(renderResult.getByText("Available after migration")).toBeTruthy();
   });
 
   test("AppShell saves a native recovery backup when loaded editor content changes", async () => {

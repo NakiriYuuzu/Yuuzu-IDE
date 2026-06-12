@@ -14,6 +14,7 @@ import {
   node10Commands,
   node11Commands,
   node12Commands,
+  node13Commands,
 } from "./command-palette-model";
 
 describe("filterCommands", () => {
@@ -316,5 +317,63 @@ describe("filterCommands", () => {
 
     expect(ids).toContain("open-extensions");
     expect(ids).toContain("extension-refresh");
+  });
+
+  test("includes node 13 diagnostics and settings commands in palette", () => {
+    expect(node13Commands).toEqual([
+      {
+        id: "open-diagnostics",
+        label: "Diagnostics: Open panel",
+        group: "Settings",
+        description: "Open Settings diagnostics",
+      },
+      {
+        id: "refresh-diagnostics",
+        label: "Diagnostics: Refresh metrics",
+        group: "Settings",
+        description: "Refresh diagnostics metrics and logs",
+      },
+      {
+        id: "open-recovery",
+        label: "Recovery: Open backups",
+        group: "Settings",
+        description: "Open Settings recovery backups",
+      },
+      {
+        id: "import-keybindings",
+        label: "Keybindings: Import",
+        group: "Settings",
+        description: "Open keybinding import settings",
+      },
+    ]);
+    expect(allCommands.map((command) => command.id)).toEqual(
+      expect.arrayContaining([
+        "open-diagnostics",
+        "refresh-diagnostics",
+        "open-recovery",
+        "import-keybindings",
+      ]),
+    );
+  });
+
+  test("searches node 13 commands by settings group and diagnostics label", () => {
+    const byGroup = filterCommands(allCommands, "settings").map(
+      (command) => command.id,
+    );
+    const byLabel = filterCommands(allCommands, "diagnostics").map(
+      (command) => command.id,
+    );
+
+    expect(byGroup).toEqual(
+      expect.arrayContaining([
+        "open-diagnostics",
+        "refresh-diagnostics",
+        "open-recovery",
+        "import-keybindings",
+      ]),
+    );
+    expect(byLabel).toEqual(
+      expect.arrayContaining(["open-diagnostics", "refresh-diagnostics"]),
+    );
   });
 });
