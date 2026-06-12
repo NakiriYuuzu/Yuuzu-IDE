@@ -112,6 +112,7 @@ pub fn run() {
             commands::export_database_query_result,
             commands::git_status,
             commands::git_diff_file,
+            commands::git_diff_hunks,
             commands::git_stage_paths,
             commands::git_unstage_paths,
             commands::git_discard_paths,

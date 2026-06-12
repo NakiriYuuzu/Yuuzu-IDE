@@ -702,6 +702,236 @@ fn is_binary_diff(raw: &str) -> bool {
     raw.contains("Binary files ") || raw.contains("GIT binary patch")
 }
 
+pub const MAX_DIFF_HUNKS: usize = 200;
+pub const MAX_DIFF_TOTAL_LINES: usize = 8_000;
+const MAX_WORD_DIFF_CHARS: usize = 400;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GitLineKind {
+    Context,
+    Add,
+    Del,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitHunkLine {
+    pub kind: GitLineKind,
+    pub old_no: Option<u32>,
+    pub new_no: Option<u32>,
+    pub text: String,
+    pub word_ranges: Vec<[u32; 2]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitHunk {
+    pub header: String,
+    pub old_start: u32,
+    pub old_lines: u32,
+    pub new_start: u32,
+    pub new_lines: u32,
+    pub lines: Vec<GitHunkLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitDiffHunks {
+    pub path: String,
+    pub staged: bool,
+    pub binary: bool,
+    pub truncated: bool,
+    pub hunks: Vec<GitHunk>,
+}
+
+pub fn diff_file_hunks(
+    workspace_root: &Path,
+    path: &str,
+    staged: bool,
+) -> Result<GitDiffHunks, String> {
+    let diff = diff_file(workspace_root, path, staged)?;
+    let mut parsed = if diff.binary {
+        GitDiffHunks {
+            path: diff.path.clone(),
+            staged,
+            binary: true,
+            truncated: false,
+            hunks: Vec::new(),
+        }
+    } else {
+        parse_unified_diff(&diff.raw, MAX_DIFF_HUNKS, MAX_DIFF_TOTAL_LINES)?
+    };
+    parsed.path = diff.path;
+    parsed.staged = staged;
+    parsed.truncated = parsed.truncated || diff.truncated;
+    parsed.binary = diff.binary;
+    attach_word_ranges(&mut parsed);
+    Ok(parsed)
+}
+
+pub(crate) fn parse_unified_diff(
+    raw: &str,
+    max_hunks: usize,
+    max_lines: usize,
+) -> Result<GitDiffHunks, String> {
+    let mut hunks = Vec::new();
+    let mut truncated = false;
+    let mut total_lines = 0usize;
+    let mut current: Option<GitHunk> = None;
+    let (mut old_no, mut new_no) = (0u32, 0u32);
+
+    for line in raw.lines() {
+        if let Some(rest) = line.strip_prefix("@@ ") {
+            if let Some(h) = current.take() {
+                hunks.push(h);
+            }
+            if hunks.len() >= max_hunks {
+                truncated = true;
+                break;
+            }
+            let (os, ol, ns, nl) = parse_hunk_header(rest)?;
+            old_no = os;
+            new_no = ns;
+            current = Some(GitHunk {
+                header: line.to_string(),
+                old_start: os,
+                old_lines: ol,
+                new_start: ns,
+                new_lines: nl,
+                lines: Vec::new(),
+            });
+        } else if let Some(h) = current.as_mut() {
+            if total_lines >= max_lines {
+                truncated = true;
+                break;
+            }
+            let entry = match line.bytes().next() {
+                Some(b'+') => {
+                    let l = GitHunkLine {
+                        kind: GitLineKind::Add,
+                        old_no: None,
+                        new_no: Some(new_no),
+                        text: line[1..].to_string(),
+                        word_ranges: Vec::new(),
+                    };
+                    new_no += 1;
+                    Some(l)
+                }
+                Some(b'-') => {
+                    let l = GitHunkLine {
+                        kind: GitLineKind::Del,
+                        old_no: Some(old_no),
+                        new_no: None,
+                        text: line[1..].to_string(),
+                        word_ranges: Vec::new(),
+                    };
+                    old_no += 1;
+                    Some(l)
+                }
+                Some(b' ') | None => {
+                    let l = GitHunkLine {
+                        kind: GitLineKind::Context,
+                        old_no: Some(old_no),
+                        new_no: Some(new_no),
+                        text: line.get(1..).unwrap_or("").to_string(),
+                        word_ranges: Vec::new(),
+                    };
+                    old_no += 1;
+                    new_no += 1;
+                    Some(l)
+                }
+                // "\ No newline at end of file" and diff headers
+                _ => None,
+            };
+            if let Some(l) = entry {
+                h.lines.push(l);
+                total_lines += 1;
+            }
+        }
+    }
+    if let Some(h) = current.take() {
+        hunks.push(h);
+    }
+
+    Ok(GitDiffHunks {
+        path: String::new(),
+        staged: false,
+        binary: false,
+        truncated,
+        hunks,
+    })
+}
+
+fn parse_hunk_header(rest: &str) -> Result<(u32, u32, u32, u32), String> {
+    // "-4,3 +4,4 @@ optional context"
+    let body = rest.split(" @@").next().unwrap_or(rest);
+    let mut parts = body.split_whitespace();
+    let old = parts
+        .next()
+        .and_then(|s| s.strip_prefix('-'))
+        .ok_or("invalid hunk header")?;
+    let new = parts
+        .next()
+        .and_then(|s| s.strip_prefix('+'))
+        .ok_or("invalid hunk header")?;
+    let parse_pair = |s: &str| -> (u32, u32) {
+        match s.split_once(',') {
+            Some((a, b)) => (a.parse().unwrap_or(0), b.parse().unwrap_or(1)),
+            None => (s.parse().unwrap_or(0), 1),
+        }
+    };
+    let (os, ol) = parse_pair(old);
+    let (ns, nl) = parse_pair(new);
+    Ok((os, ol, ns, nl))
+}
+
+pub(crate) fn word_diff_ranges(del: &str, add: &str) -> (Vec<[u32; 2]>, Vec<[u32; 2]>) {
+    if del.len() > MAX_WORD_DIFF_CHARS || add.len() > MAX_WORD_DIFF_CHARS {
+        // fall back to whole-line tint
+        return (Vec::new(), Vec::new());
+    }
+    let d: Vec<char> = del.chars().collect();
+    let a: Vec<char> = add.chars().collect();
+    let mut prefix = 0usize;
+    while prefix < d.len() && prefix < a.len() && d[prefix] == a[prefix] {
+        prefix += 1;
+    }
+    let mut suffix = 0usize;
+    while suffix < d.len() - prefix
+        && suffix < a.len() - prefix
+        && d[d.len() - 1 - suffix] == a[a.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    let dr = if prefix < d.len() - suffix {
+        vec![[prefix as u32, (d.len() - suffix) as u32]]
+    } else {
+        Vec::new()
+    };
+    let ar = if prefix < a.len() - suffix {
+        vec![[prefix as u32, (a.len() - suffix) as u32]]
+    } else {
+        Vec::new()
+    };
+    (dr, ar)
+}
+
+fn attach_word_ranges(diff: &mut GitDiffHunks) {
+    for hunk in &mut diff.hunks {
+        let mut i = 0;
+        while i + 1 < hunk.lines.len() {
+            let paired = hunk.lines[i].kind == GitLineKind::Del
+                && hunk.lines[i + 1].kind == GitLineKind::Add;
+            if paired {
+                let (dr, ar) = word_diff_ranges(&hunk.lines[i].text, &hunk.lines[i + 1].text);
+                hunk.lines[i].word_ranges = dr;
+                hunk.lines[i + 1].word_ranges = ar;
+                i += 2;
+            } else {
+                i += 1;
+            }
+        }
+    }
+}
+
 fn path_to_git_string(path: &Path) -> String {
     path.components()
         .filter_map(|component| match component {
@@ -869,6 +1099,50 @@ mod tests {
             .expect("discard literal wildcard");
         assert_eq!(repo.read_file("*.txt"), "literal before\n");
         assert_eq!(repo.read_file("other.txt"), "other after\n");
+    }
+
+    #[test]
+    fn parses_unified_diff_into_structured_hunks_with_line_numbers() {
+        let raw = "diff --git a/users.ts b/users.ts\nindex 1111111..2222222 100644\n--- a/users.ts\n+++ b/users.ts\n@@ -4,3 +4,4 @@ router.get\n ctx line\n-  const rows = await db.query(\"SELECT * FROM users\");\n+  const rows = await db.query(USERS_PAGE_SQL, [PAGE_SIZE]);\n+  const page = Number(req.query.page ?? 1);\n ctx tail\n";
+        let hunks = parse_unified_diff(raw, MAX_DIFF_HUNKS, MAX_DIFF_TOTAL_LINES).expect("parses");
+
+        assert_eq!(hunks.hunks.len(), 1);
+        let h = &hunks.hunks[0];
+        assert_eq!(
+            (h.old_start, h.old_lines, h.new_start, h.new_lines),
+            (4, 3, 4, 4)
+        );
+        assert_eq!(h.lines[0].kind, GitLineKind::Context);
+        assert_eq!(h.lines[0].old_no, Some(4));
+        assert_eq!(h.lines[0].new_no, Some(4));
+        assert_eq!(h.lines[1].kind, GitLineKind::Del);
+        assert_eq!(h.lines[1].old_no, Some(5));
+        assert_eq!(h.lines[1].new_no, None);
+        assert_eq!(h.lines[2].kind, GitLineKind::Add);
+        assert_eq!(h.lines[2].new_no, Some(5));
+        assert!(!hunks.truncated);
+    }
+
+    #[test]
+    fn word_ranges_mark_changed_middle_of_paired_lines() {
+        let (del_r, add_r) = word_diff_ranges(
+            "  const rows = await db.query(\"SELECT * FROM users\");",
+            "  const rows = await db.query(USERS_PAGE_SQL, [PAGE_SIZE]);",
+        );
+        // common prefix `  const rows = await db.query(` (30 chars) and suffix `);` are excluded
+        assert_eq!(del_r, vec![[30, 51]]);
+        assert_eq!(add_r, vec![[30, 57]]);
+    }
+
+    #[test]
+    fn hunk_parsing_clips_at_bounds_and_flags_truncated() {
+        let mut raw = String::from("diff --git a/a b/a\n--- a/a\n+++ b/a\n");
+        for i in 0..300 {
+            raw.push_str(&format!("@@ -{0},1 +{0},1 @@\n-x{0}\n+y{0}\n", i + 1));
+        }
+        let hunks = parse_unified_diff(&raw, MAX_DIFF_HUNKS, MAX_DIFF_TOTAL_LINES).expect("parses");
+        assert_eq!(hunks.hunks.len(), MAX_DIFF_HUNKS);
+        assert!(hunks.truncated);
     }
 
     struct TempGitRepo {

@@ -1734,6 +1734,17 @@ pub async fn git_diff_file(
 }
 
 #[tauri::command]
+pub async fn git_diff_hunks(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    path: String,
+    staged: bool,
+) -> Result<crate::git::GitDiffHunks, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git::diff_file_hunks(&workspace_root, &path, staged)).await
+}
+
+#[tauri::command]
 pub async fn git_stage_paths(
     state: State<'_, AppState>,
     workspace_root: String,
