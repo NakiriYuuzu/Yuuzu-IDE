@@ -1,17 +1,30 @@
 import { Search, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { allCommands, filterCommands } from "./command-palette-model";
+import {
+  allCommands,
+  filterCommands,
+  type CommandItem,
+} from "./command-palette-model";
 
 type CommandPaletteProps = {
   open: boolean;
   onClose: () => void;
   onRun: (id: string) => void;
+  commands?: CommandItem[];
 };
 
-export function CommandPalette({ open, onClose, onRun }: CommandPaletteProps) {
+export function CommandPalette({
+  open,
+  onClose,
+  onRun,
+  commands: commandItems = allCommands,
+}: CommandPaletteProps) {
   const [query, setQuery] = useState("");
-  const commands = useMemo(() => filterCommands(allCommands, query), [query]);
+  const commands = useMemo(
+    () => filterCommands(commandItems, query),
+    [commandItems, query],
+  );
 
   useEffect(() => {
     if (!open) {

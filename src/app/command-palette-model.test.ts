@@ -13,6 +13,7 @@ import {
   node9Commands,
   node10Commands,
   node11Commands,
+  node12Commands,
 } from "./command-palette-model";
 
 describe("filterCommands", () => {
@@ -287,5 +288,33 @@ describe("filterCommands", () => {
     expect(byGroup).toContain("debug-start-session");
     expect(byLabel).toContain("debug-step-over");
     expect(byDescription).toContain("debug-start-session");
+  });
+
+  test("includes node 12 extension commands in palette", () => {
+    expect(node12Commands).toEqual([
+      {
+        id: "open-extensions",
+        label: "Extensions: Open panel",
+        group: "Extensions",
+        description: "Open the extension registry panel",
+      },
+      {
+        id: "extension-refresh",
+        label: "Extensions: Refresh",
+        group: "Extensions",
+        description: "Refresh workspace extension status",
+      },
+    ]);
+    expect(allCommands.map((command) => command.id)).toEqual(
+      expect.arrayContaining(["open-extensions", "extension-refresh"]),
+    );
+  });
+
+  test("searches extension commands", () => {
+    const filtered = filterCommands(allCommands, "extensions");
+    const ids = filtered.map((command) => command.id);
+
+    expect(ids).toContain("open-extensions");
+    expect(ids).toContain("extension-refresh");
   });
 });
