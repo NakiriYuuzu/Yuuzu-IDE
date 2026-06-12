@@ -8,7 +8,7 @@ Node 11 implementation Tasks 1-7 are delivered. Fresh verification on
 2026-06-12 confirms both real adapter smoke tests pass: Python through
 `debugpy` and compiled C through Xcode's `lldb-dap`.
 
-The final regression fixes are `f9aa1af`, `353d965`, and `2533c67`.
+The final regression fixes are `f9aa1af`, `353d965`, `2533c67`, and `3b4748d`.
 `f9aa1af` preserves variables from real DAP captures when adapters reuse raw
 `variablesReference` handles across stack frames, which was observed with
 `lldb-dap` frame 524288 `main` and frame 524289 `start` both exposing Locals as
@@ -16,7 +16,9 @@ raw reference `1`. `353d965` then fixed the AppShell stopped-event path so real
 stopped sessions load stack frames, scopes, and variables into DebugPanel state
 instead of depending on test pre-seeded variables. `2533c67` replaced
 session-scoped stack/scope/variable snapshots on stopped refreshes so failed or
-missing variable loads cannot leave older locals visible as live data.
+missing variable loads cannot leave older locals visible as live data. `3b4748d`
+guards stopped refresh writes against in-flight workspace unregister/root
+changes as well as stale session sequences.
 
 ## Scope Delivered
 
@@ -33,6 +35,9 @@ missing variable loads cannot leave older locals visible as live data.
   view state, editor surface, debug console surface, backend listener wiring,
   live stopped-event stack/scope/variable hydration, and session snapshot
   replacement for refreshed debug variables.
+- Stopped refresh guards that require the workspace id to remain registered,
+  the workspace root to remain unchanged, and the session sequence to remain
+  current after every stack/scope/variable await boundary.
 - Real adapter smoke fixtures for compiled C through `lldb-dap` and Python
   through `debugpy`.
 
@@ -155,6 +160,23 @@ missing variable loads cannot leave older locals visible as live data.
 - Smoke result: passed with 2 tests and 0 failed.
 - Commit evidence: `2533c67`.
 
+### Completion follow-up: guard stopped refresh workspace identity
+
+- RED command: `bun test src/app/AppShell.contract.test.tsx`.
+- RED result: failed because an in-flight stopped stack refresh wrote stack
+  state after the same workspace id switched to a different root.
+- GREEN command: `bun test src/app/AppShell.contract.test.tsx`.
+- GREEN result: passed with 54 tests and 212 expect calls after AppShell guarded
+  stopped refresh writes by workspace registration, root identity, and session
+  sequence.
+- Focused regression command: `bun test src/app/AppShell.contract.test.tsx src/features/debug/debug-model.test.ts src/features/debug/DebugPanel.test.tsx`.
+- Focused regression result: passed with 72 tests and 271 expect calls.
+- Build command: `bun run build`.
+- Build result: passed with Vite chunk-size warnings only.
+- Smoke command: `. "$HOME/.cargo/env" && YUZZU_DEBUG_SMOKE=1 cargo test --manifest-path src-tauri/Cargo.toml debug::adapter_smoke_tests -- --ignored --test-threads=1`.
+- Smoke result: passed with 2 tests and 0 failed.
+- Commit evidence: `3b4748d`.
+
 ## Agent Review Evidence
 
 - Task 1 review remediation is represented by `b9fb230` and `d5da874`.
@@ -169,6 +191,8 @@ missing variable loads cannot leave older locals visible as live data.
   represented by `353d965`.
 - Completion follow-up for replacing stale session variable snapshots is
   represented by `2533c67`.
+- Completion follow-up for in-flight workspace/root stopped refresh guards is
+  represented by `3b4748d`.
 - Task dispatch required `gpt-5.5` with `xhigh` reasoning and prohibited
   `gpt-5.4`; no repository evidence records a `gpt-5.4` Node 11 agent.
 
@@ -221,8 +245,8 @@ missing variable loads cannot leave older locals visible as live data.
   stopped-event live variable contract tests, AppShell stale-snapshot
   replacement tests, and the real `lldb-dap` smoke returning `counter = 3`.
 - Debug sessions are scoped to workspaces: PASS through Rust command/workspace
-  guard tests, frontend workspace view state tests, and AppShell event routing
-  tests.
+  guard tests, frontend workspace view state tests, AppShell event routing
+  tests, and AppShell in-flight workspace root switch guards.
 
 Overall acceptance is complete.
 

@@ -1040,7 +1040,7 @@ Final acceptance is complete because Python through `debugpy` and compiled C
 through `lldb-dap` both reach fixture breakpoints and return the expected
 `counter = 3` variable, and the AppShell stopped-event path now loads live
 scopes and variables into DebugPanel state without preserving stale variables
-from older stops.
+from older stops or writing refresh results after workspace root switches.
 
 Completed progress:
 
@@ -1066,6 +1066,9 @@ Completed progress:
 - The snapshot follow-up replaced session-scoped debug stack/scope/variable
   snapshots on stopped refreshes, so partial scope or variable failures clear
   older live locals instead of merging stale references.
+- The workspace guard follow-up requires stopped refresh async results to keep a
+  registered workspace id, matching workspace root, and matching session
+  sequence before writing stack, scopes, or variables.
 
 Important files and commit milestones:
 
@@ -1086,17 +1089,16 @@ Important files and commit milestones:
   `a00617e`, `9661369`, and `1af3aa9`.
 - Node 11 hardening commits after review: `b9fb230`, `d5da874`, `fad25b7`,
   `55273a7`, `cb2e327`, `efa33a0`, `ef2287c`, `2500b61`, `268f742`,
-  `d46b6f3`, `f6f8599`, `f9aa1af`, `353d965`, and `2533c67`.
+  `d46b6f3`, `f6f8599`, `f9aa1af`, `353d965`, `2533c67`, and `3b4748d`.
 
 Verification outcomes:
 
 - `bun test`: PASS with 338 passed, 0 failed, 964 expect calls across 38 files.
-- `bun test src/app/AppShell.contract.test.tsx`: PASS with 53 passed and 208
-  expect calls after the stopped-event live variable and stale-snapshot
-  follow-ups.
-- Focused Node 11 frontend regression command covering debug model, DebugPanel,
-  EditorTab, activity rail, command palette, workspace view state, and AppShell:
-  PASS with 127 passed and 405 expect calls.
+- `bun test src/app/AppShell.contract.test.tsx`: PASS with 54 passed and 212
+  expect calls after the stopped-event live variable, stale-snapshot, and
+  workspace guard follow-ups.
+- Focused Node 11 frontend regression command covering AppShell, debug model,
+  and DebugPanel: PASS with 72 passed and 271 expect calls.
 - `bun run build`: PASS with `tsc && vite build`; Vite chunk-size warnings
   only.
 - `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml`:
