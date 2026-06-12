@@ -539,6 +539,21 @@ where
     }
 }
 
+pub(crate) fn run_git_in(working_dir: &Path, args: &[String]) -> Result<Vec<u8>, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(working_dir)
+        .args(args)
+        .output()
+        .map_err(|err| err.to_string())?;
+
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        Err(command_error("git", &output.stderr))
+    }
+}
+
 fn parse_branches(output: &[u8]) -> Vec<GitBranch> {
     String::from_utf8_lossy(output)
         .lines()
@@ -1088,7 +1103,7 @@ fn path_to_git_string(path: &Path) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::fs;
     use tempfile::{tempdir, TempDir};
@@ -1372,12 +1387,12 @@ mod tests {
         assert_eq!(repo.read_file("f.ts"), "a\n");
     }
 
-    struct TempGitRepo {
+    pub(crate) struct TempGitRepo {
         dir: TempDir,
     }
 
     impl TempGitRepo {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let dir = tempfile::tempdir().expect("tempdir");
             let repo = Self { dir };
             repo.run(["init"]);
@@ -1386,11 +1401,11 @@ mod tests {
             repo
         }
 
-        fn path(&self) -> &std::path::Path {
+        pub(crate) fn path(&self) -> &std::path::Path {
             self.dir.path()
         }
 
-        fn run<const N: usize>(&self, args: [&str; N]) {
+        pub(crate) fn run<const N: usize>(&self, args: [&str; N]) {
             let output = std::process::Command::new("git")
                 .arg("-C")
                 .arg(self.path())
@@ -1404,11 +1419,11 @@ mod tests {
             );
         }
 
-        fn write_file(&self, path: &str, content: &str) {
+        pub(crate) fn write_file(&self, path: &str, content: &str) {
             std::fs::write(self.path().join(path), content).expect("write file");
         }
 
-        fn read_file(&self, path: &str) -> String {
+        pub(crate) fn read_file(&self, path: &str) -> String {
             std::fs::read_to_string(self.path().join(path)).expect("read file")
         }
     }

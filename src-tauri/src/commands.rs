@@ -1745,6 +1745,17 @@ pub async fn git_diff_hunks(
 }
 
 #[tauri::command]
+pub async fn git_log_page(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    filter: crate::git_log::GitLogFilter,
+    limit: usize,
+) -> Result<crate::git_log::GitLogPage, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git_log::log_page(&workspace_root, &filter, limit)).await
+}
+
+#[tauri::command]
 pub async fn git_stage_hunks(
     state: State<'_, AppState>,
     workspace_root: String,

@@ -9,6 +9,7 @@ pub mod extensions;
 mod file_system;
 mod file_watcher;
 pub mod git;
+pub mod git_log;
 pub mod lsp;
 mod metrics;
 mod pty;
@@ -113,6 +114,7 @@ pub fn run() {
             commands::git_status,
             commands::git_diff_file,
             commands::git_diff_hunks,
+            commands::git_log_page,
             commands::git_stage_hunks,
             commands::git_unstage_hunks,
             commands::git_revert_hunk,
