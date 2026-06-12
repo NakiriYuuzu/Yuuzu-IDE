@@ -13,6 +13,17 @@ use tauri::{AppHandle, Emitter};
 const OUTPUT_COALESCE_WINDOW: Duration = Duration::from_millis(10);
 const MAX_COALESCED_CHUNK_BYTES: usize = 64 * 1024;
 
+fn apply_terminal_session_env(command: &mut CommandBuilder) {
+    #[cfg(not(windows))]
+    command.arg("-l");
+    command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
+    command.env("TERM_PROGRAM", "yuuzu-ide");
+    if command.get_env("LANG").is_none_or(|value| value.is_empty()) {
+        command.env("LANG", "en_US.UTF-8");
+    }
+}
+
 fn next_coalesced_chunk(
     receiver: &mpsc::Receiver<String>,
     window: Duration,
@@ -185,6 +196,7 @@ impl TerminalState {
         };
 
         let mut command = CommandBuilder::new(&info.shell);
+        apply_terminal_session_env(&mut command);
         command.cwd(&cwd);
 
         let mut child = match pair.slave.spawn_command(command) {
@@ -428,6 +440,60 @@ mod tests {
                 writer: Arc::new(Mutex::new(writer)),
                 killer: Arc::new(Mutex::new(Box::new(NoopKiller))),
             },
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn shell_command_starts_a_login_shell_with_terminal_env() {
+        let mut command = portable_pty::CommandBuilder::new("/bin/zsh");
+
+        super::apply_terminal_session_env(&mut command);
+
+        let argv = command.get_argv();
+        assert_eq!(argv.len(), 2);
+        assert_eq!(argv[1].to_str(), Some("-l"));
+        assert_eq!(
+            command.get_env("TERM").and_then(|value| value.to_str()),
+            Some("xterm-256color")
+        );
+        assert_eq!(
+            command
+                .get_env("COLORTERM")
+                .and_then(|value| value.to_str()),
+            Some("truecolor")
+        );
+        assert_eq!(
+            command
+                .get_env("TERM_PROGRAM")
+                .and_then(|value| value.to_str()),
+            Some("yuuzu-ide")
+        );
+    }
+
+    #[test]
+    fn shell_command_fills_lang_when_parent_env_lacks_it() {
+        let mut command = portable_pty::CommandBuilder::new("/bin/zsh");
+        command.env_remove("LANG");
+
+        super::apply_terminal_session_env(&mut command);
+
+        assert_eq!(
+            command.get_env("LANG").and_then(|value| value.to_str()),
+            Some("en_US.UTF-8")
+        );
+    }
+
+    #[test]
+    fn shell_command_preserves_existing_lang() {
+        let mut command = portable_pty::CommandBuilder::new("/bin/zsh");
+        command.env("LANG", "ja_JP.UTF-8");
+
+        super::apply_terminal_session_env(&mut command);
+
+        assert_eq!(
+            command.get_env("LANG").and_then(|value| value.to_str()),
+            Some("ja_JP.UTF-8")
         );
     }
 
