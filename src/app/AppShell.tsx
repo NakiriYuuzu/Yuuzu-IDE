@@ -134,6 +134,19 @@ import {
   type RemoteViewState,
   type SshTerminalSessionInfo,
 } from "../features/remote/remote-model";
+import { RecoveryPanel } from "../features/recovery/RecoveryPanel";
+import {
+  discardUnsavedBackup,
+  listUnsavedBackups,
+  saveUnsavedBackup,
+} from "../features/recovery/recovery-api";
+import {
+  createRecoveryState,
+  discardRecoveryBackup,
+  restoreRecoveryBackup,
+  storeRecoveryBackups,
+  type RecoveryViewState,
+} from "../features/recovery/recovery-model";
 import {
   beginDatabaseQuery,
   databaseBadgeCount,
@@ -2242,6 +2255,10 @@ export function PanelBody({
   onRemoteListSftpDirectory = () => {},
   onRemoteDownloadFile = () => {},
   onRemoteUploadFile = () => {},
+  recoveryState = createRecoveryState(),
+  onRecoveryRefresh = () => {},
+  onRecoveryRestore = () => {},
+  onRecoveryDiscard = () => {},
   debugState,
   onDebugModeChange = () => {},
   onDebugSelectConfig = () => {},
@@ -2362,6 +2379,10 @@ export function PanelBody({
   onRemoteListSftpDirectory?: (hostId: string, path: string) => void;
   onRemoteDownloadFile?: (path: string) => void;
   onRemoteUploadFile?: (path: string) => void;
+  recoveryState?: RecoveryViewState;
+  onRecoveryRefresh?: () => void;
+  onRecoveryRestore?: (backupId: string) => void;
+  onRecoveryDiscard?: (backupId: string) => void;
   debugState?: DebugViewState;
   onDebugModeChange?: (mode: DebugViewState["mode"]) => void;
   onDebugSelectConfig?: (configId: string) => void;
@@ -2571,6 +2592,17 @@ export function PanelBody({
     );
   }
 
+  if (active === "settings") {
+    return (
+      <RecoveryPanel
+        state={recoveryState}
+        onRefresh={onRecoveryRefresh}
+        onRestore={onRecoveryRestore}
+        onDiscard={onRecoveryDiscard}
+      />
+    );
+  }
+
   if (active === "explorer") {
     return (
       <FileTreePanel
@@ -2618,6 +2650,7 @@ export function AppShell() {
   const extensionToggleRequestRef = useRef<Record<string, number>>({});
   const extensionStateEpochRef = useRef<Record<string, number>>({});
   const extensionPendingToggleRef = useRef<Record<string, number>>({});
+  const recoveryLoadRequestRef = useRef<Record<string, number>>({});
   const docsLoadRequestRef = useRef<DocsLoadRequestState>({});
   const agentSessionsLoadRef = useRef<Record<string, number>>({});
   const languageRefreshRequestRef = useRef<LanguageRefreshRequestState>({});
@@ -2734,6 +2767,7 @@ export function AppShell() {
   const updateBrowser = useWorkspaceViewStore((state) => state.updateBrowser);
   const updateDatabase = useWorkspaceViewStore((state) => state.updateDatabase);
   const updateRemote = useWorkspaceViewStore((state) => state.updateRemote);
+  const updateRecovery = useWorkspaceViewStore((state) => state.updateRecovery);
   const updateDebug = useWorkspaceViewStore((state) => state.updateDebug);
   const updateExtension = useWorkspaceViewStore(
     (state) => state.updateExtension,
@@ -2872,6 +2906,14 @@ export function AppShell() {
     }
 
     void refreshDebugForWorkspace(activeWorkspaceId, activeWorkspace.path);
+  }, [activeWorkspaceId, activeWorkspace?.path]);
+
+  useEffect(() => {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    void refreshRecoveryForWorkspace(activeWorkspaceId, activeWorkspace.path);
   }, [activeWorkspaceId, activeWorkspace?.path]);
 
   useEffect(() => {
@@ -3491,6 +3533,167 @@ export function AppShell() {
     };
   }, [activeWorkspaceId, activeWorkspace?.path, updateEditor]);
 
+  async function refreshRecoveryForWorkspace(
+    workspaceId: string,
+    workspaceRoot: string,
+  ) {
+    const requestId = (recoveryLoadRequestRef.current[workspaceId] ?? 0) + 1;
+    recoveryLoadRequestRef.current[workspaceId] = requestId;
+    updateRecovery(workspaceId, (recovery) => ({
+      ...recovery,
+      loading: true,
+      error: null,
+    }));
+
+    try {
+      const backups = await listUnsavedBackups({ workspaceRoot, workspaceId });
+      if (recoveryLoadRequestRef.current[workspaceId] !== requestId) {
+        return;
+      }
+
+      updateRecovery(workspaceId, (recovery) =>
+        storeRecoveryBackups(recovery, backups),
+      );
+    } catch (error) {
+      if (recoveryLoadRequestRef.current[workspaceId] !== requestId) {
+        return;
+      }
+
+      updateRecovery(workspaceId, (recovery) => ({
+        ...recovery,
+        loading: false,
+        error: `Recovery failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
+  function discardRecoveryBackupForPath(
+    workspaceId: string,
+    workspaceRoot: string,
+    path: string,
+  ) {
+    const backup = workspaceViewStore
+      .getState()
+      .viewFor(workspaceId)
+      .recovery.backups.find((item) => item.path === path);
+    if (!backup) {
+      return;
+    }
+
+    void discardUnsavedBackup({
+      workspaceRoot,
+      workspaceId,
+      backupId: backup.id,
+    })
+      .then(() => {
+        updateRecovery(workspaceId, (recovery) =>
+          discardRecoveryBackup(recovery, backup.id),
+        );
+      })
+      .catch((error) => {
+        updateRecovery(workspaceId, (recovery) => ({
+          ...recovery,
+          error: `Discard failed: ${terminalErrorMessage(error)}`,
+        }));
+      });
+  }
+
+  async function restoreRecoveryBackupById(backupId: string) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const backup = workspaceViewStore
+      .getState()
+      .viewFor(activeWorkspaceId)
+      .recovery.backups.find((item) => item.id === backupId);
+    if (!backup) {
+      return;
+    }
+
+    updateRecovery(activeWorkspaceId, (recovery) =>
+      restoreRecoveryBackup(recovery, backupId),
+    );
+    setEditorError(null);
+
+    let savedContent = "";
+    let version = backup.version;
+    try {
+      const read = await readTextFile(activeWorkspace.path, backup.path);
+      savedContent = read.content ?? "";
+      version = read.version;
+    } catch {
+      savedContent =
+        savedContentByPathRef.current[
+          createLoadedFileKey(activeWorkspaceId, backup.path)
+        ] ?? "";
+    }
+
+    savedContentByPathRef.current[
+      createLoadedFileKey(activeWorkspaceId, backup.path)
+    ] = savedContent;
+    updateEditor(activeWorkspaceId, (editor) =>
+      openFileTab(editor, {
+        path: backup.path,
+        name: backup.path.split(/[\\/]/).pop() ?? backup.path,
+        dirty: true,
+        tooLarge: false,
+        version,
+        externalChange: false,
+      }),
+    );
+    setLoadedFile({
+      workspaceId: activeWorkspaceId,
+      path: backup.path,
+      content: backup.content,
+      language: languageForPath(backup.path),
+      readOnly: false,
+    });
+    if (isLspSupportedDocumentPath(backup.path)) {
+      void openLanguageDocument({
+        workspaceId: activeWorkspaceId,
+        workspaceRoot: activeWorkspace.path,
+        path: lspDocumentPathForWorkspace(activeWorkspace.path, backup.path),
+        content: backup.content,
+      }).catch(() => {});
+    }
+    setSurface("editor");
+    updateRecovery(activeWorkspaceId, (recovery) => ({
+      ...recovery,
+      restoringBackupId: null,
+    }));
+  }
+
+  async function discardRecoveryBackupById(backupId: string) {
+    if (!activeWorkspace || !activeWorkspaceId) {
+      return;
+    }
+
+    const backup = workspaceViewStore
+      .getState()
+      .viewFor(activeWorkspaceId)
+      .recovery.backups.find((item) => item.id === backupId);
+    if (!backup) {
+      return;
+    }
+
+    try {
+      await discardUnsavedBackup({
+        workspaceRoot: activeWorkspace.path,
+        workspaceId: activeWorkspaceId,
+        backupId: backup.id,
+      });
+      updateRecovery(activeWorkspaceId, (recovery) =>
+        discardRecoveryBackup(recovery, backup.id),
+      );
+    } catch (error) {
+      updateRecovery(activeWorkspaceId, (recovery) => ({
+        ...recovery,
+        error: `Discard failed: ${terminalErrorMessage(error)}`,
+      }));
+    }
+  }
+
   async function openFile(path: string) {
     if (!activeWorkspace || !activeWorkspaceId) {
       return;
@@ -3605,8 +3808,41 @@ export function AppShell() {
 
     if (dirty) {
       trySaveDraft(activeWorkspaceId, loadedFile.path, content);
+      const activeTab = view.editor.tabs.find(
+        (tab) => tab.path === loadedFile.path,
+      );
+      if (activeWorkspace) {
+        void saveUnsavedBackup({
+          workspaceRoot: activeWorkspace.path,
+          workspaceId: activeWorkspaceId,
+          path: loadedFile.path,
+          content,
+          version: activeTab?.version ?? null,
+        })
+          .then((backup) => {
+            updateRecovery(activeWorkspaceId, (recovery) =>
+              storeRecoveryBackups(recovery, [
+                ...recovery.backups.filter((item) => item.id !== backup.id),
+                backup,
+              ]),
+            );
+          })
+          .catch((error) => {
+            updateRecovery(activeWorkspaceId, (recovery) => ({
+              ...recovery,
+              error: `Recovery failed: ${terminalErrorMessage(error)}`,
+            }));
+          });
+      }
     } else {
       tryClearDraft(activeWorkspaceId, loadedFile.path);
+      if (activeWorkspace) {
+        discardRecoveryBackupForPath(
+          activeWorkspaceId,
+          activeWorkspace.path,
+          loadedFile.path,
+        );
+      }
     }
   }
 
@@ -3649,6 +3885,11 @@ export function AppShell() {
           applySavedVersion(editor, activePath, result.version!),
         );
         tryClearDraft(activeWorkspaceId, activePath);
+        discardRecoveryBackupForPath(
+          activeWorkspaceId,
+          activeWorkspace.path,
+          activePath,
+        );
 
         if (
           isLspSupportedDocumentPath(activePath) &&
@@ -7332,7 +7573,8 @@ export function AppShell() {
             activeActivity === "language" ||
             activeActivity === "debug" ||
             activeActivity === "remote" ||
-            activeActivity === "extensions" ? null : (
+            activeActivity === "extensions" ||
+            activeActivity === "settings" ? null : (
               <div className="panel-head">
                 <span className="panel-title">{panelTitles[activeActivity]}</span>
                 <div className="panel-acts">
@@ -7497,6 +7739,21 @@ export function AppShell() {
               }
               onRemoteDownloadFile={(path) => void downloadRemoteFile(path)}
               onRemoteUploadFile={(path) => void uploadRemoteFile(path)}
+              recoveryState={view.recovery}
+              onRecoveryRefresh={() => {
+                if (activeWorkspace && activeWorkspaceId) {
+                  void refreshRecoveryForWorkspace(
+                    activeWorkspaceId,
+                    activeWorkspace.path,
+                  );
+                }
+              }}
+              onRecoveryRestore={(backupId) =>
+                void restoreRecoveryBackupById(backupId)
+              }
+              onRecoveryDiscard={(backupId) =>
+                void discardRecoveryBackupById(backupId)
+              }
               languageState={view.language}
               debugState={view.debug}
               onDebugModeChange={setDebugWorkbenchMode}

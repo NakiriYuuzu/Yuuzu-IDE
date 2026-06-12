@@ -34,6 +34,10 @@ import {
   type RemoteViewState,
 } from "../features/remote/remote-model";
 import {
+  createRecoveryState,
+  type RecoveryViewState,
+} from "../features/recovery/recovery-model";
+import {
   createGitState,
   type GitViewState,
 } from "../features/git/git-model";
@@ -74,6 +78,7 @@ export type WorkspaceViewState = {
   browser: BrowserViewState;
   database: DatabaseViewState;
   remote: RemoteViewState;
+  recovery: RecoveryViewState;
   debug: DebugViewState;
   extension: ExtensionViewState;
 };
@@ -125,6 +130,10 @@ type WorkspaceViewStore = {
     workspaceId: string | null,
     update: (remote: RemoteViewState) => RemoteViewState,
   ) => void;
+  updateRecovery: (
+    workspaceId: string | null,
+    update: (recovery: RecoveryViewState) => RecoveryViewState,
+  ) => void;
   updateDebug: (
     workspaceId: string | null,
     update: (debug: DebugViewState) => DebugViewState,
@@ -150,6 +159,7 @@ function defaultWorkspaceView(): WorkspaceViewState {
     browser: createBrowserState(),
     database: createDatabaseState(),
     remote: createRemoteState(),
+    recovery: createRecoveryState(),
     debug: createDebugState(),
     extension: createExtensionState(),
   };
@@ -278,6 +288,8 @@ function freezeWorkspaceView(view: WorkspaceViewState): WorkspaceViewState {
     Object.freeze(view.remote.transfer);
   }
   Object.freeze(view.remote);
+  Object.freeze(view.recovery.backups);
+  Object.freeze(view.recovery);
   for (const config of view.debug.launchConfigs) {
     Object.freeze(config.args);
     for (const env of config.env) {
@@ -527,6 +539,18 @@ export function createWorkspaceViewStore() {
           views: {
             ...state.views,
             [key]: { ...current, remote: update(current.remote) },
+          },
+        };
+      }),
+    updateRecovery: (workspaceId, update) =>
+      set((state) => {
+        const key = workspaceId ?? shellKey;
+        const current = state.views[key] ?? defaultViewForKey(key);
+
+        return {
+          views: {
+            ...state.views,
+            [key]: { ...current, recovery: update(current.recovery) },
           },
         };
       }),

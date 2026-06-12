@@ -16,6 +16,7 @@ import {
 } from "../features/database/database-model";
 import { createDebugState } from "../features/debug/debug-model";
 import { replaceExtensionStatuses } from "../features/extensions/extension-model";
+import { storeRecoveryBackups } from "../features/recovery/recovery-model";
 import { upsertTaskRun } from "../features/tasks/task-model";
 import { upsertTerminal } from "../features/terminal/terminal-model";
 import { createWorkspaceViewStore } from "./workspace-view-state";
@@ -357,6 +358,29 @@ describe("createWorkspaceViewStore", () => {
     expect(Object.isFrozen(unknownView.extension.statuses)).toBe(true);
   });
 
+  test("recovery state is restored per workspace", () => {
+    const store = createWorkspaceViewStore();
+
+    store.getState().updateRecovery("workspace-a", (recovery) =>
+      storeRecoveryBackups(recovery, [
+        {
+          id: "b1",
+          workspace_id: "workspace-a",
+          workspace_root: "/repo-a",
+          path: "src/main.ts",
+          content: "dirty text",
+          version: null,
+          updated_ms: 10,
+        },
+      ]),
+    );
+
+    expect(store.getState().viewFor("workspace-a").recovery.backups).toHaveLength(
+      1,
+    );
+    expect(store.getState().viewFor("workspace-b").recovery.backups).toEqual([]);
+  });
+
   test("unknown workspace debug defaults cannot be mutated across future defaults", () => {
     const store = createWorkspaceViewStore();
 
@@ -409,6 +433,34 @@ describe("createWorkspaceViewStore", () => {
 
     expect(first.remote.hosts).toEqual([]);
     expect(first.remote).not.toBe(second.remote);
+  });
+
+  test("unknown workspace recovery defaults cannot be mutated across future defaults", () => {
+    const store = createWorkspaceViewStore();
+
+    const unknownView = store.getState().viewFor("unknown-recovery");
+
+    expect(() => {
+      unknownView.recovery.backups.push({
+        id: "b1",
+        workspace_id: "unknown-recovery",
+        workspace_root: "/unknown",
+        path: "src/main.ts",
+        content: "dirty text",
+        version: null,
+        updated_ms: 10,
+      });
+    }).toThrow(TypeError);
+
+    expect(Object.isFrozen(unknownView.recovery)).toBe(true);
+    expect(Object.isFrozen(unknownView.recovery.backups)).toBe(true);
+    expect(store.getState().viewFor("other-unknown-recovery").recovery).toEqual({
+      backups: [],
+      selectedBackupId: null,
+      restoringBackupId: null,
+      loading: false,
+      error: null,
+    });
   });
 
   test("unknown workspace task defaults cannot be mutated across future defaults", () => {

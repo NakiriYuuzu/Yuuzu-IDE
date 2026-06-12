@@ -86,8 +86,32 @@ import {
   replaceExtensionStatuses,
   type ExtensionWorkspaceStatus,
 } from "../features/extensions/extension-model";
+import type { TextFileRead } from "../features/files/file-api";
+import type { FileVersion } from "../features/files/file-model";
+import {
+  createRecoveryState,
+  type UnsavedBackup,
+} from "../features/recovery/recovery-model";
 
 ensureTestDom();
+
+mock.module("../features/editor/EditorTab", () => ({
+  EditorTab({
+    content,
+    onContentChange,
+  }: {
+    content: string;
+    onContentChange: (content: string) => void;
+  }) {
+    return (
+      <textarea
+        aria-label="Mock editor"
+        value={content}
+        onChange={(event) => onContentChange(event.currentTarget.value)}
+      />
+    );
+  },
+}));
 
 const { act, cleanup, fireEvent, render } = await import("@testing-library/react");
 
@@ -340,6 +364,10 @@ function panelBodyProps(overrides: Partial<PanelBodyProps> = {}): PanelBodyProps
     onRemoteListSftpDirectory: () => {},
     onRemoteDownloadFile: () => {},
     onRemoteUploadFile: () => {},
+    recoveryState: createRecoveryState(),
+    onRecoveryRefresh: () => {},
+    onRecoveryRestore: () => {},
+    onRecoveryDiscard: () => {},
     debugState: createDebugState(),
     onDebugModeChange: () => {},
     onDebugSelectConfig: () => {},
@@ -454,6 +482,8 @@ type TauriEventCallback = (event: {
 type AppShellTauriMockOptions = {
   workspaceId: string;
   workspaceRoot: string;
+  textFiles?: Record<string, TextFileRead>;
+  recoveryBackups?: UnsavedBackup[];
   launchConfigs?: DebugLaunchConfig[];
   debugSessions?: DebugSessionInfo[];
   startedSession?: DebugSessionInfo;
@@ -553,6 +583,31 @@ function installAppShellTauriMock(options: AppShellTauriMockOptions) {
         case "scan_workspace":
         case "scan_directory":
           return [];
+        case "read_text_file": {
+          const path = String(args.path);
+          return (
+            options.textFiles?.[path] ?? {
+              path,
+              content: "",
+              version: { modified_ms: 1, len: 0 },
+              too_large: false,
+            }
+          );
+        }
+        case "list_unsaved_backups":
+          return options.recoveryBackups ?? [];
+        case "save_unsaved_backup":
+          return {
+            id: `backup-${String(args.workspaceId)}-${String(args.path)}`,
+            workspace_id: String(args.workspaceId),
+            workspace_root: String(args.workspaceRoot),
+            path: String(args.path),
+            content: String(args.content),
+            version: (args.version ?? null) as FileVersion | null,
+            updated_ms: 10,
+          };
+        case "discard_unsaved_backup":
+          return null;
         case "debug_stack_trace":
           return options.debugStackFrames ?? [];
         case "debug_scopes":
@@ -1362,6 +1417,33 @@ describe("AppShell AppShell helpers", () => {
     expect(onBrowserOpenTarget).toHaveBeenCalledWith("http://localhost:5173");
   });
 
+  test("PanelBody renders recovery backups for settings activity", () => {
+    const renderResult = render(
+      <PanelBody
+        {...panelBodyProps({
+          active: "settings",
+          recoveryState: {
+            ...createRecoveryState(),
+            backups: [
+              {
+                id: "b1",
+                workspace_id: "workspace-a",
+                workspace_root: "/repo-a",
+                path: "src/main.ts",
+                content: "dirty text",
+                version: null,
+                updated_ms: 10,
+              },
+            ],
+            selectedBackupId: "b1",
+          },
+        })}
+      />,
+    );
+
+    expect(renderResult.getByText("src/main.ts")).toBeTruthy();
+  });
+
   test("PanelBody disables browser capture when capture is unavailable", () => {
     const renderResult = render(
       <PanelBody
@@ -1914,6 +1996,77 @@ describe("AppShell AppShell helpers", () => {
     expect(view.activeActivity).toBe("debug");
     expect(view.panelOpen).toBe(true);
     expect(renderResult.getByLabelText("Start debug session")).toBeTruthy();
+  });
+
+  test("AppShell saves a native recovery backup when loaded editor content changes", async () => {
+    const workspaceId = "recovery-edit-contract";
+    const workspaceRoot = "/repo-recovery-edit-contract";
+    const fileVersion = { modified_ms: 7, len: 10 };
+    const tauri = installAppShellTauriMock({
+      workspaceId,
+      workspaceRoot,
+      textFiles: {
+        "src/main.ts": {
+          path: "src/main.ts",
+          content: "saved text",
+          version: fileVersion,
+          too_large: false,
+        },
+      },
+    });
+    resetWorkspaceBootstrapForTests();
+    window.localStorage.clear();
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: workspaceId,
+      workspaces: [
+        {
+          id: workspaceId,
+          path: workspaceRoot,
+          name: workspaceId,
+          pinned: false,
+        },
+      ],
+    });
+    workspaceViewStore.getState().updateView(workspaceId, {
+      activeActivity: "explorer",
+      panelOpen: true,
+      surface: "editor",
+    });
+    workspaceViewStore.getState().updateEditor(workspaceId, () => ({
+      tabs: [
+        {
+          path: "src/main.ts",
+          name: "main.ts",
+          dirty: false,
+          tooLarge: false,
+          version: fileVersion,
+          externalChange: false,
+        },
+      ],
+      activePath: "src/main.ts",
+    }));
+
+    let renderResult!: ReturnType<typeof render>;
+    await act(async () => {
+      renderResult = render(<AppShell />);
+    });
+    const editor = await renderResult.findByLabelText("Mock editor");
+
+    await act(async () => {
+      fireEvent.change(editor, { target: { value: "dirty text" } });
+    });
+    await flushAppShellEffects();
+
+    const backupCall = tauri.invokeCalls.find(
+      (call) => call.command === "save_unsaved_backup",
+    );
+    expect(backupCall?.args).toEqual({
+      workspaceRoot,
+      workspaceId,
+      path: "src/main.ts",
+      content: "dirty text",
+      version: fileVersion,
+    });
   });
 
   test("AppShell opens Extensions rail and loads workspace extension statuses", async () => {

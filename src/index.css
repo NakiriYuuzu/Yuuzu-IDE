@@ -747,6 +747,81 @@ button {
   font-size: 11px;
 }
 
+.panel-note {
+  margin: 8px 10px 2px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--c-attr);
+  background: color-mix(in srgb, var(--chrome) 74%, transparent);
+  font-size: 12px;
+}
+
+.recovery-row {
+  height: auto;
+  min-height: 50px;
+  align-items: stretch;
+  gap: 8px;
+  padding: 6px 6px 6px 10px;
+  white-space: normal;
+}
+
+.recovery-row.sel::before {
+  top: 6px;
+  bottom: 6px;
+  height: auto;
+}
+
+.recovery-row-main {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+.recovery-row-main .nm,
+.recovery-preview {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recovery-row-main .nm {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.recovery-meta {
+  color: var(--txt-faint);
+  font-size: 10.5px;
+}
+
+.recovery-preview {
+  max-width: 100%;
+  color: var(--txt-dim);
+  font-size: 11px;
+}
+
+.recovery-row-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.recovery-row-actions .iconbtn {
+  width: 24px;
+  height: 24px;
+}
+
+.recovery-row-actions .iconbtn svg {
+  width: 14px;
+  height: 14px;
+}
+
 .tree-item {
   position: relative;
 }
