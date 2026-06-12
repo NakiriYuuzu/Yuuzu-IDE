@@ -4,10 +4,36 @@ use std::{
     collections::HashMap,
     io::{Read, Write},
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{mpsc, Arc, Mutex},
     thread,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter};
+
+const OUTPUT_COALESCE_WINDOW: Duration = Duration::from_millis(10);
+const MAX_COALESCED_CHUNK_BYTES: usize = 64 * 1024;
+
+fn next_coalesced_chunk(
+    receiver: &mpsc::Receiver<String>,
+    window: Duration,
+    max_chunk_bytes: usize,
+) -> Option<String> {
+    let mut combined = receiver.recv().ok()?;
+    let deadline = Instant::now() + window;
+
+    while combined.len() < max_chunk_bytes {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match receiver.recv_timeout(remaining) {
+            Ok(chunk) => combined.push_str(&chunk),
+            Err(_) => break,
+        }
+    }
+
+    Some(combined)
+}
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct TerminalSessionInfo {
@@ -196,8 +222,7 @@ impl TerminalState {
         }));
         let killer = Arc::new(Mutex::new(child.clone_killer()));
 
-        let output_session_id = info.id.clone();
-        let output_app = app.clone();
+        let (chunk_tx, chunk_rx) = mpsc::channel::<String>();
         thread::spawn(move || {
             let mut buffer = [0_u8; 4096];
             loop {
@@ -205,15 +230,27 @@ impl TerminalState {
                     Ok(0) | Err(_) => break,
                     Ok(read) => {
                         let chunk = String::from_utf8_lossy(&buffer[..read]).into_owned();
-                        let _ = output_app.emit(
-                            "workspace://terminal-output",
-                            TerminalOutputEvent {
-                                session_id: output_session_id.clone(),
-                                chunk,
-                            },
-                        );
+                        if chunk_tx.send(chunk).is_err() {
+                            break;
+                        }
                     }
                 }
+            }
+        });
+
+        let output_session_id = info.id.clone();
+        let output_app = app.clone();
+        thread::spawn(move || {
+            while let Some(chunk) =
+                next_coalesced_chunk(&chunk_rx, OUTPUT_COALESCE_WINDOW, MAX_COALESCED_CHUNK_BYTES)
+            {
+                let _ = output_app.emit(
+                    "workspace://terminal-output",
+                    TerminalOutputEvent {
+                        session_id: output_session_id.clone(),
+                        chunk,
+                    },
+                );
             }
         });
 
@@ -392,6 +429,53 @@ mod tests {
                 killer: Arc::new(Mutex::new(Box::new(NoopKiller))),
             },
         );
+    }
+
+    #[test]
+    fn coalesces_chunks_arriving_within_one_window() {
+        let (tx, rx) = mpsc::channel();
+        tx.send("one".to_string()).expect("send");
+        tx.send("two".to_string()).expect("send");
+
+        let chunk = super::next_coalesced_chunk(&rx, Duration::from_millis(10), 64 * 1024);
+
+        assert_eq!(chunk.as_deref(), Some("onetwo"));
+    }
+
+    #[test]
+    fn coalescing_returns_none_when_channel_closes_without_output() {
+        let (tx, rx) = mpsc::channel::<String>();
+        drop(tx);
+
+        assert_eq!(
+            super::next_coalesced_chunk(&rx, Duration::from_millis(10), 64 * 1024),
+            None
+        );
+    }
+
+    #[test]
+    fn coalescing_flushes_pending_output_when_channel_closes_mid_window() {
+        let (tx, rx) = mpsc::channel();
+        tx.send("tail".to_string()).expect("send");
+        drop(tx);
+
+        let chunk = super::next_coalesced_chunk(&rx, Duration::from_millis(10), 64 * 1024);
+
+        assert_eq!(chunk.as_deref(), Some("tail"));
+    }
+
+    #[test]
+    fn coalescing_flushes_early_once_max_chunk_bytes_is_reached() {
+        let (tx, rx) = mpsc::channel();
+        tx.send("aaaa".to_string()).expect("send");
+        tx.send("bbbb".to_string()).expect("send");
+        tx.send("cccc".to_string()).expect("send");
+
+        let first = super::next_coalesced_chunk(&rx, Duration::from_secs(5), 8);
+        let second = super::next_coalesced_chunk(&rx, Duration::from_millis(5), 8);
+
+        assert_eq!(first.as_deref(), Some("aaaabbbb"));
+        assert_eq!(second.as_deref(), Some("cccc"));
     }
 
     #[test]

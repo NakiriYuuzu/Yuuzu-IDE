@@ -10,26 +10,15 @@ export type TerminalSessionInfo = {
 export type TerminalViewState = {
   sessions: TerminalSessionInfo[];
   activeTerminalId: string | null;
-  outputBySessionId: Record<string, string>;
-  pendingOutputBySessionId: Record<string, string>;
   pendingExitBySessionId: Record<string, boolean>;
   ignoredSessionIds: Record<string, boolean>;
   cwdInput: string;
 };
 
-const MAX_OUTPUT_CHARS = 120_000;
-
-function appendBoundedOutput(previous: string, chunk: string): string {
-  const output = `${previous}${chunk}`;
-  return output.slice(Math.max(0, output.length - MAX_OUTPUT_CHARS));
-}
-
 export function createTerminalState(): TerminalViewState {
   return {
     sessions: [],
     activeTerminalId: null,
-    outputBySessionId: {},
-    pendingOutputBySessionId: {},
     pendingExitBySessionId: {},
     ignoredSessionIds: {},
     cwdInput: "",
@@ -48,11 +37,8 @@ export function upsertTerminal(
         item.id === session.id ? nextSession : item,
       )
     : [...state.sessions, nextSession];
-  const pendingOutput = state.pendingOutputBySessionId[session.id] ?? "";
-  const pendingOutputBySessionId = { ...state.pendingOutputBySessionId };
   const pendingExitBySessionId = { ...state.pendingExitBySessionId };
   const ignoredSessionIds = { ...state.ignoredSessionIds };
-  delete pendingOutputBySessionId[session.id];
   delete pendingExitBySessionId[session.id];
   delete ignoredSessionIds[session.id];
 
@@ -60,14 +46,6 @@ export function upsertTerminal(
     ...state,
     sessions,
     activeTerminalId: state.activeTerminalId ?? session.id,
-    outputBySessionId: {
-      ...state.outputBySessionId,
-      [session.id]: appendBoundedOutput(
-        state.outputBySessionId[session.id] ?? "",
-        pendingOutput,
-      ),
-    },
-    pendingOutputBySessionId,
     pendingExitBySessionId,
     ignoredSessionIds,
   };
@@ -87,12 +65,8 @@ export function closeTerminal(
   sessionId: string,
 ): TerminalViewState {
   const sessions = state.sessions.filter((session) => session.id !== sessionId);
-  const outputBySessionId = { ...state.outputBySessionId };
-  const pendingOutputBySessionId = { ...state.pendingOutputBySessionId };
   const pendingExitBySessionId = { ...state.pendingExitBySessionId };
   const ignoredSessionIds = { ...state.ignoredSessionIds, [sessionId]: true };
-  delete outputBySessionId[sessionId];
-  delete pendingOutputBySessionId[sessionId];
   delete pendingExitBySessionId[sessionId];
 
   const activeTerminalId =
@@ -104,52 +78,8 @@ export function closeTerminal(
     ...state,
     sessions,
     activeTerminalId,
-    outputBySessionId,
-    pendingOutputBySessionId,
     pendingExitBySessionId,
     ignoredSessionIds,
-  };
-}
-
-export function appendTerminalOutput(
-  state: TerminalViewState,
-  sessionId: string,
-  chunk: string,
-): TerminalViewState {
-  if (!state.sessions.some((session) => session.id === sessionId)) {
-    return state;
-  }
-
-  return {
-    ...state,
-    outputBySessionId: {
-      ...state.outputBySessionId,
-      [sessionId]: appendBoundedOutput(
-        state.outputBySessionId[sessionId] ?? "",
-        chunk,
-      ),
-    },
-  };
-}
-
-export function bufferTerminalOutput(
-  state: TerminalViewState,
-  sessionId: string,
-  chunk: string,
-): TerminalViewState {
-  if (state.ignoredSessionIds[sessionId]) {
-    return state;
-  }
-
-  return {
-    ...state,
-    pendingOutputBySessionId: {
-      ...state.pendingOutputBySessionId,
-      [sessionId]: appendBoundedOutput(
-        state.pendingOutputBySessionId[sessionId] ?? "",
-        chunk,
-      ),
-    },
   };
 }
 

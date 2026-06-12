@@ -33,6 +33,10 @@ import {
 } from "../features/database/database-model";
 import { SshTerminalSurface } from "../features/remote/SshTerminalSurface";
 import {
+  clearTerminalReplayOutput,
+  replayTerminalOutput,
+} from "../features/terminal/terminal-replay-buffer";
+import {
   createRemoteState,
   type RemoteHostProfile,
   type RemoteViewState,
@@ -59,6 +63,7 @@ import {
   exportDatabaseQueryResultRequest,
   handleSshTerminalExitEvent,
   handleSshTerminalOutputEvent,
+  handleTerminalOutputEvent,
   knownWorkspaceIdForSshTerminal,
   remoteTransferFileName,
   activeDebugLineForFile,
@@ -240,6 +245,17 @@ function setRemote(
   update: (state: RemoteViewState) => RemoteViewState,
 ): void {
   workspaceViewStore.getState().updateRemote(workspaceId, update);
+}
+
+function terminalSession(id: string, workspaceId: string) {
+  return {
+    id,
+    workspace_id: workspaceId,
+    name: "zsh 1",
+    cwd: "/repo",
+    shell: "/bin/zsh",
+    running: true,
+  };
 }
 
 function remoteHost(
@@ -972,7 +988,6 @@ describe("AppShell AppShell helpers", () => {
       renderResult = render(
         <SshTerminalSurface
           state={state}
-          output="boot"
           onActivate={onActivate}
           onInput={onInput}
           onNewTerminal={onNewTerminal}
@@ -1062,6 +1077,113 @@ describe("AppShell AppShell helpers", () => {
     expect(knownWorkspaceIdForSshTerminal("edge:ssh-1")).toBeNull();
   });
 
+  test("handleTerminalOutputEvent appends known session chunks to the replay buffer", () => {
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: "terminal-output-a",
+      workspaces: [
+        {
+          id: "terminal-output-a",
+          path: "/repo-terminal-output-a",
+          name: "terminal-output-a",
+          pinned: false,
+        },
+      ],
+    });
+    workspaceViewStore
+      .getState()
+      .updateTerminal("terminal-output-a", (terminal) => ({
+        ...terminal,
+        sessions: [terminalSession("terminal-output-a:terminal-1", "terminal-output-a")],
+      }));
+    clearTerminalReplayOutput("terminal-output-a:terminal-1");
+
+    handleTerminalOutputEvent({
+      session_id: "terminal-output-a:terminal-1",
+      chunk: "known\n",
+    });
+
+    expect(replayTerminalOutput("terminal-output-a:terminal-1")).toBe(
+      "known\n",
+    );
+    clearTerminalReplayOutput("terminal-output-a:terminal-1");
+  });
+
+  test("handleTerminalOutputEvent buffers boot output for a registered workspace before upsert", () => {
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: "terminal-boot-a",
+      workspaces: [
+        {
+          id: "terminal-boot-a",
+          path: "/repo-terminal-boot-a",
+          name: "terminal-boot-a",
+          pinned: false,
+        },
+      ],
+    });
+    clearTerminalReplayOutput("terminal-boot-a:terminal-1");
+
+    handleTerminalOutputEvent({
+      session_id: "terminal-boot-a:terminal-1",
+      chunk: "boot\n",
+    });
+
+    expect(replayTerminalOutput("terminal-boot-a:terminal-1")).toBe("boot\n");
+    clearTerminalReplayOutput("terminal-boot-a:terminal-1");
+  });
+
+  test("handleTerminalOutputEvent drops output for unregistered workspaces", () => {
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: "terminal-known-a",
+      workspaces: [
+        {
+          id: "terminal-known-a",
+          path: "/repo-terminal-known-a",
+          name: "terminal-known-a",
+          pinned: false,
+        },
+      ],
+    });
+    clearTerminalReplayOutput("terminal-unknown-z:terminal-1");
+
+    handleTerminalOutputEvent({
+      session_id: "terminal-unknown-z:terminal-1",
+      chunk: "lost\n",
+    });
+
+    expect(replayTerminalOutput("terminal-unknown-z:terminal-1")).toBe("");
+  });
+
+  test("handleTerminalOutputEvent drops output for locally closed sessions", () => {
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: "terminal-closed-a",
+      workspaces: [
+        {
+          id: "terminal-closed-a",
+          path: "/repo-terminal-closed-a",
+          name: "terminal-closed-a",
+          pinned: false,
+        },
+      ],
+    });
+    workspaceViewStore
+      .getState()
+      .updateTerminal("terminal-closed-a", (terminal) => ({
+        ...terminal,
+        ignoredSessionIds: {
+          ...terminal.ignoredSessionIds,
+          "terminal-closed-a:terminal-1": true,
+        },
+      }));
+    clearTerminalReplayOutput("terminal-closed-a:terminal-1");
+
+    handleTerminalOutputEvent({
+      session_id: "terminal-closed-a:terminal-1",
+      chunk: "late\n",
+    });
+
+    expect(replayTerminalOutput("terminal-closed-a:terminal-1")).toBe("");
+  });
+
   test("handleSshTerminalOutputEvent buffers unknown session by owning remote host", () => {
     workspaceStore.getState().setRegistry({
       active_workspace_id: "listener-workspace-b",
@@ -1089,19 +1211,15 @@ describe("AppShell AppShell helpers", () => {
       hosts: [remoteHost({ id: "worker", workspace_root: "/repo-listener-b" })],
     }));
 
+    clearTerminalReplayOutput("edge:ssh-1");
+
     handleSshTerminalOutputEvent({
       session_id: "edge:ssh-1",
       chunk: "boot\n",
     });
 
-    const ownerRemote = workspaceViewStore
-      .getState()
-      .viewFor("listener-workspace-a").remote;
-    const activeRemote = workspaceViewStore
-      .getState()
-      .viewFor("listener-workspace-b").remote;
-    expect(ownerRemote.pendingSshOutputBySessionId["edge:ssh-1"]).toBe("boot\n");
-    expect(activeRemote.pendingSshOutputBySessionId["edge:ssh-1"]).toBeUndefined();
+    expect(replayTerminalOutput("edge:ssh-1")).toBe("boot\n");
+    clearTerminalReplayOutput("edge:ssh-1");
   });
 
   test("handleSshTerminalOutputEvent drops truly unknown sessions", () => {
@@ -1133,17 +1251,14 @@ describe("AppShell AppShell helpers", () => {
       ],
     }));
 
+    clearTerminalReplayOutput("missing:ssh-1");
+
     handleSshTerminalOutputEvent({
       session_id: "missing:ssh-1",
       chunk: "lost\n",
     });
 
-    const activeRemote = workspaceViewStore
-      .getState()
-      .viewFor("unknown-output-workspace-b").remote;
-    expect(
-      activeRemote.pendingSshOutputBySessionId["missing:ssh-1"],
-    ).toBeUndefined();
+    expect(replayTerminalOutput("missing:ssh-1")).toBe("");
   });
 
   test("handleSshTerminalOutputEvent drops ambiguous remote host ids", () => {
@@ -1177,19 +1292,14 @@ describe("AppShell AppShell helpers", () => {
       ],
     }));
 
+    clearTerminalReplayOutput("edge:ssh-1");
+
     handleSshTerminalOutputEvent({
       session_id: "edge:ssh-1",
       chunk: "ambiguous\n",
     });
 
-    const firstRemote = workspaceViewStore
-      .getState()
-      .viewFor("ambiguous-output-workspace-a").remote;
-    const secondRemote = workspaceViewStore
-      .getState()
-      .viewFor("ambiguous-output-workspace-b").remote;
-    expect(firstRemote.pendingSshOutputBySessionId["edge:ssh-1"]).toBeUndefined();
-    expect(secondRemote.pendingSshOutputBySessionId["edge:ssh-1"]).toBeUndefined();
+    expect(replayTerminalOutput("edge:ssh-1")).toBe("");
   });
 
   test("handleSshTerminalExitEvent buffers unknown session by owning remote host", () => {

@@ -1,4 +1,3 @@
-import type { Terminal as XtermTerminal } from "@xterm/xterm";
 import { useEffect, useRef, useState } from "react";
 
 import { loadXterm } from "./load-xterm";
@@ -10,29 +9,29 @@ import {
   createTerminalCleanup,
   createTerminalInputCleanup,
 } from "./terminal-lifecycle";
+import {
+  replayTerminalOutput,
+  subscribeTerminalChunks,
+} from "./terminal-replay-buffer";
 
 type TerminalTabProps = {
   sessionId: string;
-  output: string;
   onInput: (sessionId: string, data: string) => void;
 };
 
-export function TerminalTab({ sessionId, output, onInput }: TerminalTabProps) {
+export function TerminalTab({ sessionId, onInput }: TerminalTabProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const terminalRef = useRef<XtermTerminal | null>(null);
-  const writtenRef = useRef("");
-  const latestOutputRef = useRef(output);
   const onInputRef = useRef(onInput);
   const [loadFailure, setLoadFailure] =
     useState<TerminalLoadFailureCopy | null>(null);
 
-  latestOutputRef.current = output;
   onInputRef.current = onInput;
 
   useEffect(() => {
     let disposed = false;
     let cleanup: (() => void) | undefined;
     let inputCleanup: (() => void) | undefined;
+    let unsubscribeChunks: (() => void) | undefined;
 
     setLoadFailure(null);
 
@@ -45,7 +44,6 @@ export function TerminalTab({ sessionId, output, onInput }: TerminalTabProps) {
         }
 
         const terminal = new Terminal({
-          convertEol: true,
           cursorBlink: true,
           fontSize: 13,
           theme: {
@@ -61,10 +59,15 @@ export function TerminalTab({ sessionId, output, onInput }: TerminalTabProps) {
         terminal.open(hostRef.current);
         fitAddon.fit();
 
-        terminalRef.current = terminal;
         cleanup = createTerminalCleanup(terminal);
-        terminal.write(latestOutputRef.current);
-        writtenRef.current = latestOutputRef.current;
+
+        const replay = replayTerminalOutput(sessionId);
+        if (replay) {
+          terminal.write(replay);
+        }
+        unsubscribeChunks = subscribeTerminalChunks(sessionId, (chunk) => {
+          terminal.write(chunk);
+        });
 
         const dataDisposable = terminal.onData((data) => {
           onInputRef.current(sessionId, data);
@@ -76,6 +79,7 @@ export function TerminalTab({ sessionId, output, onInput }: TerminalTabProps) {
         cleanup = createTerminalCleanup(terminal, resizeObserver);
       } catch (error) {
         if (!disposed) {
+          unsubscribeChunks?.();
           inputCleanup?.();
           cleanup?.();
           setLoadFailure(terminalLoadFailureCopy(error));
@@ -87,28 +91,11 @@ export function TerminalTab({ sessionId, output, onInput }: TerminalTabProps) {
 
     return () => {
       disposed = true;
+      unsubscribeChunks?.();
       inputCleanup?.();
       cleanup?.();
-      terminalRef.current = null;
-      writtenRef.current = "";
     };
   }, [sessionId]);
-
-  useEffect(() => {
-    const terminal = terminalRef.current;
-    if (!terminal) {
-      return;
-    }
-
-    const previous = writtenRef.current;
-    if (output.startsWith(previous)) {
-      terminal.write(output.slice(previous.length));
-    } else {
-      terminal.clear();
-      terminal.write(output);
-    }
-    writtenRef.current = output;
-  }, [output]);
 
   if (loadFailure) {
     return (

@@ -129,9 +129,7 @@ import {
   writeSshTerminal,
 } from "../features/remote/remote-api";
 import {
-  appendSshTerminalOutput,
   bufferSshTerminalExit,
-  bufferSshTerminalOutput,
   closeSshTerminal,
   markRemoteConnection,
   markSshTerminalExited,
@@ -437,14 +435,17 @@ import {
 } from "../features/terminal/terminal-api";
 import {
   activateTerminal,
-  appendTerminalOutput,
   bufferTerminalExit,
-  bufferTerminalOutput,
   closeTerminal,
   markTerminalExited,
   type TerminalSessionInfo,
   upsertTerminal,
 } from "../features/terminal/terminal-model";
+import {
+  appendTerminalReplayOutput,
+  clearTerminalReplayOutput,
+  replayTerminalOutput,
+} from "../features/terminal/terminal-replay-buffer";
 import {
   useWorkspaceViewStore,
   workspaceViewStore,
@@ -1952,6 +1953,38 @@ type SshTerminalExitEvent = {
   session_id: string;
 };
 
+export function handleTerminalOutputEvent(event: {
+  session_id: string;
+  chunk: string;
+}): void {
+  const workspaceId = knownWorkspaceIdForTerminal(event.session_id);
+  if (!workspaceId) {
+    return;
+  }
+
+  const currentView = workspaceViewStore.getState().viewFor(workspaceId);
+  if (currentView.terminal.ignoredSessionIds[event.session_id]) {
+    return;
+  }
+
+  const hasSession = currentView.terminal.sessions.some(
+    (session) => session.id === event.session_id,
+  );
+  if (!hasSession) {
+    const derivedWorkspaceId = workspaceIdFromTerminalSessionId(
+      event.session_id,
+    );
+    if (
+      derivedWorkspaceId !== workspaceId ||
+      !hasRegisteredWorkspace(workspaceId)
+    ) {
+      return;
+    }
+  }
+
+  appendTerminalReplayOutput(event.session_id, event.chunk);
+}
+
 export function handleSshTerminalOutputEvent(
   event: SshTerminalOutputEvent,
 ): void {
@@ -1961,15 +1994,11 @@ export function handleSshTerminalOutputEvent(
   }
 
   const currentView = workspaceViewStore.getState().viewFor(workspaceId);
-  const hasSession = currentView.remote.sshSessions.some(
-    (session) => session.id === event.session_id,
-  );
+  if (currentView.remote.ignoredSshSessionIds[event.session_id]) {
+    return;
+  }
 
-  workspaceViewStore.getState().updateRemote(workspaceId, (remote) =>
-    hasSession
-      ? appendSshTerminalOutput(remote, event.session_id, event.chunk)
-      : bufferSshTerminalOutput(remote, event.session_id, event.chunk),
-  );
+  appendTerminalReplayOutput(event.session_id, event.chunk);
 }
 
 export function handleSshTerminalExitEvent(
@@ -2744,9 +2773,6 @@ export function AppShell() {
     terminalSessions[0] ??
     null;
   const activeTerminalId = activeTerminal?.id ?? null;
-  const activeTerminalOutput = activeTerminal
-    ? (view.terminal.outputBySessionId[activeTerminal.id] ?? "")
-    : "";
   const activeTerminalName = activeTerminal?.name ?? "terminal";
   const activeSshSession =
     view.remote.sshSessions.find(
@@ -2754,9 +2780,6 @@ export function AppShell() {
     ) ??
     view.remote.sshSessions[0] ??
     null;
-  const activeSshOutput = activeSshSession
-    ? (view.remote.sshOutputBySessionId[activeSshSession.id] ?? "")
-    : "";
   const activeDebugSession = activeDebugSessionForState(view.debug);
   const activeDebugOutput = activeDebugConsoleText(view.debug);
   const activeRemoteHost =
@@ -2930,7 +2953,9 @@ export function AppShell() {
         selectedDiff: selectedGitDiff,
         activeFileDiagnostics,
         terminalSession: activeTerminal,
-        terminalOutput: activeTerminalOutput,
+        terminalOutput: activeTerminal
+          ? replayTerminalOutput(activeTerminal.id)
+          : "",
       }),
     [
       activeWorkspace?.path,
@@ -2941,7 +2966,6 @@ export function AppShell() {
       selectedGitDiff,
       activeFileDiagnostics,
       activeTerminal,
-      activeTerminalOutput,
     ],
   );
 
@@ -3058,40 +3082,7 @@ export function AppShell() {
         return;
       }
 
-      const workspaceId = knownWorkspaceIdForTerminal(event.session_id);
-      if (!workspaceId) {
-        return;
-      }
-
-      const currentView = workspaceViewStore.getState().viewFor(workspaceId);
-      const hasSession = currentView.terminal.sessions.some(
-        (session) => session.id === event.session_id,
-      );
-      const derivedWorkspaceId = workspaceIdFromTerminalSessionId(
-        event.session_id,
-      );
-
-      if (hasSession) {
-        workspaceViewStore
-          .getState()
-          .updateTerminal(workspaceId, (terminal) =>
-            appendTerminalOutput(terminal, event.session_id, event.chunk),
-          );
-        return;
-      }
-
-      if (
-        derivedWorkspaceId !== workspaceId ||
-        !hasRegisteredWorkspace(workspaceId)
-      ) {
-        return;
-      }
-
-      workspaceViewStore
-        .getState()
-        .updateTerminal(workspaceId, (terminal) =>
-          bufferTerminalOutput(terminal, event.session_id, event.chunk),
-        );
+      handleTerminalOutputEvent(event);
     });
     const exitUnlisten = onTerminalExit((event) => {
       if (disposed) {
@@ -4571,6 +4562,7 @@ export function AppShell() {
     updateTerminal(workspaceId, (terminal) =>
       closeTerminal(terminal, sessionId),
     );
+    clearTerminalReplayOutput(sessionId);
   }
 
   async function restartTerminalById(sessionId: string) {
@@ -4605,6 +4597,7 @@ export function AppShell() {
     updateTerminal(workspaceId, (terminal) =>
       closeTerminal(terminal, sessionId),
     );
+    clearTerminalReplayOutput(sessionId);
 
     try {
       const session = await spawnTerminalSession({
@@ -5882,6 +5875,7 @@ export function AppShell() {
     try {
       await closeSshTerminalSession(sessionId);
       updateRemote(workspaceId, (remote) => closeSshTerminal(remote, sessionId));
+      clearTerminalReplayOutput(sessionId);
     } catch (error) {
       updateRemote(workspaceId, (remote) => ({
         ...remote,
@@ -8673,7 +8667,6 @@ export function AppShell() {
                         <TerminalTab
                           key={activeTerminal.id}
                           sessionId={activeTerminal.id}
-                          output={activeTerminalOutput}
                           onInput={writeTerminalInput}
                         />
                       </Suspense>
@@ -8701,7 +8694,6 @@ export function AppShell() {
               ) : surface === "ssh-terminal" ? (
                 <SshTerminalSurface
                   state={view.remote}
-                  output={activeSshOutput}
                   onActivate={(sessionId) =>
                     updateRemote(activeWorkspaceId, (remote) => ({
                       ...remote,

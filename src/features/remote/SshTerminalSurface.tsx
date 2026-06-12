@@ -13,7 +13,6 @@ const TerminalTab = lazy(() =>
 
 type SshTerminalSurfaceProps = {
   state: RemoteViewState;
-  output: string;
   onActivate: (sessionId: string) => void;
   onInput: (sessionId: string, data: string) => void;
   onNewTerminal: () => void;
@@ -22,7 +21,6 @@ type SshTerminalSurfaceProps = {
 
 export function SshTerminalSurface({
   state,
-  output,
   onActivate,
   onInput,
   onNewTerminal,
@@ -100,7 +98,6 @@ export function SshTerminalSurface({
         <TerminalTab
           key={activeSession.id}
           sessionId={activeSession.id}
-          output={output}
           onInput={onInput}
         />
       </Suspense>

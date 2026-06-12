@@ -4,9 +4,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   appendRemoteCommandOutput,
-  appendSshTerminalOutput,
   bufferSshTerminalExit,
-  bufferSshTerminalOutput,
   closeSshTerminal,
   createRemoteState,
   markRemoteConnection,
@@ -18,6 +16,13 @@ import {
 } from "./remote-model";
 
 describe("remote model", () => {
+  test("remote view state no longer owns ssh scrollback output", () => {
+    const keys = Object.keys(createRemoteState());
+
+    expect(keys).not.toContain("sshOutputBySessionId");
+    expect(keys).not.toContain("pendingSshOutputBySessionId");
+  });
+
   test("replaces hosts, selects the first host initially, and keeps active host when present", () => {
     const edge = {
       id: "edge",
@@ -46,31 +51,6 @@ describe("remote model", () => {
 
     expect(first.activeHostId).toBe("edge");
     expect(second.activeHostId).toBe("edge");
-  });
-
-  test("SSH output is bounded and buffered late output is flushed on upsert", () => {
-    const buffered = bufferSshTerminalOutput(
-      createRemoteState(),
-      "edge:ssh-1",
-      "boot\n",
-    );
-    const state = upsertSshTerminal(buffered, {
-      id: "edge:ssh-1",
-      host_id: "edge",
-      workspace_id: "workspace",
-      name: "deploy@edge",
-      running: true,
-    });
-    const withOutput = appendSshTerminalOutput(
-      appendSshTerminalOutput(state, "edge:ssh-1", "a".repeat(120_000)),
-      "edge:ssh-1",
-      "tail",
-    );
-
-    expect(state.sshOutputBySessionId["edge:ssh-1"]).toBe("boot\n");
-    expect(withOutput.sshOutputBySessionId["edge:ssh-1"]).toHaveLength(120_000);
-    expect(withOutput.sshOutputBySessionId["edge:ssh-1"]).toEndWith("tail");
-    expect(withOutput.pendingSshOutputBySessionId["edge:ssh-1"]).toBeUndefined();
   });
 
   test("upserting a later SSH terminal makes it active", () => {
@@ -108,7 +88,7 @@ describe("remote model", () => {
     expect(state.pendingSshExitBySessionId["edge:ssh-1"]).toBeUndefined();
   });
 
-  test("closing a terminal ignores late output and exit for that session", () => {
+  test("closing a terminal ignores late exit for that session", () => {
     const closed = closeSshTerminal(
       upsertSshTerminal(createRemoteState(), {
         id: "edge:ssh-1",
@@ -119,10 +99,9 @@ describe("remote model", () => {
       }),
       "edge:ssh-1",
     );
-    const withLateOutput = bufferSshTerminalOutput(closed, "edge:ssh-1", "late");
-    const withLateExit = bufferSshTerminalExit(withLateOutput, "edge:ssh-1");
+    const withLateExit = bufferSshTerminalExit(closed, "edge:ssh-1");
 
-    expect(withLateExit.pendingSshOutputBySessionId["edge:ssh-1"]).toBeUndefined();
+    expect(withLateExit.ignoredSshSessionIds["edge:ssh-1"]).toBe(true);
     expect(withLateExit.pendingSshExitBySessionId["edge:ssh-1"]).toBeUndefined();
   });
 

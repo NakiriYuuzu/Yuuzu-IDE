@@ -639,11 +639,6 @@ describe("createWorkspaceViewStore", () => {
     }).toThrow(TypeError);
 
     expect(() => {
-      unknownView.terminal.pendingOutputBySessionId["unknown:terminal-1"] =
-        "boot";
-    }).toThrow(TypeError);
-
-    expect(() => {
       unknownView.terminal.pendingExitBySessionId["unknown:terminal-1"] = true;
     }).toThrow(TypeError);
 
@@ -680,8 +675,6 @@ describe("createWorkspaceViewStore", () => {
       terminal: {
         sessions: [],
         activeTerminalId: null,
-        outputBySessionId: {},
-        pendingOutputBySessionId: {},
         pendingExitBySessionId: {},
         ignoredSessionIds: {},
         cwdInput: "",

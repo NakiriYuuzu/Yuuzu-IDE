@@ -102,8 +102,6 @@ export type RemoteViewState = {
   connectionByHostId: Record<string, RemoteConnectionSnapshot>;
   sshSessions: SshTerminalSessionInfo[];
   activeSshSessionId: string | null;
-  sshOutputBySessionId: Record<string, string>;
-  pendingSshOutputBySessionId: Record<string, string>;
   pendingSshExitBySessionId: Record<string, true>;
   ignoredSshSessionIds: Record<string, true>;
   sftpPathByHostId: Record<string, string>;
@@ -124,8 +122,6 @@ export function createRemoteState(): RemoteViewState {
     connectionByHostId: {},
     sshSessions: [],
     activeSshSessionId: null,
-    sshOutputBySessionId: {},
-    pendingSshOutputBySessionId: {},
     pendingSshExitBySessionId: {},
     ignoredSshSessionIds: {},
     sftpPathByHostId: {},
@@ -202,74 +198,16 @@ export function upsertSshTerminal(
         item.id === session.id ? nextSession : item,
       )
     : [...state.sshSessions, nextSession];
-  const pendingOutput = state.pendingSshOutputBySessionId[session.id] ?? "";
 
   return {
     ...state,
     sshSessions: sessions,
     activeSshSessionId: session.id,
-    sshOutputBySessionId: {
-      ...state.sshOutputBySessionId,
-      [session.id]: appendBoundedOutput(
-        state.sshOutputBySessionId[session.id] ?? "",
-        pendingOutput,
-      ),
-    },
-    pendingSshOutputBySessionId: withoutKey(
-      state.pendingSshOutputBySessionId,
-      session.id,
-    ),
     pendingSshExitBySessionId: withoutKey(
       state.pendingSshExitBySessionId,
       session.id,
     ),
     ignoredSshSessionIds: withoutKey(state.ignoredSshSessionIds, session.id),
-  };
-}
-
-export function appendSshTerminalOutput(
-  state: RemoteViewState,
-  sessionId: string,
-  chunk: string,
-): RemoteViewState {
-  if (!state.sshSessions.some((session) => session.id === sessionId)) {
-    return state;
-  }
-
-  return {
-    ...state,
-    sshOutputBySessionId: {
-      ...state.sshOutputBySessionId,
-      [sessionId]: appendBoundedOutput(
-        state.sshOutputBySessionId[sessionId] ?? "",
-        chunk,
-      ),
-    },
-  };
-}
-
-export function bufferSshTerminalOutput(
-  state: RemoteViewState,
-  sessionId: string,
-  chunk: string,
-): RemoteViewState {
-  if (state.ignoredSshSessionIds[sessionId]) {
-    return state;
-  }
-
-  if (state.sshSessions.some((session) => session.id === sessionId)) {
-    return appendSshTerminalOutput(state, sessionId, chunk);
-  }
-
-  return {
-    ...state,
-    pendingSshOutputBySessionId: {
-      ...state.pendingSshOutputBySessionId,
-      [sessionId]: appendBoundedOutput(
-        state.pendingSshOutputBySessionId[sessionId] ?? "",
-        chunk,
-      ),
-    },
   };
 }
 
@@ -325,11 +263,6 @@ export function closeSshTerminal(
       state.activeSshSessionId === sessionId
         ? (sshSessions[sshSessions.length - 1]?.id ?? null)
         : state.activeSshSessionId,
-    sshOutputBySessionId: withoutKey(state.sshOutputBySessionId, sessionId),
-    pendingSshOutputBySessionId: withoutKey(
-      state.pendingSshOutputBySessionId,
-      sessionId,
-    ),
     pendingSshExitBySessionId: withoutKey(
       state.pendingSshExitBySessionId,
       sessionId,
