@@ -1039,7 +1039,8 @@ Rust, lint, format, Tauri debug build, and real adapter smoke checks pass.
 Final acceptance is complete because Python through `debugpy` and compiled C
 through `lldb-dap` both reach fixture breakpoints and return the expected
 `counter = 3` variable, and the AppShell stopped-event path now loads live
-scopes and variables into DebugPanel state.
+scopes and variables into DebugPanel state without preserving stale variables
+from older stops.
 
 Completed progress:
 
@@ -1062,6 +1063,9 @@ Completed progress:
 - The completion follow-up fixed AppShell stopped-event live variable loading
   so stack frames, scopes, and variables are refreshed from backend commands
   under the existing session sequence guard.
+- The snapshot follow-up replaced session-scoped debug stack/scope/variable
+  snapshots on stopped refreshes, so partial scope or variable failures clear
+  older live locals instead of merging stale references.
 
 Important files and commit milestones:
 
@@ -1082,13 +1086,17 @@ Important files and commit milestones:
   `a00617e`, `9661369`, and `1af3aa9`.
 - Node 11 hardening commits after review: `b9fb230`, `d5da874`, `fad25b7`,
   `55273a7`, `cb2e327`, `efa33a0`, `ef2287c`, `2500b61`, `268f742`,
-  `d46b6f3`, `f6f8599`, `f9aa1af`, and `353d965`.
+  `d46b6f3`, `f6f8599`, `f9aa1af`, `353d965`, and `2533c67`.
 
 Verification outcomes:
 
 - `bun test`: PASS with 338 passed, 0 failed, 964 expect calls across 38 files.
-- `bun test src/app/AppShell.contract.test.tsx`: PASS with 52 passed and 202
-  expect calls after the stopped-event live variable follow-up.
+- `bun test src/app/AppShell.contract.test.tsx`: PASS with 53 passed and 208
+  expect calls after the stopped-event live variable and stale-snapshot
+  follow-ups.
+- Focused Node 11 frontend regression command covering debug model, DebugPanel,
+  EditorTab, activity rail, command palette, workspace view state, and AppShell:
+  PASS with 127 passed and 405 expect calls.
 - `bun run build`: PASS with `tsc && vite build`; Vite chunk-size warnings
   only.
 - `. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml`:

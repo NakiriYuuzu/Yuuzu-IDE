@@ -574,7 +574,7 @@ desktop.
 ### Node 11: Debugging
 
 **Status:** completed and passed. Final results, including the AppShell
-stopped-event live variables follow-up, are recorded in
+stopped-event live variables and stale-snapshot follow-ups, are recorded in
 `docs/architecture/node-11-debugging-results.md`.
 
 **Goal:** add debugging once editor, terminal, and language intelligence are
@@ -753,9 +753,9 @@ Node 9, Node 10, and Node 11 are complete. The next active priority is Node
   tests, focused remote smoke, Tauri debug build, and spec/code-quality reviews.
 - Node 11 verification keeps the Debug panel, launch configs, breakpoints,
   variables, watches, console output, DAP runtime, workspace scoping, Bun/Cargo
-  tests, AppShell stopped-event live variable contracts, clippy, formatting,
-  Tauri debug build, and real adapter smoke covered. Both `debugpy` and
-  `lldb-dap` smoke tests pass and return the expected `counter = 3` variables
-  at their fixture breakpoints.
+  tests, AppShell stopped-event live variable and stale-snapshot contracts,
+  clippy, formatting, Tauri debug build, and real adapter smoke covered. Both
+  `debugpy` and `lldb-dap` smoke tests pass and return the expected
+  `counter = 3` variables at their fixture breakpoints.
 - Node 12 should start from the extension command registry, disable controls,
   performance visibility, and isolation model described above.

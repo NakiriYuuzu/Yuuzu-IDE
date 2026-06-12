@@ -8,13 +8,15 @@ Node 11 implementation Tasks 1-7 are delivered. Fresh verification on
 2026-06-12 confirms both real adapter smoke tests pass: Python through
 `debugpy` and compiled C through Xcode's `lldb-dap`.
 
-The final regression fixes are `f9aa1af` and `353d965`. `f9aa1af` preserves
-variables from real DAP captures when adapters reuse raw `variablesReference`
-handles across stack frames, which was observed with `lldb-dap` frame 524288
-`main` and frame 524289 `start` both exposing Locals as raw reference `1`.
-`353d965` then fixed the AppShell stopped-event path so real stopped sessions
-load stack frames, scopes, and variables into DebugPanel state instead of
-depending on test pre-seeded variables.
+The final regression fixes are `f9aa1af`, `353d965`, and `2533c67`.
+`f9aa1af` preserves variables from real DAP captures when adapters reuse raw
+`variablesReference` handles across stack frames, which was observed with
+`lldb-dap` frame 524288 `main` and frame 524289 `start` both exposing Locals as
+raw reference `1`. `353d965` then fixed the AppShell stopped-event path so real
+stopped sessions load stack frames, scopes, and variables into DebugPanel state
+instead of depending on test pre-seeded variables. `2533c67` replaced
+session-scoped stack/scope/variable snapshots on stopped refreshes so failed or
+missing variable loads cannot leave older locals visible as live data.
 
 ## Scope Delivered
 
@@ -29,7 +31,8 @@ depending on test pre-seeded variables.
   active debug line decoration.
 - AppShell integration through the activity rail, command palette, workspace
   view state, editor surface, debug console surface, backend listener wiring,
-  and live stopped-event stack/scope/variable hydration.
+  live stopped-event stack/scope/variable hydration, and session snapshot
+  replacement for refreshed debug variables.
 - Real adapter smoke fixtures for compiled C through `lldb-dap` and Python
   through `debugpy`.
 
@@ -135,6 +138,23 @@ depending on test pre-seeded variables.
 - Focused regression result: passed with 126 tests and 399 expect calls.
 - Commit evidence: `353d965`.
 
+### Completion follow-up: replace AppShell variable snapshots
+
+- RED command: `bun test src/app/AppShell.contract.test.tsx`.
+- RED result: failed because a newer stopped refresh with a failed variable
+  request left the older `staleCounter` scope and variables in the session
+  state.
+- GREEN command: `bun test src/app/AppShell.contract.test.tsx`.
+- GREEN result: passed with 53 tests and 208 expect calls after AppShell
+  replaced the session stack/scope/variable snapshot for stopped refreshes.
+- Focused regression command: `bun test src/features/debug/debug-model.test.ts src/features/debug/DebugPanel.test.tsx src/features/editor/EditorTab.test.ts src/app/activity-rail.test.tsx src/app/command-palette-model.test.ts src/app/workspace-view-state.test.ts src/app/AppShell.contract.test.tsx`.
+- Focused regression result: passed with 127 tests and 405 expect calls.
+- Build command: `bun run build`.
+- Build result: passed with Vite chunk-size warnings only.
+- Smoke command: `. "$HOME/.cargo/env" && YUZZU_DEBUG_SMOKE=1 cargo test --manifest-path src-tauri/Cargo.toml debug::adapter_smoke_tests -- --ignored --test-threads=1`.
+- Smoke result: passed with 2 tests and 0 failed.
+- Commit evidence: `2533c67`.
+
 ## Agent Review Evidence
 
 - Task 1 review remediation is represented by `b9fb230` and `d5da874`.
@@ -147,6 +167,8 @@ depending on test pre-seeded variables.
   `f9aa1af`.
 - Completion follow-up for the AppShell stopped-event live variables path is
   represented by `353d965`.
+- Completion follow-up for replacing stale session variable snapshots is
+  represented by `2533c67`.
 - Task dispatch required `gpt-5.5` with `xhigh` reasoning and prohibited
   `gpt-5.4`; no repository evidence records a `gpt-5.4` Node 11 agent.
 
@@ -196,8 +218,8 @@ depending on test pre-seeded variables.
   real adapter smoke tests reaching fixture breakpoints.
 - Variables work in the editor: PASS through Rust scripted-adapter runtime
   tests, frontend debug model tests, Debug panel rendering tests, AppShell
-  stopped-event live variable contract tests, and the real `lldb-dap` smoke
-  returning `counter = 3`.
+  stopped-event live variable contract tests, AppShell stale-snapshot
+  replacement tests, and the real `lldb-dap` smoke returning `counter = 3`.
 - Debug sessions are scoped to workspaces: PASS through Rust command/workspace
   guard tests, frontend workspace view state tests, and AppShell event routing
   tests.
