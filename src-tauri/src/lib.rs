@@ -44,6 +44,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::load_settings,
             commands::save_settings,
+            commands::import_keybindings,
             commands::list_workspaces,
             commands::add_workspace,
             commands::switch_workspace,

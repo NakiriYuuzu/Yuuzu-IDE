@@ -25,6 +25,7 @@ type SettingsPanelProps = {
   onRecoveryDiscard: (backupId: string) => void;
   onDiagnosticsRefresh: () => void;
   onKeybindingImportDraftChange: (draft: string) => void;
+  onImportKeybindings: () => void;
 };
 
 const categories: Array<{
@@ -87,15 +88,19 @@ function SettingsMetricSummary({ state }: { state: SettingsViewState }) {
 function KeybindingsSettings({
   state,
   onKeybindingImportDraftChange,
+  onImportKeybindings,
 }: {
   state: SettingsViewState;
   onKeybindingImportDraftChange: (draft: string) => void;
+  onImportKeybindings: () => void;
 }) {
+  const canImport = state.keybindingImportDraft.trim().length > 0;
+
   return (
     <SettingsSummary state={state} title="Keybindings">
       <div className="section-label">
         <span>Import</span>
-        <span className="meta">Available after migration</span>
+        <span className="meta">VS Code JSON</span>
       </div>
       {state.keybindingImportError ? (
         <div className="panel-note">{state.keybindingImportError}</div>
@@ -115,8 +120,9 @@ function KeybindingsSettings({
         <button
           type="button"
           className="btn primary"
-          disabled
+          disabled={!canImport}
           aria-label="Import keybindings"
+          onClick={onImportKeybindings}
         >
           <Keyboard aria-hidden="true" />
           Import keybindings
@@ -136,6 +142,7 @@ export function SettingsPanel({
   onRecoveryDiscard,
   onDiagnosticsRefresh,
   onKeybindingImportDraftChange,
+  onImportKeybindings,
 }: SettingsPanelProps) {
   return (
     <>
@@ -178,6 +185,7 @@ export function SettingsPanel({
             <KeybindingsSettings
               state={state}
               onKeybindingImportDraftChange={onKeybindingImportDraftChange}
+              onImportKeybindings={onImportKeybindings}
             />
           ) : null}
           {state.activeCategory === "updates" ? (

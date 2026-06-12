@@ -13,7 +13,7 @@ use crate::file_system::{self, FileOperationResult, FileVersion, TextFileRead};
 use crate::file_watcher::{FileWatcherState, WatchWorkspaceHandle};
 use crate::metrics::{snapshot, AppMetricInput, AppMetricSnapshot};
 use crate::search::WorkspaceSearchResult;
-use crate::settings::{AppSettings, SettingsStore};
+use crate::settings::{import_vscode_keybindings, AppSettings, SettingsStore};
 use crate::tasks::{TaskRun, TaskState, WorkspaceTask};
 use crate::terminal::{TerminalSessionInfo, TerminalState};
 use crate::workspace::{Workspace, WorkspaceRegistry};
@@ -567,10 +567,24 @@ impl AppState {
     }
 
     pub fn save_settings(&self, settings: AppSettings) -> Result<AppSettings, String> {
+        let settings = settings.normalized();
         let mut current = self.settings.lock().map_err(|err| err.to_string())?;
         self.settings_store.save(&settings)?;
         *current = settings.clone();
         Ok(settings)
+    }
+
+    pub fn import_keybindings(&self, source: &str, content: String) -> Result<AppSettings, String> {
+        if source != "vscode" {
+            return Err(format!("unsupported keybinding import source: {source}"));
+        }
+
+        let current = {
+            let settings = self.settings.lock().map_err(|err| err.to_string())?;
+            settings.clone()
+        };
+        let imported = import_vscode_keybindings(current, &content)?;
+        self.save_settings(imported)
     }
 
     pub fn open_workspace_path(&self, path: PathBuf) -> Result<WorkspaceRegistry, String> {
@@ -1170,6 +1184,15 @@ pub fn save_settings(
     settings: AppSettings,
 ) -> Result<AppSettings, String> {
     state.save_settings(settings)
+}
+
+#[tauri::command]
+pub fn import_keybindings(
+    state: State<'_, AppState>,
+    source: String,
+    content: String,
+) -> Result<AppSettings, String> {
+    state.import_keybindings(&source, content)
 }
 
 #[tauri::command]
@@ -2563,6 +2586,7 @@ mod tests {
         AppSettings {
             density: density.to_string(),
             color_theme: color_theme.to_string(),
+            ..AppSettings::default()
         }
     }
 
@@ -2643,6 +2667,47 @@ mod tests {
         let reloaded = AppState::new(temp.path()).expect("reload");
 
         assert_eq!(reloaded.settings_snapshot().expect("settings"), changed);
+    }
+
+    #[test]
+    fn app_state_imports_vscode_keybindings_and_persists_settings() {
+        let temp = tempdir().expect("temp dir");
+        let state = AppState::new(temp.path()).expect("state");
+
+        let imported = state
+            .import_keybindings(
+                "vscode",
+                r#"[{"key":"cmd+k","command":"workbench.action.showCommands"}]"#.to_string(),
+            )
+            .expect("import keybindings");
+
+        assert_eq!(
+            imported.keybindings,
+            vec![crate::settings::KeybindingSetting {
+                command_id: "open-command-palette".to_string(),
+                key: "cmd+k".to_string(),
+                source: "vscode".to_string(),
+            }]
+        );
+        assert_eq!(state.settings_snapshot().expect("settings"), imported);
+
+        let reloaded = AppState::new(temp.path()).expect("reload");
+        assert_eq!(reloaded.settings_snapshot().expect("settings"), imported);
+    }
+
+    #[test]
+    fn app_state_rejects_unsupported_keybinding_import_source() {
+        let temp = tempdir().expect("temp dir");
+        let state = AppState::new(temp.path()).expect("state");
+        let original = state.settings_snapshot().expect("settings");
+
+        let result = state.import_keybindings("jetbrains", "[]".to_string());
+
+        assert_eq!(
+            result.expect_err("unsupported source"),
+            "unsupported keybinding import source: jetbrains"
+        );
+        assert_eq!(state.settings_snapshot().expect("settings"), original);
     }
 
     #[test]

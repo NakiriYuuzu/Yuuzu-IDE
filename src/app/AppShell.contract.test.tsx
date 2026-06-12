@@ -502,6 +502,8 @@ type AppShellTauriMockOptions = {
   recoveryBackups?: UnsavedBackup[];
   settings?: AppSettingsInput;
   settingsResponses?: Array<AppSettingsInput | Promise<AppSettingsInput>>;
+  importKeybindingsResponse?: AppSettingsInput | Promise<AppSettingsInput>;
+  importKeybindingsError?: unknown;
   metricSnapshot?: AppMetricSnapshot;
   metricSnapshotResponses?: Array<AppMetricSnapshot | Promise<AppMetricSnapshot>>;
   diagnosticEvents?: DiagnosticEvent[];
@@ -639,6 +641,49 @@ function installAppShellTauriMock(options: AppShellTauriMockOptions) {
           );
         case "save_settings":
           return args.settings;
+        case "import_keybindings": {
+          if (options.importKeybindingsError) {
+            throw options.importKeybindingsError;
+          }
+          if (options.importKeybindingsResponse) {
+            return options.importKeybindingsResponse;
+          }
+
+          const mappings: Record<string, string> = {
+            "workbench.action.showCommands": "open-command-palette",
+            "workbench.action.files.save": "save-file",
+            "workbench.action.terminal.new": "new-terminal",
+            "workbench.action.quickOpen": "open-workspace",
+          };
+          const parsed = JSON.parse(String(args.content)) as Array<{
+            command?: string;
+            key?: string;
+          }>;
+          return {
+            ...(options.settings ?? {
+              schema_version: 2,
+              density: "compact",
+              color_theme: "dark",
+              accent_color: "yuzu",
+              update_channel: "manual",
+            }),
+            schema_version: 2,
+            keybindings: parsed.flatMap((keybinding) => {
+              const commandId = keybinding.command
+                ? mappings[keybinding.command]
+                : undefined;
+              return commandId && keybinding.key
+                ? [
+                    {
+                      command_id: commandId,
+                      key: keybinding.key,
+                      source: "vscode",
+                    },
+                  ]
+                : [];
+            }),
+          };
+        }
         case "metric_snapshot":
           if (metricSnapshotResponses.length > 0) {
             return metricSnapshotResponses.shift();
@@ -2300,6 +2345,145 @@ describe("AppShell AppShell helpers", () => {
     ).toBe("comfortable");
   });
 
+  test("AppShell imports keybindings and stores returned settings", async () => {
+    const workspaceId = "settings-import-keybindings";
+    const workspaceRoot = "/repo-settings-import-keybindings";
+    const tauri = installAppShellTauriMock({
+      workspaceId,
+      workspaceRoot,
+      settings: {
+        schema_version: 2,
+        density: "compact",
+        color_theme: "dark",
+        accent_color: "yuzu",
+        update_channel: "manual",
+        keybindings: [],
+      },
+    });
+    resetWorkspaceBootstrapForTests();
+    window.localStorage.clear();
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: workspaceId,
+      workspaces: [
+        {
+          id: workspaceId,
+          path: workspaceRoot,
+          name: workspaceId,
+          pinned: false,
+        },
+      ],
+    });
+
+    let renderResult: ReturnType<typeof render>;
+    await act(async () => {
+      renderResult = render(<AppShell />);
+    });
+    await flushAppShellEffects();
+
+    fireEvent.click(
+      renderResult!.getByRole("button", { name: /Search or run a command/ }),
+    );
+    fireEvent.click(
+      renderResult!.getByRole("button", { name: /Keybindings: Import/ }),
+    );
+    fireEvent.input(renderResult!.getByLabelText("Paste keybindings JSON"), {
+      target: {
+        value:
+          '[{"key":"cmd+s","command":"workbench.action.files.save"}]',
+      },
+    });
+    fireEvent.click(
+      renderResult!.getByRole("button", { name: "Import keybindings" }),
+    );
+    await flushAppShellEffects();
+
+    expect(
+      tauri.invokeCalls.some(
+        (call) =>
+          call.command === "import_keybindings" &&
+          call.args.source === "vscode" &&
+          call.args.content ===
+            '[{"key":"cmd+s","command":"workbench.action.files.save"}]',
+      ),
+    ).toBe(true);
+    expect(
+      workspaceViewStore.getState().viewFor(workspaceId).settings.settings
+        ?.keybindings,
+    ).toEqual([
+      {
+        command_id: "save-file",
+        key: "cmd+s",
+        source: "vscode",
+      },
+    ]);
+    expect(
+      workspaceViewStore.getState().viewFor(workspaceId).settings
+        .keybindingImportDraft,
+    ).toBe("");
+    expect(
+      workspaceViewStore.getState().viewFor(workspaceId).settings
+      .keybindingImportError,
+    ).toBeNull();
+  });
+
+  test("AppShell shows scoped keybinding import errors without replacing settings error", async () => {
+    const workspaceId = "settings-import-keybindings-error";
+    const workspaceRoot = "/repo-settings-import-keybindings-error";
+    installAppShellTauriMock({
+      workspaceId,
+      workspaceRoot,
+      importKeybindingsError: "Invalid VS Code keybindings JSON",
+    });
+    resetWorkspaceBootstrapForTests();
+    window.localStorage.clear();
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: workspaceId,
+      workspaces: [
+        {
+          id: workspaceId,
+          path: workspaceRoot,
+          name: workspaceId,
+          pinned: false,
+        },
+      ],
+    });
+
+    let renderResult: ReturnType<typeof render>;
+    await act(async () => {
+      renderResult = render(<AppShell />);
+    });
+    await flushAppShellEffects();
+    await act(async () => {
+      workspaceViewStore.getState().updateSettings(workspaceId, (settings) => ({
+        ...settings,
+        error: "Settings load failed",
+      }));
+    });
+    await flushAppShellEffects();
+
+    fireEvent.click(
+      renderResult!.getByRole("button", { name: /Search or run a command/ }),
+    );
+    fireEvent.click(
+      renderResult!.getByRole("button", { name: /Keybindings: Import/ }),
+    );
+    fireEvent.input(renderResult!.getByLabelText("Paste keybindings JSON"), {
+      target: { value: "not json" },
+    });
+    fireEvent.click(
+      renderResult!.getByRole("button", { name: "Import keybindings" }),
+    );
+    await flushAppShellEffects();
+
+    const settingsState = workspaceViewStore
+      .getState()
+      .viewFor(workspaceId).settings;
+    expect(settingsState.error).toBe("Settings load failed");
+    expect(settingsState.keybindingImportError).toBe(
+      "Invalid VS Code keybindings JSON",
+    );
+  });
+
   test("AppShell ignores stale diagnostics refresh responses", async () => {
     const workspaceId = "diagnostics-stale-refresh";
     const workspaceRoot = "/repo-diagnostics-stale-refresh";
@@ -2448,7 +2632,7 @@ describe("AppShell AppShell helpers", () => {
     expect(
       workspaceViewStore.getState().viewFor(workspaceId).settings.activeCategory,
     ).toBe("keybindings");
-    expect(renderResult.getByText("Available after migration")).toBeTruthy();
+    expect(renderResult.getByText("VS Code JSON")).toBeTruthy();
   });
 
   test("AppShell saves a native recovery backup when loaded editor content changes", async () => {

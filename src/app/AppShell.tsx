@@ -158,12 +158,16 @@ import {
   storeRecoveryBackups,
   type RecoveryViewState,
 } from "../features/recovery/recovery-model";
-import { loadSettings } from "../features/settings/settings-api";
+import {
+  importKeybindings,
+  loadSettings,
+} from "../features/settings/settings-api";
 import { SettingsPanel } from "../features/settings/SettingsPanel";
 import {
   createSettingsState,
   selectSettingsCategory,
   setKeybindingImportDraft,
+  setKeybindingImportError,
   setSettingsError,
   storeSettings,
   type SettingsCategory,
@@ -2286,6 +2290,7 @@ export function PanelBody({
   onSettingsSelectCategory = () => {},
   onDiagnosticsRefresh = () => {},
   onKeybindingImportDraftChange = () => {},
+  onImportKeybindings = () => {},
   debugState,
   onDebugModeChange = () => {},
   onDebugSelectConfig = () => {},
@@ -2415,6 +2420,7 @@ export function PanelBody({
   onSettingsSelectCategory?: (category: SettingsCategory) => void;
   onDiagnosticsRefresh?: () => void;
   onKeybindingImportDraftChange?: (draft: string) => void;
+  onImportKeybindings?: () => void;
   debugState?: DebugViewState;
   onDebugModeChange?: (mode: DebugViewState["mode"]) => void;
   onDebugSelectConfig?: (configId: string) => void;
@@ -2636,6 +2642,7 @@ export function PanelBody({
         onRecoveryDiscard={onRecoveryDiscard}
         onDiagnosticsRefresh={onDiagnosticsRefresh}
         onKeybindingImportDraftChange={onKeybindingImportDraftChange}
+        onImportKeybindings={onImportKeybindings}
       />
     );
   }
@@ -7610,6 +7617,42 @@ export function AppShell() {
     }
   }
 
+  async function importActiveKeybindings() {
+    if (!activeWorkspaceId) {
+      return;
+    }
+
+    const workspaceId = activeWorkspaceId;
+    const content =
+      workspaceViewStore.getState().viewFor(workspaceId).settings
+        .keybindingImportDraft;
+
+    try {
+      const imported = await importKeybindings({
+        source: "vscode",
+        content,
+      });
+
+      if (!hasRegisteredWorkspace(workspaceId)) {
+        return;
+      }
+
+      updateSettings(workspaceId, (settings) => ({
+        ...storeSettings(settings, imported),
+        keybindingImportDraft: "",
+        keybindingImportError: null,
+      }));
+    } catch (error) {
+      if (!hasRegisteredWorkspace(workspaceId)) {
+        return;
+      }
+
+      updateSettings(workspaceId, (settings) =>
+        setKeybindingImportError(settings, terminalErrorMessage(error)),
+      );
+    }
+  }
+
   function runCommand(id: string) {
     if (
       runDebugCommandFromPalette(id, {
@@ -8060,6 +8103,7 @@ export function AppShell() {
                   setKeybindingImportDraft(settings, draft),
                 )
               }
+              onImportKeybindings={() => void importActiveKeybindings()}
               languageState={view.language}
               debugState={view.debug}
               onDebugModeChange={setDebugWorkbenchMode}

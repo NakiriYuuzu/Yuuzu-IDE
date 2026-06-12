@@ -1,8 +1,7 @@
 export type KeybindingSetting = {
-  command: string;
+  command_id: string;
   key: string;
-  when?: string | null;
-  source?: string;
+  source: string;
 };
 
 export type AppSettings = {
@@ -36,8 +35,7 @@ export type SettingsViewState = {
 
 export function normalizeSettings(settings: AppSettingsInput): AppSettings {
   return {
-    schema_version:
-      typeof settings.schema_version === "number" ? settings.schema_version : 1,
+    schema_version: 2,
     density:
       typeof settings.density === "string" ? settings.density : "compact",
     color_theme:
@@ -49,18 +47,19 @@ export function normalizeSettings(settings: AppSettingsInput): AppSettings {
         ? settings.update_channel
         : "manual",
     keybindings: Array.isArray(settings.keybindings)
-      ? settings.keybindings.map((keybinding) => ({
-          command: String(keybinding.command),
-          key: String(keybinding.key),
-          when:
-            keybinding.when === undefined || keybinding.when === null
-              ? null
-              : String(keybinding.when),
-          source:
-            keybinding.source === undefined
-              ? undefined
-              : String(keybinding.source),
-        }))
+      ? settings.keybindings.map((rawKeybinding) => {
+          const keybinding = rawKeybinding as Record<string, unknown>;
+          return {
+            command_id: String(
+              keybinding.command_id ?? keybinding.command ?? "",
+            ),
+            key: String(keybinding.key ?? ""),
+            source:
+              typeof keybinding.source === "string"
+                ? keybinding.source
+                : "custom",
+          };
+        })
       : [],
   };
 }

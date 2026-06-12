@@ -9,16 +9,105 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct AppSettings {
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
+    #[serde(default = "default_density")]
     pub density: String,
+    #[serde(default = "default_color_theme")]
     pub color_theme: String,
+    #[serde(default = "default_accent_color")]
+    pub accent_color: String,
+    #[serde(default = "default_update_channel")]
+    pub update_channel: String,
+    #[serde(default)]
+    pub keybindings: Vec<KeybindingSetting>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct KeybindingSetting {
+    pub command_id: String,
+    pub key: String,
+    pub source: String,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            density: "compact".to_string(),
-            color_theme: "dark".to_string(),
+            schema_version: default_schema_version(),
+            density: default_density(),
+            color_theme: default_color_theme(),
+            accent_color: default_accent_color(),
+            update_channel: default_update_channel(),
+            keybindings: Vec::new(),
         }
+    }
+}
+
+impl AppSettings {
+    pub fn normalized(mut self) -> Self {
+        self.schema_version = default_schema_version();
+        self
+    }
+}
+
+fn default_schema_version() -> u32 {
+    2
+}
+
+fn default_density() -> String {
+    "compact".to_string()
+}
+
+fn default_color_theme() -> String {
+    "dark".to_string()
+}
+
+fn default_accent_color() -> String {
+    "yuzu".to_string()
+}
+
+fn default_update_channel() -> String {
+    "manual".to_string()
+}
+
+#[derive(Deserialize)]
+struct VscodeKeybinding {
+    command: Option<String>,
+    key: Option<String>,
+}
+
+pub fn import_vscode_keybindings(
+    settings: AppSettings,
+    content: &str,
+) -> Result<AppSettings, String> {
+    let keybindings: Vec<VscodeKeybinding> =
+        serde_json::from_str(content).map_err(|err| err.to_string())?;
+    let mut imported = settings.normalized();
+
+    imported
+        .keybindings
+        .retain(|keybinding| keybinding.source != "vscode");
+    imported
+        .keybindings
+        .extend(keybindings.into_iter().filter_map(|keybinding| {
+            let command_id = vscode_command_id(keybinding.command.as_deref()?)?;
+            Some(KeybindingSetting {
+                command_id: command_id.to_string(),
+                key: keybinding.key?,
+                source: "vscode".to_string(),
+            })
+        }));
+
+    Ok(imported)
+}
+
+fn vscode_command_id(command: &str) -> Option<&'static str> {
+    match command {
+        "workbench.action.showCommands" => Some("open-command-palette"),
+        "workbench.action.files.save" => Some("save-file"),
+        "workbench.action.terminal.new" => Some("new-terminal"),
+        "workbench.action.quickOpen" => Some("open-workspace"),
+        _ => None,
     }
 }
 
@@ -38,7 +127,8 @@ impl SettingsStore {
         }
 
         let value = fs::read_to_string(&self.path).map_err(|err| err.to_string())?;
-        serde_json::from_str(&value).map_err(|err| err.to_string())
+        let settings: AppSettings = serde_json::from_str(&value).map_err(|err| err.to_string())?;
+        Ok(settings.normalized())
     }
 
     pub fn save(&self, settings: &AppSettings) -> Result<(), String> {
@@ -50,7 +140,8 @@ impl SettingsStore {
             fs::create_dir_all(parent).map_err(|err| err.to_string())?;
         }
 
-        let value = serde_json::to_string_pretty(settings).map_err(|err| err.to_string())?;
+        let value = serde_json::to_string_pretty(&settings.clone().normalized())
+            .map_err(|err| err.to_string())?;
         let parent = self
             .path
             .parent()
@@ -131,6 +222,7 @@ mod tests {
         AppSettings {
             density: density.to_string(),
             color_theme: color_theme.to_string(),
+            ..AppSettings::default()
         }
     }
 
@@ -158,6 +250,90 @@ mod tests {
         store.save(&settings).expect("save");
 
         assert_eq!(store.load().expect("load"), settings);
+    }
+
+    #[test]
+    fn settings_store_migrates_v1_compact_dark_settings_to_schema_v2() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("settings.json");
+        std::fs::write(&path, r#"{"density":"compact","color_theme":"dark"}"#)
+            .expect("write old settings");
+
+        let loaded = SettingsStore::new(path).load().expect("load settings");
+
+        assert_eq!(loaded.schema_version, 2);
+        assert_eq!(loaded.density, "compact");
+        assert_eq!(loaded.color_theme, "dark");
+        assert_eq!(loaded.accent_color, "yuzu");
+        assert_eq!(loaded.update_channel, "manual");
+        assert!(loaded.keybindings.is_empty());
+    }
+
+    #[test]
+    fn settings_imports_vscode_keybindings_for_known_commands() {
+        let settings = AppSettings::default();
+        let imported = import_vscode_keybindings(
+            settings,
+            r#"[{"key":"cmd+k","command":"workbench.action.showCommands"},{"key":"cmd+s","command":"workbench.action.files.save"}]"#,
+        )
+        .expect("import");
+
+        assert_eq!(
+            imported.keybindings,
+            vec![
+                KeybindingSetting {
+                    command_id: "open-command-palette".to_string(),
+                    key: "cmd+k".to_string(),
+                    source: "vscode".to_string(),
+                },
+                KeybindingSetting {
+                    command_id: "save-file".to_string(),
+                    key: "cmd+s".to_string(),
+                    source: "vscode".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn settings_import_replaces_vscode_keybindings_and_preserves_custom_keybindings() {
+        let settings = AppSettings {
+            keybindings: vec![
+                KeybindingSetting {
+                    command_id: "custom-command".to_string(),
+                    key: "cmd+shift+x".to_string(),
+                    source: "custom".to_string(),
+                },
+                KeybindingSetting {
+                    command_id: "save-file".to_string(),
+                    key: "cmd+alt+s".to_string(),
+                    source: "vscode".to_string(),
+                },
+            ],
+            ..AppSettings::default()
+        };
+
+        let imported = import_vscode_keybindings(
+            settings,
+            r#"[{"key":"cmd+`","command":"workbench.action.terminal.new"}]"#,
+        )
+        .expect("import");
+
+        assert_eq!(
+            imported.keybindings,
+            vec![
+                KeybindingSetting {
+                    command_id: "custom-command".to_string(),
+                    key: "cmd+shift+x".to_string(),
+                    source: "custom".to_string(),
+                },
+                KeybindingSetting {
+                    command_id: "new-terminal".to_string(),
+                    key: "cmd+`".to_string(),
+                    source: "vscode".to_string(),
+                },
+            ]
+        );
     }
 
     #[cfg(unix)]

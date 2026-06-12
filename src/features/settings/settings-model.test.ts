@@ -57,4 +57,25 @@ describe("settings model", () => {
     expect(withDraft.keybindingImportError).toBeNull();
     expect(withDraft.error).toBe("Settings failed");
   });
+
+  test("normalizes keybindings with command_id source shape", () => {
+    const state = storeSettings(createSettingsState(), {
+      keybindings: [
+        {
+          command_id: "save-file",
+          key: "cmd+s",
+          source: "vscode",
+        },
+      ],
+    });
+
+    expect(state.settings?.schema_version).toBe(2);
+    expect(state.settings?.keybindings).toEqual([
+      {
+        command_id: "save-file",
+        key: "cmd+s",
+        source: "vscode",
+      },
+    ]);
+  });
 });

@@ -47,6 +47,7 @@ describe("SettingsPanel", () => {
         onRecoveryDiscard={() => {}}
         onDiagnosticsRefresh={() => {}}
         onKeybindingImportDraftChange={() => {}}
+        onImportKeybindings={() => {}}
       />,
     );
 
@@ -88,6 +89,7 @@ describe("SettingsPanel", () => {
         onRecoveryDiscard={() => {}}
         onDiagnosticsRefresh={() => {}}
         onKeybindingImportDraftChange={() => {}}
+        onImportKeybindings={() => {}}
       />,
     );
 
@@ -123,6 +125,7 @@ describe("SettingsPanel", () => {
         onRecoveryDiscard={() => {}}
         onDiagnosticsRefresh={() => {}}
         onKeybindingImportDraftChange={() => {}}
+        onImportKeybindings={() => {}}
       />,
     );
 
@@ -131,14 +134,14 @@ describe("SettingsPanel", () => {
     expect(onRecoveryRestore).toHaveBeenCalledWith("b1");
   });
 
-  test("keybindings category keeps import disabled until migration task", () => {
+  test("keybindings category enables import when draft has content", () => {
     const onDraftChange = mock(() => {});
+    const onImportKeybindings = mock(() => {});
     const result = render(
       <SettingsPanel
         state={{
           ...selectSettingsCategory(loadedSettingsState(), "keybindings"),
           keybindingImportDraft: "[{}]",
-          keybindingImportError: "Invalid VS Code keybindings JSON",
         }}
         recoveryState={createRecoveryState()}
         diagnosticsState={createDiagnosticsState()}
@@ -148,6 +151,7 @@ describe("SettingsPanel", () => {
         onRecoveryDiscard={() => {}}
         onDiagnosticsRefresh={() => {}}
         onKeybindingImportDraftChange={onDraftChange}
+        onImportKeybindings={onImportKeybindings}
       />,
     );
 
@@ -160,8 +164,32 @@ describe("SettingsPanel", () => {
       (result.getByRole("button", {
         name: "Import keybindings",
       }) as HTMLButtonElement).disabled,
-    ).toBe(true);
-    expect(result.getByText("Available after migration")).toBeTruthy();
+    ).toBe(false);
+
+    fireEvent.click(result.getByRole("button", { name: "Import keybindings" }));
+
+    expect(onImportKeybindings).toHaveBeenCalledTimes(1);
+  });
+
+  test("keybindings category renders scoped import error", () => {
+    const result = render(
+      <SettingsPanel
+        state={{
+          ...selectSettingsCategory(loadedSettingsState(), "keybindings"),
+          keybindingImportError: "Invalid VS Code keybindings JSON",
+        }}
+        recoveryState={createRecoveryState()}
+        diagnosticsState={createDiagnosticsState()}
+        onSelectCategory={() => {}}
+        onRecoveryRefresh={() => {}}
+        onRecoveryRestore={() => {}}
+        onRecoveryDiscard={() => {}}
+        onDiagnosticsRefresh={() => {}}
+        onKeybindingImportDraftChange={() => {}}
+        onImportKeybindings={() => {}}
+      />,
+    );
+
     expect(result.getByText("Invalid VS Code keybindings JSON")).toBeTruthy();
   });
 });

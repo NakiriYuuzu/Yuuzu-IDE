@@ -12,6 +12,6 @@ export function saveSettings(settings: AppSettings): Promise<AppSettingsInput> {
 export function importKeybindings(args: {
   source: "vscode";
   content: string;
-}): Promise<AppSettingsInput> {
+}): Promise<AppSettings> {
   return call("import_keybindings", args);
 }
