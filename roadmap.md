@@ -633,6 +633,9 @@ stable.
 
 ### Node 13: Hardening, Packaging, And Daily Driver Readiness
 
+**Status:** implementation complete; acceptance blocked by verification
+failures documented in `docs/architecture/node-13-hardening-results.md`.
+
 **Goal:** make Yuuzu-IDE reliable enough for everyday personal use.
 
 **Scope**
@@ -709,8 +712,9 @@ stable.
 ## Current Priority
 
 Node 0, Node 1, Node 2, Node 3, Node 4, Node 5, Node 6, Node 7, Node 8,
-Node 9, Node 10, Node 11, and Node 12 are complete. The next active priority is
-Node 13: Hardening, Packaging, And Daily Driver Readiness.
+Node 9, Node 10, Node 11, and Node 12 are complete. Node 13 implementation and
+documentation are recorded in `docs/architecture/node-13-hardening-results.md`,
+but Node 13 acceptance is blocked until `bun test` and `cargo clippy` pass.
 
 - Node 0 measurements keep Tauri 2 as the main route; Rust-native fallback
   research remains deferred.
@@ -764,3 +768,10 @@ Node 13: Hardening, Packaging, And Daily Driver Readiness.
   extension disablement, slow-extension performance visibility, public API
   draft, Bun/Cargo tests, Tauri debug build, and implementer/spec-compliance/
   code-quality reviews covered.
+- Node 13 implementation covers native unsaved edit recovery, diagnostics,
+  performance metrics, Settings migration, keybinding import, manual update
+  strategy, personal setup docs, and current-host debug packaging. Current
+  verification blockers are documented in
+  `docs/architecture/node-13-hardening-results.md`: `bun test` fails in
+  `src/features/editor/EditorTab.test.ts`, and clippy fails at
+  `src-tauri/src/commands.rs:2719`.
