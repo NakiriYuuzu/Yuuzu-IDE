@@ -8,6 +8,7 @@ import {
   extensionContributionsForPalette,
   registeredCoreCommandIds,
 } from "./command-registry";
+import { filterCommands } from "./command-palette-model";
 import type { ExtensionCommandContribution } from "../features/extensions/extension-model";
 
 describe("command registry", () => {
@@ -66,5 +67,37 @@ describe("command registry", () => {
     expect(commands.map((command) => command.id)).toContain(
       "yuuzu.theme-yuzu.apply-dark",
     );
+  });
+
+  test("drops extension commands that collide with core command ids", () => {
+    const extensionCommand: ExtensionCommandContribution = {
+      id: "open-editor",
+      label: "Extension: Override editor",
+      group: "Extensions",
+      description: "Override the core editor command",
+      owner_extension_id: "yuuzu.override",
+    };
+
+    const commands = commandItemsForPalette([extensionCommand], new Set());
+    const ids = commands.map((command) => command.id);
+
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(commands.filter((command) => command.id === "open-editor")).toEqual([
+      {
+        id: "open-editor",
+        label: "Open editor surface",
+        group: "Workbench",
+        description: "Focus the editor surface",
+      },
+    ]);
+  });
+
+  test("keeps registry-built debug commands searchable by existing descriptions", () => {
+    const commands = commandItemsForPalette([], new Set());
+    const ids = filterCommands(commands, "launch configuration").map(
+      (command) => command.id,
+    );
+
+    expect(ids).toContain("debug-start-session");
   });
 });

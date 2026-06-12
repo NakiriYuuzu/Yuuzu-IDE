@@ -232,66 +232,70 @@ export const coreCommandContributions: CommandContribution[] = [
     id: "open-debug",
     label: "Debug: Open panel",
     group: "Debug",
-    description: "Open debug workbench",
+    description: "Open the debug workbench panel",
     owner_extension_id: "yuuzu.core",
   },
   {
     id: "debug-start-session",
     label: "Debug: Start session",
     group: "Debug",
-    description: "Start selected debug configuration",
+    description: "Start the selected launch configuration",
     owner_extension_id: "yuuzu.core",
   },
   {
     id: "debug-continue",
     label: "Debug: Continue",
     group: "Debug",
-    description: "Continue active debug session",
+    description: "Continue the active debug session",
     owner_extension_id: "yuuzu.core",
   },
   {
     id: "debug-step-over",
     label: "Debug: Step over",
     group: "Debug",
-    description: "Step over active debug session",
+    description: "Step over in the active debug session",
     owner_extension_id: "yuuzu.core",
   },
   {
     id: "debug-pause",
     label: "Debug: Pause",
     group: "Debug",
-    description: "Pause active debug session",
+    description: "Pause the active debug session",
     owner_extension_id: "yuuzu.core",
   },
   {
     id: "debug-disconnect",
     label: "Debug: Disconnect",
     group: "Debug",
-    description: "Disconnect active debug session",
+    description: "Disconnect the active debug session",
     owner_extension_id: "yuuzu.core",
   },
   {
     id: "debug-toggle-breakpoint",
     label: "Debug: Toggle breakpoint",
     group: "Debug",
-    description: "Toggle breakpoint in active editor",
+    description: "Toggle a breakpoint in the active editor",
     owner_extension_id: "yuuzu.core",
   },
   {
     id: "open-extensions",
     label: "Extensions: Open panel",
     group: "Extensions",
-    description: "Open extensions panel",
+    description: "Open the extension registry panel",
     owner_extension_id: "yuuzu.core",
   },
   {
     id: "extension-refresh",
     label: "Extensions: Refresh",
     group: "Extensions",
-    description: "Refresh extension status",
+    description: "Refresh workspace extension status",
     owner_extension_id: "yuuzu.core",
   },
 ];
+
+const coreCommandIdSet = new Set(
+  coreCommandContributions.map((command) => command.id),
+);
 
 export function registeredCoreCommandIds(): string[] {
   return coreCommandContributions.map((command) => command.id);
@@ -310,9 +314,22 @@ export function extensionContributionsForPalette(
   commands: ExtensionCommandContribution[],
   disabledExtensionIds: Set<string>,
 ): CommandItem[] {
-  return commands
-    .filter((command) => !disabledExtensionIds.has(command.owner_extension_id))
-    .map(toCommandItem);
+  const usedCommandIds = new Set(coreCommandIdSet);
+  const items: CommandItem[] = [];
+
+  for (const command of commands) {
+    if (
+      disabledExtensionIds.has(command.owner_extension_id) ||
+      usedCommandIds.has(command.id)
+    ) {
+      continue;
+    }
+
+    usedCommandIds.add(command.id);
+    items.push(toCommandItem(command));
+  }
+
+  return items;
 }
 
 export function commandItemsForPalette(
