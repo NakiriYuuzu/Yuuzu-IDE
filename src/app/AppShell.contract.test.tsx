@@ -2927,6 +2927,206 @@ describe("AppShell AppShell helpers", () => {
     ).toBeNull();
   });
 
+  test("AppShell discards a native recovery backup that resolves after content is clean", async () => {
+    const workspaceId = "recovery-clean-race-contract";
+    const workspaceRoot = "/repo-recovery-clean-race-contract";
+    const fileVersion = { modified_ms: 7, len: 10 };
+    const staleSave = createDeferred<UnsavedBackup>();
+    const tauri = installAppShellTauriMock({
+      workspaceId,
+      workspaceRoot,
+      textFiles: {
+        "src/main.ts": {
+          path: "src/main.ts",
+          content: "saved text",
+          version: fileVersion,
+          too_large: false,
+        },
+      },
+      saveUnsavedBackupResponses: [staleSave.promise],
+    });
+    resetWorkspaceBootstrapForTests();
+    window.localStorage.clear();
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: workspaceId,
+      workspaces: [
+        {
+          id: workspaceId,
+          path: workspaceRoot,
+          name: workspaceId,
+          pinned: false,
+        },
+      ],
+    });
+    workspaceViewStore.getState().updateView(workspaceId, {
+      activeActivity: "explorer",
+      panelOpen: true,
+      surface: "editor",
+    });
+    workspaceViewStore.getState().updateEditor(workspaceId, () => ({
+      tabs: [
+        {
+          path: "src/main.ts",
+          name: "main.ts",
+          dirty: false,
+          tooLarge: false,
+          version: fileVersion,
+          externalChange: false,
+        },
+      ],
+      activePath: "src/main.ts",
+    }));
+
+    let renderResult!: ReturnType<typeof render>;
+    await act(async () => {
+      renderResult = render(<AppShell />);
+    });
+    const editor = await renderResult.findByLabelText("Mock editor");
+
+    await act(async () => {
+      fireEvent.change(editor, { target: { value: "dirty text" } });
+    });
+    await flushAppShellEffects();
+    expect(
+      tauri.invokeCalls.some((call) => call.command === "save_unsaved_backup"),
+    ).toBe(true);
+
+    await act(async () => {
+      fireEvent.change(editor, { target: { value: "saved text" } });
+    });
+    await flushAppShellEffects();
+    expect(
+      tauri.invokeCalls.some(
+        (call) => call.command === "discard_unsaved_backup",
+      ),
+    ).toBe(false);
+
+    staleSave.resolve({
+      id: "stale-clean-backup",
+      workspace_id: workspaceId,
+      workspace_root: workspaceRoot,
+      path: "src/main.ts",
+      content: "dirty text",
+      version: fileVersion,
+      updated_ms: 20,
+    });
+    await flushAppShellEffects();
+
+    expect(
+      tauri.invokeCalls.some(
+        (call) =>
+          call.command === "discard_unsaved_backup" &&
+          call.args.backupId === "stale-clean-backup",
+      ),
+    ).toBe(true);
+    expect(
+      workspaceViewStore.getState().viewFor(workspaceId).recovery.backups,
+    ).toEqual([]);
+  });
+
+  test("AppShell re-saves latest dirty recovery content after an older native save resolves last", async () => {
+    const workspaceId = "recovery-out-of-order-contract";
+    const workspaceRoot = "/repo-recovery-out-of-order-contract";
+    const fileVersion = { modified_ms: 7, len: 10 };
+    const olderSave = createDeferred<UnsavedBackup>();
+    const newerSave = createDeferred<UnsavedBackup>();
+    const tauri = installAppShellTauriMock({
+      workspaceId,
+      workspaceRoot,
+      textFiles: {
+        "src/main.ts": {
+          path: "src/main.ts",
+          content: "saved text",
+          version: fileVersion,
+          too_large: false,
+        },
+      },
+      saveUnsavedBackupResponses: [olderSave.promise, newerSave.promise],
+    });
+    resetWorkspaceBootstrapForTests();
+    window.localStorage.clear();
+    workspaceStore.getState().setRegistry({
+      active_workspace_id: workspaceId,
+      workspaces: [
+        {
+          id: workspaceId,
+          path: workspaceRoot,
+          name: workspaceId,
+          pinned: false,
+        },
+      ],
+    });
+    workspaceViewStore.getState().updateView(workspaceId, {
+      activeActivity: "explorer",
+      panelOpen: true,
+      surface: "editor",
+    });
+    workspaceViewStore.getState().updateEditor(workspaceId, () => ({
+      tabs: [
+        {
+          path: "src/main.ts",
+          name: "main.ts",
+          dirty: false,
+          tooLarge: false,
+          version: fileVersion,
+          externalChange: false,
+        },
+      ],
+      activePath: "src/main.ts",
+    }));
+
+    let renderResult!: ReturnType<typeof render>;
+    await act(async () => {
+      renderResult = render(<AppShell />);
+    });
+    const editor = await renderResult.findByLabelText("Mock editor");
+
+    await act(async () => {
+      fireEvent.change(editor, { target: { value: "older dirty text" } });
+    });
+    await flushAppShellEffects();
+    await act(async () => {
+      fireEvent.change(editor, { target: { value: "newer dirty text" } });
+    });
+    await flushAppShellEffects();
+    expect(
+      tauri.invokeCalls.filter((call) => call.command === "save_unsaved_backup"),
+    ).toHaveLength(2);
+
+    newerSave.resolve({
+      id: "newer-backup",
+      workspace_id: workspaceId,
+      workspace_root: workspaceRoot,
+      path: "src/main.ts",
+      content: "newer dirty text",
+      version: fileVersion,
+      updated_ms: 20,
+    });
+    await flushAppShellEffects();
+    olderSave.resolve({
+      id: "older-backup",
+      workspace_id: workspaceId,
+      workspace_root: workspaceRoot,
+      path: "src/main.ts",
+      content: "older dirty text",
+      version: fileVersion,
+      updated_ms: 30,
+    });
+    await flushAppShellEffects();
+
+    const backupCalls = tauri.invokeCalls.filter(
+      (call) => call.command === "save_unsaved_backup",
+    );
+    expect(backupCalls).toHaveLength(3);
+    expect(backupCalls[2]?.args).toEqual({
+      workspaceRoot,
+      workspaceId,
+      path: "src/main.ts",
+      content: "newer dirty text",
+      version: fileVersion,
+    });
+  });
+
   test("AppShell restores backup content from a fresh recovery list", async () => {
     const workspaceId = "recovery-restore-contract";
     const workspaceRoot = "/repo-recovery-restore-contract";

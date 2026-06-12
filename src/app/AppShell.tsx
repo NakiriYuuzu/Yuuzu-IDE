@@ -157,6 +157,7 @@ import {
   restoreRecoveryBackup,
   storeRecoveryBackups,
   type RecoveryViewState,
+  type UnsavedBackup,
 } from "../features/recovery/recovery-model";
 import {
   importKeybindings,
@@ -469,6 +470,20 @@ type GitConfirmationRequest = {
   detail: string;
   run: (confirmation: string) => Promise<unknown>;
 };
+
+type RecoverySaveIntent =
+  | {
+      state: "dirty";
+      workspaceRoot: string;
+      content: string;
+      version: FileVersion | null;
+      epoch: number;
+    }
+  | {
+      state: "clean";
+      workspaceRoot: string;
+      epoch: number;
+    };
 
 const EditorTab = lazy(() =>
   import("../features/editor/EditorTab").then((module) => ({
@@ -2696,6 +2711,7 @@ export function AppShell() {
   const extensionPendingToggleRef = useRef<Record<string, number>>({});
   const recoveryLoadRequestRef = useRef<Record<string, number>>({});
   const recoverySaveEpochRef = useRef<Record<string, number>>({});
+  const recoverySaveIntentRef = useRef<Record<string, RecoverySaveIntent>>({});
   const settingsLoadRequestRef = useRef<Record<string, number>>({});
   const keybindingImportRequestRef = useRef<Record<string, number>>({});
   const settingsLoadedWorkspaceRef = useRef<Set<string>>(new Set());
@@ -3751,12 +3767,187 @@ export function AppShell() {
     return recoverySaveEpochRef.current[recoverySaveKey(workspaceId, path)] === epoch;
   }
 
+  function markRecoverySaveDirty(
+    workspaceId: string,
+    workspaceRoot: string,
+    path: string,
+    content: string,
+    version: FileVersion | null,
+  ): number {
+    const epoch = nextRecoverySaveEpoch(workspaceId, path);
+    recoverySaveIntentRef.current[recoverySaveKey(workspaceId, path)] = {
+      state: "dirty",
+      workspaceRoot,
+      content,
+      version,
+      epoch,
+    };
+    return epoch;
+  }
+
+  function markRecoverySaveClean(
+    workspaceId: string,
+    workspaceRoot: string,
+    path: string,
+  ): void {
+    const epoch = nextRecoverySaveEpoch(workspaceId, path);
+    recoverySaveIntentRef.current[recoverySaveKey(workspaceId, path)] = {
+      state: "clean",
+      workspaceRoot,
+      epoch,
+    };
+  }
+
+  function discardResolvedRecoveryBackup(
+    workspaceId: string,
+    workspaceRoot: string,
+    path: string,
+    backupId: string,
+  ) {
+    void discardUnsavedBackup({
+      workspaceRoot,
+      workspaceId,
+      backupId,
+    })
+      .then(() => {
+        updateRecovery(workspaceId, (recovery) =>
+          discardRecoveryBackup(recovery, backupId),
+        );
+        const key = recoverySaveKey(workspaceId, path);
+        const intent = recoverySaveIntentRef.current[key];
+        const currentTab = workspaceViewStore
+          .getState()
+          .viewFor(workspaceId)
+          .editor.tabs.find((tab) => tab.path === path);
+        if (
+          intent?.state === "dirty" &&
+          intent.workspaceRoot === workspaceRoot &&
+          intent.epoch === recoverySaveEpochRef.current[key] &&
+          currentTab?.dirty
+        ) {
+          saveRecoveryBackup(
+            workspaceId,
+            workspaceRoot,
+            path,
+            intent.content,
+            intent.version,
+          );
+        }
+      })
+      .catch((error) => {
+        updateRecovery(workspaceId, (recovery) => ({
+          ...recovery,
+          error: `Discard failed: ${terminalErrorMessage(error)}`,
+        }));
+      });
+  }
+
+  function reconcileStaleRecoverySave(
+    workspaceId: string,
+    workspaceRoot: string,
+    path: string,
+    backup: UnsavedBackup,
+  ) {
+    const currentWorkspace = workspaceStore
+      .getState()
+      .registry.workspaces.find((workspace) => workspace.id === workspaceId);
+    if (currentWorkspace?.path !== workspaceRoot) {
+      return;
+    }
+
+    const key = recoverySaveKey(workspaceId, path);
+    const intent = recoverySaveIntentRef.current[key];
+    const currentTab = workspaceViewStore
+      .getState()
+      .viewFor(workspaceId)
+      .editor.tabs.find((tab) => tab.path === path);
+
+    if (!intent || intent.state === "clean" || !currentTab?.dirty) {
+      discardResolvedRecoveryBackup(workspaceId, workspaceRoot, path, backup.id);
+      return;
+    }
+
+    if (
+      intent.workspaceRoot === workspaceRoot &&
+      intent.epoch === recoverySaveEpochRef.current[key] &&
+      backup.content !== intent.content
+    ) {
+      saveRecoveryBackup(
+        workspaceId,
+        workspaceRoot,
+        path,
+        intent.content,
+        intent.version,
+      );
+    }
+  }
+
+  function saveRecoveryBackup(
+    workspaceId: string,
+    workspaceRoot: string,
+    path: string,
+    content: string,
+    version: FileVersion | null,
+  ) {
+    const saveEpoch = markRecoverySaveDirty(
+      workspaceId,
+      workspaceRoot,
+      path,
+      content,
+      version,
+    );
+    void saveUnsavedBackup({
+      workspaceRoot,
+      workspaceId,
+      path,
+      content,
+      version,
+    })
+      .then((backup) => {
+        if (!isLatestRecoverySaveEpoch(workspaceId, path, saveEpoch)) {
+          reconcileStaleRecoverySave(workspaceId, workspaceRoot, path, backup);
+          return;
+        }
+
+        const currentWorkspace = workspaceStore
+          .getState()
+          .registry.workspaces.find((workspace) => workspace.id === workspaceId);
+        const currentView = workspaceViewStore.getState().viewFor(workspaceId);
+        const currentTab = currentView.editor.tabs.find(
+          (tab) => tab.path === path,
+        );
+        if (
+          currentWorkspace?.path !== workspaceRoot ||
+          currentView.editor.activePath !== path
+        ) {
+          return;
+        }
+        if (!currentTab?.dirty) {
+          discardResolvedRecoveryBackup(workspaceId, workspaceRoot, path, backup.id);
+          return;
+        }
+
+        updateRecovery(workspaceId, (recovery) =>
+          storeRecoveryBackups(recovery, [
+            ...recovery.backups.filter((item) => item.id !== backup.id),
+            backup,
+          ]),
+        );
+      })
+      .catch((error) => {
+        updateRecovery(workspaceId, (recovery) => ({
+          ...recovery,
+          error: `Recovery failed: ${terminalErrorMessage(error)}`,
+        }));
+      });
+  }
+
   function discardRecoveryBackupForPath(
     workspaceId: string,
     workspaceRoot: string,
     path: string,
   ) {
-    nextRecoverySaveEpoch(workspaceId, path);
+    markRecoverySaveClean(workspaceId, workspaceRoot, path);
     const backup = workspaceViewStore
       .getState()
       .viewFor(workspaceId)
@@ -3765,22 +3956,7 @@ export function AppShell() {
       return;
     }
 
-    void discardUnsavedBackup({
-      workspaceRoot,
-      workspaceId,
-      backupId: backup.id,
-    })
-      .then(() => {
-        updateRecovery(workspaceId, (recovery) =>
-          discardRecoveryBackup(recovery, backup.id),
-        );
-      })
-      .catch((error) => {
-        updateRecovery(workspaceId, (recovery) => ({
-          ...recovery,
-          error: `Discard failed: ${terminalErrorMessage(error)}`,
-        }));
-      });
+    discardResolvedRecoveryBackup(workspaceId, workspaceRoot, path, backup.id);
   }
 
   async function restoreRecoveryBackupById(backupId: string) {
@@ -4036,60 +4212,13 @@ export function AppShell() {
         (tab) => tab.path === loadedFile.path,
       );
       if (activeWorkspace) {
-        const saveEpoch = nextRecoverySaveEpoch(
+        saveRecoveryBackup(
           activeWorkspaceId,
+          activeWorkspace.path,
           loadedFile.path,
-        );
-        void saveUnsavedBackup({
-          workspaceRoot: activeWorkspace.path,
-          workspaceId: activeWorkspaceId,
-          path: loadedFile.path,
           content,
-          version: activeTab?.version ?? null,
-        })
-          .then((backup) => {
-            if (
-              !isLatestRecoverySaveEpoch(
-                activeWorkspaceId,
-                loadedFile.path,
-                saveEpoch,
-              )
-            ) {
-              return;
-            }
-
-            const currentWorkspace = workspaceStore
-              .getState()
-              .registry.workspaces.find(
-                (workspace) => workspace.id === activeWorkspaceId,
-              );
-            const currentView = workspaceViewStore
-              .getState()
-              .viewFor(activeWorkspaceId);
-            const currentTab = currentView.editor.tabs.find(
-              (tab) => tab.path === loadedFile.path,
-            );
-            if (
-              currentWorkspace?.path !== activeWorkspace.path ||
-              currentView.editor.activePath !== loadedFile.path ||
-              !currentTab?.dirty
-            ) {
-              return;
-            }
-
-            updateRecovery(activeWorkspaceId, (recovery) =>
-              storeRecoveryBackups(recovery, [
-                ...recovery.backups.filter((item) => item.id !== backup.id),
-                backup,
-              ]),
-            );
-          })
-          .catch((error) => {
-            updateRecovery(activeWorkspaceId, (recovery) => ({
-              ...recovery,
-              error: `Recovery failed: ${terminalErrorMessage(error)}`,
-            }));
-          });
+          activeTab?.version ?? null,
+        );
       }
     } else {
       tryClearDraft(activeWorkspaceId, loadedFile.path);
