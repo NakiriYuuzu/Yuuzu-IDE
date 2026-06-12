@@ -2078,6 +2078,82 @@ describe("AppShell AppShell helpers", () => {
     });
   });
 
+  test("AppShell applies in-flight toggle response after extension command performance snapshot", async () => {
+    const workspaceId = "extensions-toggle-performance-overlap";
+    const workspaceRoot = "/repo-extensions-toggle-performance-overlap";
+    const disableResponse = createDeferred<ExtensionWorkspaceStatus[]>();
+    const commandId = "yuuzu.profiler.profile";
+    const commandLabel = "Profiler: Profile Project";
+    const { renderResult, tauri } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot,
+      extensionStatuses: [
+        extensionStatus({
+          id: "yuuzu.debug-tools",
+          name: "Debug Tools",
+          enabled: true,
+        }),
+        extensionStatus({
+          id: "yuuzu.profiler",
+          name: "Profiler",
+          enabled: true,
+          commandId,
+          commandLabel,
+        }),
+      ],
+      setExtensionEnabledResponses: [disableResponse.promise],
+    });
+
+    fireEvent.click(renderResult.getByRole("button", { name: "Extensions" }));
+    await flushAppShellEffects();
+
+    fireEvent.click(renderResult.getByLabelText("Disable Debug Tools"));
+    expect(renderResult.getByLabelText("Enable Debug Tools")).toBeTruthy();
+
+    fireEvent.click(
+      renderResult.getByRole("button", { name: /Search or run a command/ }),
+    );
+    fireEvent.click(
+      renderResult.getByRole("button", { name: new RegExp(commandLabel) }),
+    );
+    await flushAppShellEffects();
+
+    expect(
+      tauri.invokeCalls.some(
+        (call) =>
+          call.command === "record_extension_performance" &&
+          (call.args.sample as { operation?: string } | undefined)?.operation ===
+            `command:${commandId}`,
+      ),
+    ).toBe(true);
+
+    await act(async () => {
+      disableResponse.resolve([
+        extensionStatus({
+          id: "yuuzu.debug-tools",
+          name: "Debug Tools",
+          enabled: false,
+        }),
+        extensionStatus({
+          id: "yuuzu.profiler",
+          name: "Profiler",
+          enabled: true,
+          commandId,
+          commandLabel,
+        }),
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await flushAppShellEffects();
+
+    const extension = workspaceViewStore.getState().viewFor(workspaceId).extension;
+    const debugTools = extension.statuses.find(
+      (status) => status.manifest.id === "yuuzu.debug-tools",
+    );
+    expect(debugTools?.enabled).toBe(false);
+    expect(renderResult.getByLabelText("Enable Debug Tools")).toBeTruthy();
+  });
+
   test("AppShell ignores stale extension toggle snapshots for the same workspace", async () => {
     const workspaceId = "extensions-toggle-stale";
     const workspaceRoot = "/repo-extensions-toggle-stale";

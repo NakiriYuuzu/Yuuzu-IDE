@@ -2612,7 +2612,8 @@ export function AppShell() {
   const databaseExportRequestRef = useRef<Record<string, number>>({});
   const remoteHostsLoadRef = useRef<Record<string, number>>({});
   const debugLoadRequestRef = useRef<Record<string, number>>({});
-  const extensionLoadRequestRef = useRef<Record<string, number>>({});
+  const extensionStatusRequestRef = useRef<Record<string, number>>({});
+  const extensionToggleRequestRef = useRef<Record<string, number>>({});
   const docsLoadRequestRef = useRef<DocsLoadRequestState>({});
   const agentSessionsLoadRef = useRef<Record<string, number>>({});
   const languageRefreshRequestRef = useRef<LanguageRefreshRequestState>({});
@@ -6362,10 +6363,31 @@ export function AppShell() {
   }
 
   function nextExtensionStatusRequestId(workspaceId: string): number {
-    const requestId = (extensionLoadRequestRef.current[workspaceId] ?? 0) + 1;
-    extensionLoadRequestRef.current = {
-      ...extensionLoadRequestRef.current,
+    const requestId = (extensionStatusRequestRef.current[workspaceId] ?? 0) + 1;
+    extensionStatusRequestRef.current = {
+      ...extensionStatusRequestRef.current,
       [workspaceId]: requestId,
+    };
+
+    return requestId;
+  }
+
+  function extensionToggleRequestKey(
+    workspaceId: string,
+    extensionId: string,
+  ): string {
+    return `${workspaceId}::${extensionId}`;
+  }
+
+  function nextExtensionToggleRequestId(
+    workspaceId: string,
+    extensionId: string,
+  ): number {
+    const key = extensionToggleRequestKey(workspaceId, extensionId);
+    const requestId = (extensionToggleRequestRef.current[key] ?? 0) + 1;
+    extensionToggleRequestRef.current = {
+      ...extensionToggleRequestRef.current,
+      [key]: requestId,
     };
 
     return requestId;
@@ -6375,7 +6397,19 @@ export function AppShell() {
     workspaceId: string,
     requestId: number,
   ) {
-    return extensionLoadRequestRef.current[workspaceId] === requestId;
+    return extensionStatusRequestRef.current[workspaceId] === requestId;
+  }
+
+  function isLatestExtensionToggleRequest(
+    workspaceId: string,
+    extensionId: string,
+    requestId: number,
+  ) {
+    return (
+      extensionToggleRequestRef.current[
+        extensionToggleRequestKey(workspaceId, extensionId)
+      ] === requestId
+    );
   }
 
   function canApplyExtensionStatusSnapshot(
@@ -6385,6 +6419,19 @@ export function AppShell() {
   ): boolean {
     return (
       isLatestExtensionStatusRequest(workspaceId, requestId) &&
+      hasRegisteredWorkspace(workspaceId) &&
+      getWorkspaceRoot(workspaceId) === workspaceRoot
+    );
+  }
+
+  function canApplyExtensionToggleSnapshot(
+    workspaceId: string,
+    workspaceRoot: string,
+    extensionId: string,
+    requestId: number,
+  ): boolean {
+    return (
+      isLatestExtensionToggleRequest(workspaceId, extensionId, requestId) &&
       hasRegisteredWorkspace(workspaceId) &&
       getWorkspaceRoot(workspaceId) === workspaceRoot
     );
@@ -6460,7 +6507,7 @@ export function AppShell() {
 
     const workspaceId = activeWorkspaceId;
     const workspaceRoot = activeWorkspace.path;
-    const requestId = nextExtensionStatusRequestId(workspaceId);
+    const requestId = nextExtensionToggleRequestId(workspaceId, extensionId);
     updateExtension(workspaceId, (extension) =>
       toggleExtensionStatus(extension, extensionId, enabled),
     );
@@ -6471,7 +6518,14 @@ export function AppShell() {
       enabled,
     })
       .then((statuses) => {
-        if (!canApplyExtensionStatusSnapshot(workspaceId, workspaceRoot, requestId)) {
+        if (
+          !canApplyExtensionToggleSnapshot(
+            workspaceId,
+            workspaceRoot,
+            extensionId,
+            requestId,
+          )
+        ) {
           return;
         }
 
@@ -6480,7 +6534,14 @@ export function AppShell() {
         );
       })
       .catch((error) => {
-        if (!canApplyExtensionStatusSnapshot(workspaceId, workspaceRoot, requestId)) {
+        if (
+          !canApplyExtensionToggleSnapshot(
+            workspaceId,
+            workspaceRoot,
+            extensionId,
+            requestId,
+          )
+        ) {
           return;
         }
 
