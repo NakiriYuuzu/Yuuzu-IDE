@@ -322,6 +322,511 @@ pub(crate) fn parse_log_records(output: &[u8]) -> (Vec<TopoCommit>, Vec<LogMeta>
     (topo, meta)
 }
 
+pub const MAX_DETAIL_FILES: usize = 500;
+pub const MAX_EXPORT_FILES: usize = 2_000;
+pub const MAX_EXPORT_BYTES: u64 = 200 * 1_024 * 1_024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommitFileChange {
+    pub status: String,
+    pub path: String,
+    pub old_path: Option<String>,
+    pub additions: i64,
+    pub deletions: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitCommitDetail {
+    pub hash: String,
+    pub short_hash: String,
+    pub subject: String,
+    pub body: String,
+    pub author: String,
+    pub author_email: String,
+    pub when_unix: i64,
+    pub parents: Vec<String>,
+    pub refs: Vec<GitRef>,
+    pub files: Vec<CommitFileChange>,
+    pub files_truncated: bool,
+}
+
+fn validate_hash(hash: &str) -> Result<String, String> {
+    let h = hash.trim();
+    if h.len() >= 6 && h.len() <= 64 && h.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(h.to_string())
+    } else {
+        Err("invalid commit hash".to_string())
+    }
+}
+
+fn short_hash_of(workspace_root: &Path, hash: &str) -> Result<String, String> {
+    let output = git::run_git_in(
+        workspace_root,
+        &["rev-parse".into(), "--short".into(), hash.to_string()],
+    )?;
+    Ok(String::from_utf8_lossy(&output).trim().to_string())
+}
+
+// `-m --first-parent` makes merge commits report their first-parent diff
+// (plain diff-tree prints nothing for merges); `-M` detects renames.
+fn change_list_args(format_flag: &str, hash: &str) -> Vec<String> {
+    vec![
+        "diff-tree".into(),
+        "-m".into(),
+        "--first-parent".into(),
+        "-M".into(),
+        "--no-commit-id".into(),
+        format_flag.into(),
+        "-r".into(),
+        "-z".into(),
+        "--root".into(),
+        hash.to_string(),
+    ]
+}
+
+pub fn commit_detail(workspace_root: &Path, hash: &str) -> Result<GitCommitDetail, String> {
+    let hash = validate_hash(hash)?;
+    let meta = git::run_git_in(
+        workspace_root,
+        &[
+            "show".into(),
+            "--no-patch".into(),
+            "--pretty=format:%H%x1f%h%x1f%s%x1f%b%x1f%an%x1f%ae%x1f%at%x1f%P%x1f%D".into(),
+            hash.clone(),
+        ],
+    )?;
+    let text = String::from_utf8_lossy(&meta);
+    let f: Vec<&str> = text.split('\u{1f}').collect();
+    if f.len() < 9 {
+        return Err("unexpected git show output".into());
+    }
+
+    let status_out = git::run_git_in(workspace_root, &change_list_args("--name-status", &hash))?;
+    let numstat_out = git::run_git_in(workspace_root, &change_list_args("--numstat", &hash))?;
+    let (files, files_truncated) = parse_change_lists(&status_out, &numstat_out, MAX_DETAIL_FILES)?;
+
+    Ok(GitCommitDetail {
+        hash: f[0].into(),
+        short_hash: f[1].into(),
+        subject: f[2].into(),
+        body: f[3].trim().into(),
+        author: f[4].into(),
+        author_email: f[5].into(),
+        when_unix: f[6].parse().unwrap_or(0),
+        parents: f[7].split_whitespace().map(String::from).collect(),
+        refs: parse_refs(f[8]),
+        files,
+        files_truncated,
+    })
+}
+
+struct NameStatusEntry {
+    status: String,
+    path: String,
+    old_path: Option<String>,
+}
+
+fn parse_name_status(output: &[u8]) -> Result<Vec<NameStatusEntry>, String> {
+    let text = String::from_utf8_lossy(output);
+    let mut records = text.split('\0').filter(|r| !r.is_empty());
+    let mut entries = Vec::new();
+    while let Some(status) = records.next() {
+        let status = status.trim();
+        if status.is_empty() {
+            continue;
+        }
+        if status.starts_with('R') || status.starts_with('C') {
+            let old = records.next().ok_or("missing rename source path")?;
+            let new = records.next().ok_or("missing rename target path")?;
+            entries.push(NameStatusEntry {
+                status: status.chars().take(1).collect(),
+                path: new.to_string(),
+                old_path: Some(old.to_string()),
+            });
+        } else {
+            let path = records.next().ok_or("missing change path")?;
+            entries.push(NameStatusEntry {
+                status: status.to_string(),
+                path: path.to_string(),
+                old_path: None,
+            });
+        }
+    }
+    Ok(entries)
+}
+
+fn parse_numstat(output: &[u8]) -> Result<std::collections::HashMap<String, (i64, i64)>, String> {
+    let text = String::from_utf8_lossy(output);
+    let mut records = text.split('\0').filter(|r| !r.is_empty());
+    let mut stats = std::collections::HashMap::new();
+    while let Some(record) = records.next() {
+        let mut parts = record.splitn(3, '\t');
+        let additions = parts.next().unwrap_or("-").trim();
+        let deletions = parts.next().unwrap_or("-").trim();
+        let path = parts.next().unwrap_or("");
+        // "-" marks binary files
+        let additions: i64 = additions.parse().unwrap_or(0);
+        let deletions: i64 = deletions.parse().unwrap_or(0);
+        if path.is_empty() {
+            // rename record: stat fields end the record, two NUL-separated paths follow
+            let _old = records.next().ok_or("missing numstat rename source")?;
+            let new = records.next().ok_or("missing numstat rename target")?;
+            stats.insert(new.to_string(), (additions, deletions));
+        } else {
+            stats.insert(path.to_string(), (additions, deletions));
+        }
+    }
+    Ok(stats)
+}
+
+fn parse_change_lists(
+    status_out: &[u8],
+    numstat_out: &[u8],
+    max_files: usize,
+) -> Result<(Vec<CommitFileChange>, bool), String> {
+    let entries = parse_name_status(status_out)?;
+    let stats = parse_numstat(numstat_out)?;
+    let truncated = entries.len() > max_files;
+    let files = entries
+        .into_iter()
+        .take(max_files)
+        .map(|entry| {
+            let (additions, deletions) = stats.get(&entry.path).copied().unwrap_or((0, 0));
+            CommitFileChange {
+                status: entry.status,
+                path: entry.path,
+                old_path: entry.old_path,
+                additions,
+                deletions,
+            }
+        })
+        .collect();
+    Ok((files, truncated))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportScope {
+    ChangedFiles,
+    Snapshot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportFormat {
+    Folder,
+    Zip,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportReport {
+    pub written_files: usize,
+    pub total_bytes: u64,
+    pub skipped_deleted: usize,
+    pub destination: String,
+}
+
+pub fn export_commit(
+    workspace_root: &Path,
+    hash: &str,
+    scope: ExportScope,
+    format: ExportFormat,
+    dest: &Path,
+    overwrite: bool,
+) -> Result<ExportReport, String> {
+    let hash = validate_hash(hash)?;
+    std::fs::create_dir_all(dest).map_err(|err| err.to_string())?;
+    match (scope, format) {
+        (ExportScope::ChangedFiles, ExportFormat::Folder) => {
+            export_changed_to_folder(workspace_root, &hash, dest, overwrite)
+        }
+        (ExportScope::ChangedFiles, ExportFormat::Zip) => {
+            let tmp = tempfile::tempdir().map_err(|err| err.to_string())?;
+            let mut report = export_changed_to_folder(workspace_root, &hash, tmp.path(), true)?;
+            let zip_path = dest.join(format!("{}-changed.zip", &hash[..7.min(hash.len())]));
+            if zip_path.exists() && !overwrite {
+                return Err(format!("destination exists: {}", zip_path.display()));
+            }
+            zip_directory(tmp.path(), &zip_path)?;
+            report.destination = zip_path.display().to_string();
+            Ok(report)
+        }
+        (ExportScope::Snapshot, ExportFormat::Zip) => {
+            let zip_path = dest.join(format!("{}-snapshot.zip", &hash[..7.min(hash.len())]));
+            if zip_path.exists() && !overwrite {
+                return Err(format!("destination exists: {}", zip_path.display()));
+            }
+            git::run_git_in(
+                workspace_root,
+                &[
+                    "archive".into(),
+                    "--format=zip".into(),
+                    "-o".into(),
+                    zip_path.display().to_string(),
+                    hash.clone(),
+                ],
+            )?;
+            let bytes = std::fs::metadata(&zip_path).map(|m| m.len()).unwrap_or(0);
+            if bytes > MAX_EXPORT_BYTES {
+                let _ = std::fs::remove_file(&zip_path);
+                return Err("snapshot exceeds 200 MB bound".into());
+            }
+            Ok(ExportReport {
+                written_files: 1,
+                total_bytes: bytes,
+                skipped_deleted: 0,
+                destination: zip_path.display().to_string(),
+            })
+        }
+        (ExportScope::Snapshot, ExportFormat::Folder) => {
+            let tmp = tempfile::NamedTempFile::new().map_err(|err| err.to_string())?;
+            git::run_git_in(
+                workspace_root,
+                &[
+                    "archive".into(),
+                    "--format=zip".into(),
+                    "-o".into(),
+                    tmp.path().display().to_string(),
+                    hash.clone(),
+                ],
+            )?;
+            unzip_into(tmp.path(), dest, overwrite)
+        }
+    }
+}
+
+fn export_changed_to_folder(
+    workspace_root: &Path,
+    hash: &str,
+    dest: &Path,
+    overwrite: bool,
+) -> Result<ExportReport, String> {
+    let status_out = git::run_git_in(workspace_root, &change_list_args("--name-status", hash))?;
+    let entries = parse_name_status(&status_out)?;
+    let kept: Vec<_> = entries.iter().filter(|e| e.status != "D").collect();
+    let skipped_deleted = entries.len() - kept.len();
+    if kept.len() > MAX_EXPORT_FILES {
+        return Err(format!(
+            "{} files exceeds the 2000-file bound; use a snapshot zip instead",
+            kept.len()
+        ));
+    }
+
+    if !overwrite {
+        let conflicts: Vec<String> = kept
+            .iter()
+            .filter(|e| dest.join(&e.path).exists())
+            .map(|e| e.path.clone())
+            .take(20)
+            .collect();
+        if !conflicts.is_empty() {
+            return Err(format!(
+                "destination already contains: {}",
+                conflicts.join(", ")
+            ));
+        }
+    }
+
+    let mut total_bytes = 0u64;
+    let mut written_files = 0usize;
+    for entry in &kept {
+        let normalized =
+            git::normalize_repo_relative_paths(Path::new(""), std::slice::from_ref(&entry.path))?;
+        let bytes = git::run_git_in(
+            workspace_root,
+            &["show".into(), format!("{hash}:{}", entry.path)],
+        )?;
+        total_bytes += bytes.len() as u64;
+        if total_bytes > MAX_EXPORT_BYTES {
+            return Err("export exceeds 200 MB bound; use a snapshot zip instead".into());
+        }
+        let target = dest.join(&normalized[0]);
+        if !target.starts_with(dest) {
+            return Err(format!("export path escapes destination: {}", entry.path));
+        }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        }
+        std::fs::write(&target, &bytes).map_err(|err| err.to_string())?;
+        written_files += 1;
+    }
+    Ok(ExportReport {
+        written_files,
+        total_bytes,
+        skipped_deleted,
+        destination: dest.display().to_string(),
+    })
+}
+
+fn zip_directory(source: &Path, zip_path: &Path) -> Result<(), String> {
+    use std::io::Write;
+
+    let file = std::fs::File::create(zip_path).map_err(|err| err.to_string())?;
+    let mut writer = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default();
+
+    fn walk(
+        writer: &mut zip::ZipWriter<std::fs::File>,
+        options: zip::write::SimpleFileOptions,
+        root: &Path,
+        dir: &Path,
+    ) -> Result<(), String> {
+        let mut entries: Vec<_> = std::fs::read_dir(dir)
+            .map_err(|err| err.to_string())?
+            .collect::<Result<_, _>>()
+            .map_err(|err| err.to_string())?;
+        entries.sort_by_key(|e| e.path());
+        for entry in entries {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(writer, options, root, &path)?;
+            } else {
+                let name = path
+                    .strip_prefix(root)
+                    .map_err(|err| err.to_string())?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                writer
+                    .start_file(&name, options)
+                    .map_err(|err| err.to_string())?;
+                let bytes = std::fs::read(&path).map_err(|err| err.to_string())?;
+                writer.write_all(&bytes).map_err(|err| err.to_string())?;
+            }
+        }
+        Ok(())
+    }
+
+    walk(&mut writer, options, source, source)?;
+    writer.finish().map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+fn unzip_into(zip_path: &Path, dest: &Path, overwrite: bool) -> Result<ExportReport, String> {
+    let file = std::fs::File::open(zip_path).map_err(|err| err.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|err| err.to_string())?;
+
+    let mut written_files = 0usize;
+    let mut total_bytes = 0u64;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|err| err.to_string())?;
+        // zip-slip guard: enclosed_name rejects entries escaping the destination
+        let Some(relative) = entry.enclosed_name() else {
+            return Err(format!("zip entry escapes destination: {}", entry.name()));
+        };
+        let target = dest.join(relative);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&target).map_err(|err| err.to_string())?;
+            continue;
+        }
+        if target.exists() && !overwrite {
+            return Err(format!("destination exists: {}", target.display()));
+        }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        }
+        let mut output = std::fs::File::create(&target).map_err(|err| err.to_string())?;
+        let copied = std::io::copy(&mut entry, &mut output).map_err(|err| err.to_string())?;
+        total_bytes += copied;
+        written_files += 1;
+        if total_bytes > MAX_EXPORT_BYTES {
+            return Err("export exceeds 200 MB bound".into());
+        }
+    }
+    Ok(ExportReport {
+        written_files,
+        total_bytes,
+        skipped_deleted: 0,
+        destination: dest.display().to_string(),
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResetMode {
+    Soft,
+    Mixed,
+    Hard,
+}
+
+pub fn cherry_pick(workspace_root: &Path, hash: &str) -> Result<git::GitRepositoryStatus, String> {
+    let hash = validate_hash(hash)?;
+    let result = git::run_git_in(workspace_root, &["cherry-pick".into(), hash]);
+    if let Err(err) = result {
+        let _ = git::run_git_in(workspace_root, &["cherry-pick".into(), "--abort".into()]);
+        return Err(err);
+    }
+    git::repository_status(workspace_root)
+}
+
+pub fn revert_commit(
+    workspace_root: &Path,
+    hash: &str,
+    confirmation: &str,
+) -> Result<git::GitRepositoryStatus, String> {
+    let hash = validate_hash(hash)?;
+    let short = short_hash_of(workspace_root, &hash)?;
+    git::require_confirmation(confirmation, &format!("REVERT {short}"))?;
+    let result = git::run_git_in(workspace_root, &["revert".into(), "--no-edit".into(), hash]);
+    if let Err(err) = result {
+        let _ = git::run_git_in(workspace_root, &["revert".into(), "--abort".into()]);
+        return Err(err);
+    }
+    git::repository_status(workspace_root)
+}
+
+pub fn reset_to(
+    workspace_root: &Path,
+    hash: &str,
+    mode: ResetMode,
+    confirmation: &str,
+) -> Result<git::GitRepositoryStatus, String> {
+    let hash = validate_hash(hash)?;
+    let short = short_hash_of(workspace_root, &hash)?;
+    let (expected, flag) = match mode {
+        ResetMode::Soft => (format!("RESET {short}"), "--soft"),
+        ResetMode::Mixed => (format!("RESET {short}"), "--mixed"),
+        ResetMode::Hard => (format!("RESET HARD {short}"), "--hard"),
+    };
+    git::require_confirmation(confirmation, &expected)?;
+    git::run_git_in(workspace_root, &["reset".into(), flag.into(), hash])?;
+    git::repository_status(workspace_root)
+}
+
+pub fn commit_file_diff(
+    workspace_root: &Path,
+    hash: &str,
+    path: &str,
+) -> Result<git::GitDiffHunks, String> {
+    let hash = validate_hash(hash)?;
+    let normalized = git::normalize_repo_relative_paths(Path::new(""), &[path.to_string()])?;
+    let output = git::run_git_in(
+        workspace_root,
+        &[
+            "show".into(),
+            "-m".into(),
+            "--first-parent".into(),
+            "--no-ext-diff".into(),
+            "--no-color".into(),
+            "--pretty=format:".into(),
+            hash,
+            "--".into(),
+            normalized[0].to_string_lossy().into_owned(),
+        ],
+    )?;
+    let truncated_bytes = output.len() > git::GIT_DIFF_LIMIT_BYTES;
+    let visible = if truncated_bytes {
+        &output[..git::GIT_DIFF_LIMIT_BYTES]
+    } else {
+        &output[..]
+    };
+    let raw = String::from_utf8_lossy(visible);
+    let mut parsed = git::parse_unified_diff(&raw, git::MAX_DIFF_HUNKS, git::MAX_DIFF_TOTAL_LINES)?;
+    parsed.path = normalized[0].to_string_lossy().into_owned();
+    parsed.truncated = parsed.truncated || truncated_bytes;
+    git::attach_word_ranges(&mut parsed);
+    Ok(parsed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,6 +919,111 @@ mod tests {
             "feature commits left lane 0"
         );
         assert!(!page.has_more);
+    }
+
+    #[test]
+    fn commit_detail_lists_changed_files_with_stats() {
+        let repo = temp_repo_with_merge();
+        let head = log_page(repo.path(), &GitLogFilter::default(), 1)
+            .unwrap()
+            .rows[0]
+            .hash
+            .clone();
+        let detail = commit_detail(repo.path(), &head).expect("detail");
+        assert_eq!(detail.hash, head);
+        assert!(!detail.files.is_empty());
+        assert!(detail.files.iter().all(|f| !f.path.is_empty()));
+    }
+
+    #[test]
+    fn export_changed_files_writes_commit_version_with_folders() {
+        let repo = crate::git::tests::TempGitRepo::new();
+        std::fs::create_dir_all(repo.path().join("src/deep")).unwrap();
+        repo.write_file("src/deep/f.ts", "v1\n");
+        repo.run(["add", "."]);
+        repo.run(["commit", "-m", "one"]);
+        repo.write_file("src/deep/f.ts", "v2\n");
+        repo.run(["add", "."]);
+        repo.run(["commit", "-m", "two"]);
+        let rows = log_page(repo.path(), &GitLogFilter::default(), 10)
+            .unwrap()
+            .rows;
+        let second = rows[0].hash.clone();
+        // must NOT leak into the export
+        repo.write_file("src/deep/f.ts", "working-tree-v3\n");
+
+        let dest = tempfile::tempdir().unwrap();
+        let report = export_commit(
+            repo.path(),
+            &second,
+            ExportScope::ChangedFiles,
+            ExportFormat::Folder,
+            dest.path(),
+            false,
+        )
+        .expect("export");
+
+        assert_eq!(report.written_files, 1);
+        let exported = std::fs::read_to_string(dest.path().join("src/deep/f.ts")).unwrap();
+        assert_eq!(
+            exported, "v2\n",
+            "exports the commit version, not the working tree"
+        );
+    }
+
+    #[test]
+    fn export_refuses_overwrite_without_flag_and_lists_conflicts() {
+        let repo = crate::git::tests::TempGitRepo::new();
+        repo.write_file("a.txt", "x\n");
+        repo.run(["add", "."]);
+        repo.run(["commit", "-m", "c"]);
+        let hash = log_page(repo.path(), &GitLogFilter::default(), 1)
+            .unwrap()
+            .rows[0]
+            .hash
+            .clone();
+        let dest = tempfile::tempdir().unwrap();
+        std::fs::write(dest.path().join("a.txt"), "existing").unwrap();
+
+        let err = export_commit(
+            repo.path(),
+            &hash,
+            ExportScope::ChangedFiles,
+            ExportFormat::Folder,
+            dest.path(),
+            false,
+        )
+        .expect_err("conflict rejected");
+        assert!(err.contains("a.txt"));
+
+        export_commit(
+            repo.path(),
+            &hash,
+            ExportScope::ChangedFiles,
+            ExportFormat::Folder,
+            dest.path(),
+            true,
+        )
+        .expect("overwrite allowed with flag");
+    }
+
+    #[test]
+    fn reset_to_and_revert_require_typed_confirmation() {
+        let repo = temp_repo_with_merge();
+        let rows = log_page(repo.path(), &GitLogFilter::default(), 10)
+            .unwrap()
+            .rows;
+        let target = rows.last().unwrap().hash.clone();
+        let short = rows.last().unwrap().short_hash.clone();
+
+        assert!(reset_to(repo.path(), &target, ResetMode::Hard, "").is_err());
+        assert!(reset_to(
+            repo.path(),
+            &target,
+            ResetMode::Hard,
+            &format!("RESET HARD {short}")
+        )
+        .is_ok());
     }
 
     #[test]

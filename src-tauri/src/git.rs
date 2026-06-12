@@ -497,7 +497,7 @@ fn required_trimmed<'a>(value: &'a str, label: &str) -> Result<&'a str, String> 
     }
 }
 
-fn require_confirmation(actual: &str, expected: &str) -> Result<(), String> {
+pub(crate) fn require_confirmation(actual: &str, expected: &str) -> Result<(), String> {
     if actual == expected {
         Ok(())
     } else {
@@ -1074,7 +1074,7 @@ pub fn revert_hunks(
     repository_status(workspace_root)
 }
 
-fn attach_word_ranges(diff: &mut GitDiffHunks) {
+pub(crate) fn attach_word_ranges(diff: &mut GitDiffHunks) {
     for hunk in &mut diff.hunks {
         let mut i = 0;
         while i + 1 < hunk.lines.len() {

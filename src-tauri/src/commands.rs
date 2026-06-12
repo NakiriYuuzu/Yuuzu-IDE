@@ -1756,6 +1756,82 @@ pub async fn git_log_page(
 }
 
 #[tauri::command]
+pub async fn git_commit_detail(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    hash: String,
+) -> Result<crate::git_log::GitCommitDetail, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git_log::commit_detail(&workspace_root, &hash)).await
+}
+
+#[tauri::command]
+pub async fn git_commit_file_diff(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    hash: String,
+    path: String,
+) -> Result<crate::git::GitDiffHunks, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git_log::commit_file_diff(&workspace_root, &hash, &path)).await
+}
+
+#[tauri::command]
+pub async fn git_cherry_pick(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    hash: String,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git_log::cherry_pick(&workspace_root, &hash)).await
+}
+
+#[tauri::command]
+pub async fn git_revert_commit(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    hash: String,
+    confirmation: String,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git_log::revert_commit(&workspace_root, &hash, &confirmation)).await
+}
+
+#[tauri::command]
+pub async fn git_reset_to(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    hash: String,
+    mode: crate::git_log::ResetMode,
+    confirmation: String,
+) -> Result<crate::git::GitRepositoryStatus, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git_log::reset_to(&workspace_root, &hash, mode, &confirmation))
+        .await
+}
+
+#[tauri::command]
+pub async fn git_export_commit(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    hash: String,
+    scope: crate::git_log::ExportScope,
+    format: crate::git_log::ExportFormat,
+    dest_dir: String,
+    overwrite: bool,
+) -> Result<crate::git_log::ExportReport, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    let dest = std::path::PathBuf::from(dest_dir.trim());
+    if dest.as_os_str().is_empty() || !dest.is_absolute() {
+        return Err("export destination must be an absolute path".to_string());
+    }
+    run_blocking(move || {
+        crate::git_log::export_commit(&workspace_root, &hash, scope, format, &dest, overwrite)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn git_stage_hunks(
     state: State<'_, AppState>,
     workspace_root: String,
