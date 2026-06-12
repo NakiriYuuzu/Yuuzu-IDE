@@ -464,6 +464,9 @@ type AppShellTauriMockOptions = {
     DebugVariable[] | Promise<DebugVariable[]>
   >;
   extensionStatuses?: ExtensionWorkspaceStatus[];
+  setExtensionEnabledResponses?: Array<
+    ExtensionWorkspaceStatus[] | Promise<ExtensionWorkspaceStatus[]>
+  >;
 };
 
 function appShellGitStatus(workspaceRoot: string) {
@@ -486,6 +489,9 @@ function installAppShellTauriMock(options: AppShellTauriMockOptions) {
   const listeners: Record<string, TauriEventCallback[]> = {};
   let callbackId = 1;
   let extensionStatuses = options.extensionStatuses ?? [];
+  const setExtensionEnabledResponses = [
+    ...(options.setExtensionEnabledResponses ?? []),
+  ];
   const registry = {
     active_workspace_id: options.workspaceId,
     workspaces: [
@@ -552,6 +558,10 @@ function installAppShellTauriMock(options: AppShellTauriMockOptions) {
         case "extension_statuses":
           return extensionStatuses;
         case "set_extension_enabled":
+          if (setExtensionEnabledResponses.length > 0) {
+            return setExtensionEnabledResponses.shift();
+          }
+
           extensionStatuses = extensionStatuses.map((status) =>
             status.manifest.id === String(args.extensionId)
               ? {
@@ -1989,6 +1999,43 @@ describe("AppShell AppShell helpers", () => {
     ).toBeNull();
   });
 
+  test("AppShell keeps core palette commands active when extension statuses contribute matching ids", async () => {
+    const workspaceId = "extensions-core-command-shadow";
+    const workspaceRoot = "/repo-extensions-core-command-shadow";
+    const { renderResult, tauri } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot,
+      initialExtensionStatuses: [
+        extensionStatus({
+          id: "yuuzu.core",
+          name: "Yuuzu Core",
+          commandId: "search-workspace",
+          commandLabel: "Yuuzu Core: Search workspace",
+        }),
+      ],
+    });
+
+    fireEvent.click(
+      renderResult.getByRole("button", { name: /Search or run a command/ }),
+    );
+    fireEvent.click(
+      renderResult.getByRole("button", { name: /^Search workspace Search$/ }),
+    );
+    await flushAppShellEffects();
+
+    const view = workspaceViewStore.getState().viewFor(workspaceId);
+    expect(view.activeActivity).toBe("search");
+    expect(view.panelOpen).toBe(true);
+    expect(
+      tauri.invokeCalls.some(
+        (call) =>
+          call.command === "record_extension_performance" &&
+          (call.args.sample as { operation?: string } | undefined)?.operation ===
+            "command:search-workspace",
+      ),
+    ).toBe(false);
+  });
+
   test("AppShell records slow extension command performance", async () => {
     const workspaceId = "extensions-command-performance";
     const workspaceRoot = "/repo-extensions-command-performance";
@@ -2029,6 +2076,65 @@ describe("AppShell AppShell helpers", () => {
         recorded_ms: 0,
       },
     });
+  });
+
+  test("AppShell ignores stale extension toggle snapshots for the same workspace", async () => {
+    const workspaceId = "extensions-toggle-stale";
+    const workspaceRoot = "/repo-extensions-toggle-stale";
+    const disableResponse = createDeferred<ExtensionWorkspaceStatus[]>();
+    const enableResponse = createDeferred<ExtensionWorkspaceStatus[]>();
+    const { renderResult } = await renderAppShellForDebug({
+      workspaceId,
+      workspaceRoot,
+      extensionStatuses: [
+        extensionStatus({
+          id: "yuuzu.debug-tools",
+          name: "Debug Tools",
+          enabled: true,
+        }),
+      ],
+      setExtensionEnabledResponses: [
+        disableResponse.promise,
+        enableResponse.promise,
+      ],
+    });
+
+    fireEvent.click(renderResult.getByRole("button", { name: "Extensions" }));
+    await flushAppShellEffects();
+
+    fireEvent.click(renderResult.getByLabelText("Disable Debug Tools"));
+    expect(renderResult.getByLabelText("Enable Debug Tools")).toBeTruthy();
+
+    fireEvent.click(renderResult.getByLabelText("Enable Debug Tools"));
+    expect(renderResult.getByLabelText("Disable Debug Tools")).toBeTruthy();
+
+    await act(async () => {
+      enableResponse.resolve([
+        extensionStatus({
+          id: "yuuzu.debug-tools",
+          name: "Debug Tools",
+          enabled: true,
+        }),
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await flushAppShellEffects();
+
+    await act(async () => {
+      disableResponse.resolve([
+        extensionStatus({
+          id: "yuuzu.debug-tools",
+          name: "Debug Tools",
+          enabled: false,
+        }),
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await flushAppShellEffects();
+
+    const extension = workspaceViewStore.getState().viewFor(workspaceId).extension;
+    expect(extension.statuses[0]?.enabled).toBe(true);
+    expect(renderResult.getByLabelText("Disable Debug Tools")).toBeTruthy();
   });
 
   test("AppShell stopped listener loads live scopes and variables for DebugPanel", async () => {

@@ -411,7 +411,10 @@ import {
 } from "./workspace-view-state";
 import { useWorkspaceStore, workspaceStore } from "./workspace-store";
 import { WorkspaceSwitcher } from "./workspace-switcher";
-import { commandItemsForPalette } from "./command-registry";
+import {
+  commandItemsForPalette,
+  registeredCoreCommandIds,
+} from "./command-registry";
 
 type FileChangedPayload = {
   workspace_root: string;
@@ -454,6 +457,8 @@ const panelTitles: Record<ActivityId, string> = {
   browser: "Browser",
   settings: "Settings",
 };
+
+const coreCommandIdSet = new Set(registeredCoreCommandIds());
 
 export type AgentAvailableContextSource = {
   workspaceRoot: string;
@@ -6356,29 +6361,46 @@ export function AppShell() {
     });
   }
 
-  function isLatestExtensionLoadRequest(workspaceId: string, requestId: number) {
+  function nextExtensionStatusRequestId(workspaceId: string): number {
+    const requestId = (extensionLoadRequestRef.current[workspaceId] ?? 0) + 1;
+    extensionLoadRequestRef.current = {
+      ...extensionLoadRequestRef.current,
+      [workspaceId]: requestId,
+    };
+
+    return requestId;
+  }
+
+  function isLatestExtensionStatusRequest(
+    workspaceId: string,
+    requestId: number,
+  ) {
     return extensionLoadRequestRef.current[workspaceId] === requestId;
+  }
+
+  function canApplyExtensionStatusSnapshot(
+    workspaceId: string,
+    workspaceRoot: string,
+    requestId: number,
+  ): boolean {
+    return (
+      isLatestExtensionStatusRequest(workspaceId, requestId) &&
+      hasRegisteredWorkspace(workspaceId) &&
+      getWorkspaceRoot(workspaceId) === workspaceRoot
+    );
   }
 
   async function refreshExtensionsForWorkspace(
     workspaceId: string,
     workspaceRoot: string,
   ): Promise<void> {
-    const requestId = (extensionLoadRequestRef.current[workspaceId] ?? 0) + 1;
-    extensionLoadRequestRef.current = {
-      ...extensionLoadRequestRef.current,
-      [workspaceId]: requestId,
-    };
+    const requestId = nextExtensionStatusRequestId(workspaceId);
     updateExtension(workspaceId, setExtensionLoading);
 
     try {
       const statuses = await listExtensionStatuses(workspaceRoot);
 
-      if (
-        !isLatestExtensionLoadRequest(workspaceId, requestId) ||
-        !hasRegisteredWorkspace(workspaceId) ||
-        getWorkspaceRoot(workspaceId) !== workspaceRoot
-      ) {
+      if (!canApplyExtensionStatusSnapshot(workspaceId, workspaceRoot, requestId)) {
         return;
       }
 
@@ -6386,7 +6408,7 @@ export function AppShell() {
         replaceExtensionStatuses(extension, statuses),
       );
     } catch (error) {
-      if (!isLatestExtensionLoadRequest(workspaceId, requestId)) {
+      if (!isLatestExtensionStatusRequest(workspaceId, requestId)) {
         return;
       }
 
@@ -6438,6 +6460,7 @@ export function AppShell() {
 
     const workspaceId = activeWorkspaceId;
     const workspaceRoot = activeWorkspace.path;
+    const requestId = nextExtensionStatusRequestId(workspaceId);
     updateExtension(workspaceId, (extension) =>
       toggleExtensionStatus(extension, extensionId, enabled),
     );
@@ -6448,10 +6471,7 @@ export function AppShell() {
       enabled,
     })
       .then((statuses) => {
-        if (
-          !hasRegisteredWorkspace(workspaceId) ||
-          getWorkspaceRoot(workspaceId) !== workspaceRoot
-        ) {
+        if (!canApplyExtensionStatusSnapshot(workspaceId, workspaceRoot, requestId)) {
           return;
         }
 
@@ -6460,10 +6480,7 @@ export function AppShell() {
         );
       })
       .catch((error) => {
-        if (
-          !hasRegisteredWorkspace(workspaceId) ||
-          getWorkspaceRoot(workspaceId) !== workspaceRoot
-        ) {
+        if (!canApplyExtensionStatusSnapshot(workspaceId, workspaceRoot, requestId)) {
           return;
         }
 
@@ -6479,6 +6496,10 @@ export function AppShell() {
   function enabledExtensionCommandForId(
     commandId: string,
   ): ExtensionCommandContribution | null {
+    if (coreCommandIdSet.has(commandId)) {
+      return null;
+    }
+
     const extension = workspaceViewStore.getState().viewFor(activeWorkspaceId)
       .extension;
 
@@ -6507,6 +6528,7 @@ export function AppShell() {
 
     const workspaceId = activeWorkspaceId;
     const workspaceRoot = activeWorkspace.path;
+    const requestId = nextExtensionStatusRequestId(workspaceId);
     void recordExtensionPerformance({
       workspaceRoot,
       sample: {
@@ -6519,10 +6541,7 @@ export function AppShell() {
       },
     })
       .then((statuses) => {
-        if (
-          !hasRegisteredWorkspace(workspaceId) ||
-          getWorkspaceRoot(workspaceId) !== workspaceRoot
-        ) {
+        if (!canApplyExtensionStatusSnapshot(workspaceId, workspaceRoot, requestId)) {
           return;
         }
 
@@ -6531,10 +6550,7 @@ export function AppShell() {
         );
       })
       .catch((error) => {
-        if (
-          !hasRegisteredWorkspace(workspaceId) ||
-          getWorkspaceRoot(workspaceId) !== workspaceRoot
-        ) {
+        if (!canApplyExtensionStatusSnapshot(workspaceId, workspaceRoot, requestId)) {
           return;
         }
 
