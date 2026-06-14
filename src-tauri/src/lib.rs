@@ -117,6 +117,7 @@ pub fn run() {
             commands::git_log_page,
             commands::git_commit_detail,
             commands::git_commit_file_diff,
+            commands::git_commit_file_worktree_diff,
             commands::git_cherry_pick,
             commands::git_revert_commit,
             commands::git_reset_to,

@@ -3,6 +3,7 @@ node_modules/
 dist/
 target/
 src-tauri/target/
+.playwright-mcp/
 .superpowers/
 .firecrawl/
 .vscode/

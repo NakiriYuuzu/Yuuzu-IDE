@@ -234,6 +234,14 @@ export function getGitCommitFileDiff(
   return call("git_commit_file_diff", { workspaceRoot, hash, path });
 }
 
+export function getGitCommitFileWorktreeDiff(
+  workspaceRoot: string,
+  hash: string,
+  path: string,
+): Promise<GitDiffHunks> {
+  return call("git_commit_file_worktree_diff", { workspaceRoot, hash, path });
+}
+
 export function getGitBranchesFull(
   workspaceRoot: string,
 ): Promise<GitBranchFull[]> {

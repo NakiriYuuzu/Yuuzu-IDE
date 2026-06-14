@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
-import { ensureTestDom } from "../../app/test-dom";
+import { ensureTestDom } from "../../test/test-dom";
 import type { GitBranchFull, GitStashEntry } from "./git-model";
 import { GitBranchPopup } from "./GitBranchPopup";
 

@@ -1,0 +1,6 @@
+# Bun test runner config.
+# Register the happy-dom globals BEFORE any test file loads. @testing-library/dom
+# binds `screen` to `document` at module-evaluation time, so the DOM must exist
+# before the first test file imports testing-library.
+[test]
+preload = ["./src/test/test-dom.preload.ts"]

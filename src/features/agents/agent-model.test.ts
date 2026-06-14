@@ -32,10 +32,10 @@ function session(id: string, mode: AgentMode = "plan"): AgentSession {
     prompt: "Plan Node 7",
     context_items: [
       {
-        id: "file:src/app/AppShell.tsx",
+        id: "file:src/v2/Workbench.tsx",
         kind: "file",
-        label: "src/app/AppShell.tsx",
-        path: "src/app/AppShell.tsx",
+        label: "src/v2/Workbench.tsx",
+        path: "src/v2/Workbench.tsx",
         content: "shell",
         truncated: false,
       },
@@ -56,11 +56,11 @@ function session(id: string, mode: AgentMode = "plan"): AgentSession {
         id: "approval-1",
         session_id: id,
         kind: "approval_request",
-        title: "Edit src/app/AppShell.tsx",
+        title: "Edit src/v2/Workbench.tsx",
         content: "Requires review",
         status: "pending",
         approval_status: "pending",
-        metadata: { path: "src/app/AppShell.tsx" },
+        metadata: { path: "src/v2/Workbench.tsx" },
         created_ms: 2,
       },
     ],
@@ -88,7 +88,7 @@ describe("agent model", () => {
       ]),
       activeSessionId: "two",
       promptDraft: "In progress",
-      selectedContextIds: { "file:src/app/AppShell.tsx": true } satisfies Record<string, true>,
+      selectedContextIds: { "file:src/v2/Workbench.tsx": true } satisfies Record<string, true>,
     };
 
     const updated = storeAgentSession(state, {
@@ -102,7 +102,7 @@ describe("agent model", () => {
     expect(updated.activeSessionId).toBe("two");
     expect(updated.promptDraft).toBe("In progress");
     expect(updated.selectedContextIds).toEqual({
-      "file:src/app/AppShell.tsx": true,
+      "file:src/v2/Workbench.tsx": true,
     });
   });
 
@@ -111,7 +111,7 @@ describe("agent model", () => {
       ...replaceAgentSessions(createAgentState(), [session("one"), session("two")]),
       activeSessionId: "two",
       promptDraft: "In progress",
-      selectedContextIds: { "file:src/app/AppShell.tsx": true } satisfies Record<string, true>,
+      selectedContextIds: { "file:src/v2/Workbench.tsx": true } satisfies Record<string, true>,
     };
 
     const updated = storeAgentSession(state, {
@@ -214,12 +214,12 @@ describe("agent model", () => {
 
     expect(
       agentContextFromDiff({
-        path: "src/app/AppShell.tsx",
+        path: "src/v2/Workbench.tsx",
         staged: false,
-        raw: "diff --git a/src/app/AppShell.tsx b/src/app/AppShell.tsx",
+        raw: "diff --git a/src/v2/Workbench.tsx b/src/v2/Workbench.tsx",
       }),
     ).toMatchObject({
-      id: "diff:unstaged:src/app/AppShell.tsx",
+      id: "diff:unstaged:src/v2/Workbench.tsx",
       kind: "diff",
     });
   });

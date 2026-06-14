@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Change Report: v2 替代 v1 + 真實後端接線</title>
+<style>
+:root {
+    --font-sans: system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+    --color-bg: #faf9f7;
+    --color-surface: #ffffff;
+    --color-text: #1a1a1a;
+    --color-text-secondary: #6b7280;
+    --color-border: #e5e5e5;
+    --color-accent: #5e8c14;
+    --color-accent-light: #edf5db;
+    --color-success: #22c55e;
+    --color-warning: #f59e0b;
+    --color-error: #ef4444;
+    --color-diff-add-bg: #dcfce7;
+    --color-diff-add-line: #bbf7d0;
+    --color-diff-del-bg: #fee2e2;
+    --color-diff-del-line: #fecaca;
+    --radius-md: 10px;
+    --radius-lg: 16px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--font-sans); background: var(--color-bg); color: var(--color-text); line-height: 1.6; }
+.layout { display: grid; grid-template-columns: 260px 1fr; min-height: 100vh; }
+@media (max-width: 768px) { .layout { grid-template-columns: 1fr; } .sidebar { display: none; } }
+.sidebar { background: var(--color-surface); border-right: 1px solid var(--color-border); padding: 1.5rem; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+.sidebar h3 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-secondary); margin: 1rem 0 0.75rem; }
+.sidebar h3:first-child { margin-top: 0; }
+.file-list { list-style: none; }
+.file-list li { margin-bottom: 0.25rem; }
+.file-list a { color: var(--color-text); text-decoration: none; font-size: 0.8rem; font-family: var(--font-mono); padding: 0.35rem 0.5rem; display: flex; align-items: center; gap: 0.5rem; border-radius: 6px; }
+.file-list a:hover { background: var(--color-bg); }
+.file-list .indicator { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.file-list .indicator.added { background: var(--color-success); }
+.file-list .indicator.modified { background: var(--color-warning); }
+.main { padding: 2rem; max-width: 1020px; }
+header { margin-bottom: 2rem; }
+header .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-accent); font-weight: 600; }
+header h1 { font-size: 1.7rem; margin: 0.25rem 0; }
+header .meta { color: var(--color-text-secondary); font-size: 0.9rem; }
+.stats { display: flex; gap: 1rem; margin: 1.5rem 0; flex-wrap: wrap; }
+.stat { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 1rem 1.25rem; min-width: 120px; }
+.stat .value { font-size: 1.5rem; font-weight: 700; }
+.stat .label { font-size: 0.8rem; color: var(--color-text-secondary); }
+.summary { background: var(--color-surface); border-radius: var(--radius-lg); padding: 1.5rem; margin-bottom: 2rem; border: 1px solid var(--color-border); }
+.summary h2 { font-size: 1.1rem; margin-bottom: 0.75rem; }
+.summary ul { padding-left: 1.25rem; }
+.summary li { margin-bottom: 0.5rem; font-size: 0.95rem; }
+table.changes { width: 100%; border-collapse: collapse; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; font-size: 0.85rem; margin-bottom: 2rem; }
+table.changes th { text-align: left; padding: 0.6rem 0.9rem; background: var(--color-accent-light); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: #3d5c0d; }
+table.changes td { padding: 0.55rem 0.9rem; border-top: 1px solid var(--color-border); vertical-align: top; }
+table.changes td.file { font-family: var(--font-mono); font-size: 0.78rem; white-space: nowrap; }
+.pill { display: inline-block; font-size: 0.68rem; font-weight: 700; padding: 0.1rem 0.5rem; border-radius: 999px; text-transform: uppercase; }
+.pill.add { background: #dcfce7; color: #166534; }
+.pill.mod { background: #fef3c7; color: #92400e; }
+.section-title { font-size: 1.2rem; margin: 2.5rem 0 1rem; }
+.diagram-container { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 1.25rem; overflow-x: auto; margin-bottom: 2rem; }
+.diagram-caption { font-size: 0.85rem; color: var(--color-text-secondary); margin-top: 0.75rem; }
+details.file-section { margin-bottom: 1rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; }
+details.file-section summary { cursor: pointer; padding: 0.75rem 1rem; font-family: var(--font-mono); font-size: 0.85rem; display: flex; align-items: center; gap: 0.75rem; }
+details.file-section summary:hover { background: var(--color-bg); }
+details.file-section summary .indicator { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+details.file-section summary .indicator.added { background: var(--color-success); }
+details.file-section summary .indicator.modified { background: var(--color-warning); }
+details.file-section summary .lines { margin-left: auto; color: var(--color-text-secondary); font-size: 0.75rem; }
+details.file-section .body { padding: 0.75rem 1rem 1rem; border-top: 1px solid var(--color-border); font-size: 0.9rem; }
+.diff { border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.7; margin: 0.75rem 0; }
+.diff-line { display: flex; }
+.diff-line .line-num { width: 46px; text-align: right; padding: 0 0.6rem; color: var(--color-text-secondary); user-select: none; flex-shrink: 0; }
+.diff-line .line-content { flex: 1; padding: 0 1rem; white-space: pre-wrap; word-break: break-all; }
+.diff-line.add { background: var(--color-diff-add-bg); }
+.diff-line.add .line-num { background: var(--color-diff-add-line); }
+.diff-line.del { background: var(--color-diff-del-bg); }
+.diff-line.del .line-num { background: var(--color-diff-del-line); }
+.diff-line.context { background: var(--color-surface); }
+.annotation { margin: 0.75rem 0; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 0.75rem 1rem; font-size: 0.85rem; display: flex; gap: 0.75rem; align-items: flex-start; }
+.annotation .severity { font-size: 0.7rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 999px; text-transform: uppercase; flex-shrink: 0; }
+.annotation .severity.info { background: #e0e7ff; color: #3730a3; }
+.annotation .severity.note { background: #fef3c7; color: #92400e; }
+.annotation .severity.done { background: #dcfce7; color: #166534; }
+.verify { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 1.5rem; margin-bottom: 2rem; }
+.verify h2 { font-size: 1.1rem; margin-bottom: 0.75rem; }
+.verify ul { padding-left: 1.25rem; }
+.verify li { margin-bottom: 0.4rem; font-size: 0.9rem; }
+.shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+.shot { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; }
+.shot img { width: 100%; display: block; }
+.shot .cap { padding: 0.5rem 0.75rem; font-size: 0.8rem; color: var(--color-text-secondary); }
+.matrix { width: 100%; border-collapse: collapse; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; font-size: 0.85rem; margin-bottom: 2rem; }
+.matrix th { text-align: left; padding: 0.55rem 0.9rem; background: var(--color-accent-light); font-size: 0.75rem; color: #3d5c0d; }
+.matrix td { padding: 0.5rem 0.9rem; border-top: 1px solid var(--color-border); }
+.ok { color: #166534; font-weight: 700; }
+.todo { color: #92400e; font-weight: 700; }
+@media print { .sidebar { display: none; } .layout { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="layout">
+    <nav class="sidebar">
+        <h3>新增（src/v2/）</h3>
+        <ul class="file-list">
+            <li><a href="#f-bridge"><span class="indicator added"></span>bridge.ts</a></li>
+            <li><a href="#f-controller"><span class="indicator added"></span>controller.ts</a></li>
+            <li><a href="#f-bridge-test"><span class="indicator added"></span>bridge.test.ts</a></li>
+        </ul>
+        <h3>修改</h3>
+        <ul class="file-list">
+            <li><a href="#f-store"><span class="indicator modified"></span>v2-store.ts</a></li>
+            <li><a href="#f-model"><span class="indicator modified"></span>v2-model.ts</a></li>
+            <li><a href="#f-views"><span class="indicator modified"></span>ContentViews.tsx</a></li>
+            <li><a href="#f-az"><span class="indicator modified"></span>AgentZone.tsx</a></li>
+            <li><a href="#f-side"><span class="indicator modified"></span>SidePanel.tsx</a></li>
+            <li><a href="#f-git"><span class="indicator modified"></span>GitGraphView.tsx</a></li>
+            <li><a href="#f-overlays"><span class="indicator modified"></span>Overlays.tsx</a></li>
+            <li><a href="#f-wb"><span class="indicator modified"></span>Workbench.tsx</a></li>
+            <li><a href="#f-css"><span class="indicator modified"></span>yuzu.css</a></li>
+            <li><a href="#f-app"><span class="indicator modified"></span>src/App.tsx</a></li>
+            <li><a href="#f-tauri"><span class="indicator modified"></span>tauri.conf.json</a></li>
+            <li><a href="#f-cap"><span class="indicator modified"></span>capabilities/default.json</a></li>
+        </ul>
+        <h3>章節</h3>
+        <ul class="file-list">
+            <li><a href="#arch">架構圖</a></li>
+            <li><a href="#matrix">真實接線矩陣</a></li>
+            <li><a href="#verify">驗證結果</a></li>
+        </ul>
+    </nav>
+
+    <main class="main">
+        <header>
+            <div class="label">Change Report · Co-Learning · Phase 2</div>
+            <h1>v2 直接替代 v1 + 真實後端接線 + 原生紅綠燈</h1>
+            <p class="meta">yuuzu-ide · main · 2026-06-13 · 接續「ide-v2-workbench」報告</p>
+        </header>
+
+        <div class="stats">
+            <div class="stat"><div class="value">3</div><div class="label">新檔案</div></div>
+            <div class="stat"><div class="value">12</div><div class="label">修改檔案</div></div>
+            <div class="stat"><div class="value" style="color:var(--color-accent)">12</div><div class="label">新測試（bridge）</div></div>
+            <div class="stat"><div class="value">402</div><div class="label">全套測試通過</div></div><div class="stat"><div class="value" style="color:var(--color-error)">−14</div><div class="label">v1 shell 檔案移除</div></div>
+            <div class="stat"><div class="value" style="color:var(--color-success)">✓</div><div class="label">Tauri 實機驗證</div></div>
+        </div>
+
+        <div class="summary">
+            <h2>What &amp; Why</h2>
+            <p>依指示「直接替代 v1，開始執行」：<strong>v2 成為唯一 shell</strong>（App.tsx 不再載入 v1；v1 shell 原始碼已自 repo 移除（14 檔，含 9.9k 行 AppShell 與其測試）；原先暫留在 <code>src/app/</code> 的共用測試與 workspace state 支援已移入非 v1 路徑），並把 v2 接上<strong>真實 Tauri 後端</strong> — 完全重用已驗證的 feature api 層，零後端改動。最後依追加需求把 <strong>macOS 原生紅綠燈直接內建到 v2 title bar</strong>（titleBarStyle: Overlay），消除雙層紅綠燈。</p>
+            <h3 style="font-size:0.9rem;margin-top:1rem;">架構決策</h3>
+            <ul>
+                <li><strong>RealDelegate 注入</strong>：store 維持同步、不 import async 程式碼；controller 在 Tauri 環境 bootstrap 時呼叫 <code>registerRealDelegate()</code>，動作在 real 模式分流給 delegate。瀏覽器無 Tauri → 自動 fallback 原本的 demo 引擎（網頁預覽 / 測試完全不受影響）。</li>
+                <li><strong>純映射層（bridge.ts）可測試</strong>：workspace→rail 色組與 glyph、扁平 scan→lazy 樹、GitLogRow→DAG（parent hash→index）、profile/host→側欄卡片，12 個測試覆蓋。</li>
+                <li><strong>終端機直接重用 v1 戰力</strong>：<code>features/terminal/TerminalTab</code>（xterm + fit + replay buffer）原封不動掛進 v2 的 cmd tab 與 AgentZone 視窗；controller 訂閱一次 <code>onTerminalOutput</code> 餵 replay buffer。</li>
+            </ul>
+        </div>
+
+        <h2 class="section-title" id="arch">Architecture（real ⇄ demo 雙模）</h2>
+        <div class="diagram-container">
+            <svg viewBox="0 0 940 480" xmlns="http://www.w3.org/2000/svg" style="min-width:760px">
+                <defs>
+                    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                        <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"/>
+                    </marker>
+                </defs>
+                <rect x="20" y="20" width="250" height="74" rx="10" fill="#edf5db" stroke="#5e8c14"/>
+                <text x="145" y="48" text-anchor="middle" font-size="13" font-weight="700" fill="#3d5c0d">v2/Workbench（UI 元件群）</text>
+                <text x="145" y="66" text-anchor="middle" font-size="10.5" fill="#52606d">rail · side · tabs · views · AgentZone</text>
+                <text x="145" y="81" text-anchor="middle" font-size="10.5" fill="#52606d">bootstrapV2() on mount</text>
+
+                <rect x="330" y="20" width="280" height="74" rx="10" fill="#fff" stroke="#5e8c14" stroke-width="1.5"/>
+                <text x="470" y="44" text-anchor="middle" font-size="13" font-weight="700" fill="#3d5c0d">v2-store（zustand · 同步）</text>
+                <text x="470" y="62" text-anchor="middle" font-size="10.5" fill="#52606d">mode: 'demo' | 'real'</text>
+                <text x="470" y="77" text-anchor="middle" font-size="10.5" fill="#52606d">action → if real: realDelegate.✻()</text>
+
+                <rect x="670" y="20" width="240" height="74" rx="10" fill="#fff" stroke="#e5e5e5"/>
+                <text x="790" y="44" text-anchor="middle" font-size="13" font-weight="700">demo 引擎（v2-model）</text>
+                <text x="790" y="62" text-anchor="middle" font-size="10.5" fill="#6b7280">設計稿資料集 · 瀏覽器預設</text>
+                <text x="790" y="77" text-anchor="middle" font-size="10.5" fill="#6b7280">Playwright 回歸用</text>
+
+                <rect x="330" y="150" width="280" height="92" rx="10" fill="#edf5db" stroke="#5e8c14"/>
+                <text x="470" y="174" text-anchor="middle" font-size="13" font-weight="700" fill="#3d5c0d">v2/controller.ts（async 編排）</text>
+                <text x="470" y="192" text-anchor="middle" font-size="10.5" fill="#52606d">registerRealDelegate · loadRegistry</text>
+                <text x="470" y="207" text-anchor="middle" font-size="10.5" fill="#52606d">ensureTree/Git/Connections · spawnSession</text>
+                <text x="470" y="222" text-anchor="middle" font-size="10.5" fill="#52606d">onTerminalOutput → replay buffer</text>
+
+                <rect x="60" y="150" width="200" height="92" rx="10" fill="#fff" stroke="#e5e5e5"/>
+                <text x="160" y="178" text-anchor="middle" font-size="13" font-weight="700">v2/bridge.ts（純映射）</text>
+                <text x="160" y="196" text-anchor="middle" font-size="10.5" fill="#6b7280">isTauri · mapGitLog · mapEntries</text>
+                <text x="160" y="211" text-anchor="middle" font-size="10.5" fill="#6b7280">mapDbProfiles · mapRemoteHosts</text>
+                <text x="160" y="226" text-anchor="middle" font-size="10.5" fill="#6b7280">12 tests ✓</text>
+
+                <rect x="670" y="150" width="240" height="92" rx="10" fill="#fff" stroke="#f59e0b"/>
+                <text x="790" y="174" text-anchor="middle" font-size="12.5" font-weight="700" fill="#92400e">features/* api 層（v1 重用）</text>
+                <text x="790" y="192" text-anchor="middle" font-size="10.5" fill="#6b7280">workspace · file · terminal(+TerminalTab)</text>
+                <text x="790" y="207" text-anchor="middle" font-size="10.5" fill="#6b7280">git · database · remote</text>
+                <text x="790" y="222" text-anchor="middle" font-size="10.5" fill="#6b7280">零修改</text>
+
+                <rect x="330" y="300" width="580" height="64" rx="10" fill="#fff" stroke="#e5e5e5"/>
+                <text x="620" y="326" text-anchor="middle" font-size="13" font-weight="700">Tauri Rust 後端（180+ commands · 零修改）</text>
+                <text x="620" y="344" text-anchor="middle" font-size="10.5" fill="#6b7280">workspace registry · fs · PTY · git · db keystore · ssh/sftp</text>
+
+                <rect x="20" y="300" width="270" height="64" rx="10" fill="#edf5db" stroke="#5e8c14"/>
+                <text x="155" y="324" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3d5c0d">tauri.conf.json</text>
+                <text x="155" y="342" text-anchor="middle" font-size="10.5" fill="#52606d">titleBarStyle: Overlay · hiddenTitle</text>
+                <text x="155" y="356" text-anchor="middle" font-size="10.5" fill="#52606d">trafficLightPosition (12,22) → 單層紅綠燈</text>
+
+                <rect x="20" y="404" width="890" height="48" rx="10" fill="#fff" stroke="#e5e5e5"/>
+                <text x="465" y="433" text-anchor="middle" font-size="11.5" fill="#6b7280">App.tsx → 只渲染 WorkbenchV2（v1 不可達，src/app/ 已移除）</text>
+
+                <line x1="270" y1="57" x2="330" y2="57" stroke="#6b7280" marker-end="url(#arr)"/>
+                <line x1="610" y1="45" x2="670" y2="45" stroke="#6b7280" stroke-dasharray="4 3" marker-end="url(#arr)"/>
+                <text x="640" y="36" text-anchor="middle" font-size="9.5" fill="#6b7280">demo</text>
+                <line x1="470" y1="94" x2="470" y2="150" stroke="#5e8c14" stroke-width="1.5" marker-end="url(#arr)"/>
+                <text x="492" y="126" font-size="9.5" fill="#3d5c0d">real</text>
+                <line x1="330" y1="196" x2="260" y2="196" stroke="#6b7280" marker-end="url(#arr)"/>
+                <line x1="610" y1="196" x2="670" y2="196" stroke="#6b7280" marker-end="url(#arr)"/>
+                <line x1="790" y1="242" x2="700" y2="300" stroke="#6b7280" marker-end="url(#arr)"/>
+                <text x="790" y="278" text-anchor="middle" font-size="9.5" fill="#6b7280">invoke / events</text>
+            </svg>
+            <p class="diagram-caption">同一套 UI 元件雙模運作：Tauri 內 bootstrapV2 註冊 delegate 並切 mode=real（清空 demo 專案、載入真 registry）；瀏覽器則維持 demo。store 永遠同步，async 全部在 controller。</p>
+        </div>
+
+        <h2 class="section-title" id="matrix">真實接線矩陣</h2>
+        <table class="matrix">
+            <thead><tr><th>領域</th><th>狀態</th><th>實作</th></tr></thead>
+            <tbody>
+                <tr><td>專案 rail / 切換 / 新增 / 關閉</td><td class="ok">REAL</td><td>listWorkspaces → meta（glyph 取段首字母、色組循環）；+ → 資料夾選擇器 → openWorkspacePath；切換 → switchWorkspace</td></tr>
+                <tr><td>Explorer 檔案樹</td><td class="ok">REAL</td><td>scanWorkspace lazy 樹（展開才掃子目錄）；右鍵 New file → createTextFile + 重掃；Delete → deletePath + 連動關分頁</td></tr>
+                <tr><td>編輯器（唯讀）+ Σ token chip</td><td class="ok">REAL</td><td>readTextFile → 內容上色（&gt;3000 行降級純文字）、token 估算用真實內容；too_large / binary 有對應狀態</td></tr>
+                <tr><td>終端機 tabs + AgentZone</td><td class="ok">REAL</td><td>spawnTerminalSession PTY + xterm（重用 TerminalTab）；輸出進 replay buffer；關 tab/視窗即 closeTerminalSession；exit 事件標記</td></tr>
+                <tr><td>Git graph / commit / 詳情</td><td class="ok">REAL</td><td>getGitLogPage(120) → DAG（parents→index、lane 後端算好）；getGitStatus → branch/ahead/behind；commitGit（提交已 staged 內容）；選 commit → getGitCommitDetail（檔案 + 訊息）</td></tr>
+                <tr><td>DB / SSH 側欄</td><td class="ok">REAL</td><td>listDatabaseProfiles / listRemoteHosts；展開連線 → inspectDatabaseSchema 載入真實 tables（含筆數）；Shell → PTY 自動執行 ssh</td></tr>
+                <tr><td>DB Data grid / SQL 執行</td><td class="todo">DEMO</td><td>查詢執行含確認流程（Mutation/Destructive 分類），下一階段接 executeDatabaseQuery</td></tr>
+                <tr><td>SFTP 視圖</td><td class="todo">DEMO</td><td>需 connect + listSftpDirectory 會話流程；側欄 hosts 已真實</td></tr>
+                <tr><td>Browser 分頁內容 / 編輯器寫入 / settings 持久化</td><td class="todo">DEMO</td><td>後續：webview 嵌入、writeTextFile + 髒檔流程、settings-api</td></tr>
+            </tbody>
+        </table>
+
+        <h2 class="section-title">What Changed</h2>
+        <table class="changes">
+            <thead><tr><th>檔案</th><th>類型</th><th>變更內容</th><th>工具</th><th>原因</th></tr></thead>
+            <tbody>
+                <tr><td class="file">src/v2/bridge.ts</td><td><span class="pill add">new</span></td><td>isTauri 偵測 + 全部純映射（workspace/樹/git log/db/ssh/lang）</td><td>Write</td><td>可測試的轉換層，隔離 api payload 與 v2 模型</td></tr>
+                <tr><td class="file">src/v2/controller.ts</td><td><span class="pill add">new</span></td><td>RealDelegate 實作：registry/樹/git/連線 lazy 載入、PTY 生命週期、commit、檔案建立刪除、commit 詳情</td><td>Write</td><td>async 編排集中一處，store 保持同步</td></tr>
+                <tr><td class="file">src/v2/bridge.test.ts</td><td><span class="pill add">new</span></td><td>12 個映射測試（glyph、lazy 樹、parent→index、ahead/behind、engine/host 標籤）</td><td>Write</td><td>真實資料轉換的回歸防護</td></tr>
+                <tr><td class="file">src/v2/v2-store.ts</td><td><span class="pill mod">mod</span></td><td>mode 欄位、RealDelegate 注入點、emptyUI()、dbConns/sshHosts/gitDetail 進 slice、12 個動作加 real 分流（含 closeOthers/closeAllTabs 的 PTY 清理）</td><td>Edit</td><td>demo 行為不變（測試證明），real 委派</td></tr>
+                <tr><td class="file">src/v2/v2-model.ts</td><td><span class="pill mod">mod</span></td><td>Tab(sessionId/content/loading/exited…)、TreeNode(p/loaded)、AzWindow(sessionId)、GitCommit(fullHash)、GitDetail、ProjectUI 擴充</td><td>Edit</td><td>真實資料欄位</td></tr>
+                <tr><td class="file">src/v2/ContentViews.tsx</td><td><span class="pill mod">mod</span></td><td>EditorView 真實內容（快取上色、loading/too-large/binary）；TerminalView sessionId → xterm；SplitPane 真實檔案</td><td>Edit</td><td>內容視圖雙模</td></tr>
+                <tr><td class="file">src/v2/AgentZone.tsx</td><td><span class="pill mod">mod</span></td><td>視窗 sessionId → TerminalTab（收合卸載、還原 replay）</td><td>Edit</td><td>AgentZone = 真 PTY 集群</td></tr>
+                <tr><td class="file">src/v2/SidePanel.tsx</td><td><span class="pill mod">mod</span></td><td>dbConns/sshHosts 改讀 slice、explorer 載入提示、real git badge 規則、空 hosts 提示</td><td>Edit</td><td>側欄資料來源統一</td></tr>
+                <tr><td class="file">src/v2/GitGraphView.tsx</td><td><span class="pill mod">mod</span></td><td>real 模式：gitDetail 檔案清單 + MESSAGE 區（取代假 diff）、載入狀態</td><td>Edit</td><td>不顯示假資料</td></tr>
+                <tr><td class="file">src/v2/Overlays.tsx</td><td><span class="pill mod">mod</span></td><td>dbconn ctx 改 slice；Count tokens 用真實內容（未開檔提示）</td><td>Edit</td><td>ctx 動作對齊真實資料</td></tr>
+                <tr><td class="file">src/v2/Workbench.tsx</td><td><span class="pill mod">mod</span></td><td>bootstrapV2、demo 鍵入防護（real 由 xterm 收鍵）、無專案 hero、meta 防呆；title bar drag region + 原生紅綠燈留位</td><td>Edit</td><td>雙模啟動與安全防護</td></tr>
+                <tr><td class="file">src/v2/yuzu.css</td><td><span class="pill mod">mod</span></td><td>.yz2 scope 的 terminal-host/failure 覆寫、.yz2-xterm、az real body、ed-loading</td><td>Edit</td><td>xterm 進 Yuzu 外觀</td></tr>
+                <tr><td class="file">src/App.tsx</td><td><span class="pill mod">mod</span></td><td>只渲染 WorkbenchV2 — v1 替代完成</td><td>Write</td><td>使用者指示「直接替代 v1」</td></tr>
+                <tr><td class="file">src-tauri/tauri.conf.json</td><td><span class="pill mod">mod</span></td><td>titleBarStyle: Overlay、hiddenTitle、trafficLightPosition (12,22)</td><td>Edit</td><td>原生紅綠燈嵌入 40px title bar，單層化</td></tr>
+                <tr><td class="file">src-tauri/capabilities/default.json</td><td><span class="pill mod">mod</span></td><td>+ core:window:allow-start-dragging</td><td>Bash</td><td>data-tauri-drag-region 需要（core:default 不含）</td></tr>
+                <tr><td class="file">src/app/AppShell.tsx ＋13 個 v1 shell 檔</td><td><span class="pill" style="background:#fee2e2;color:#991b1b">DEL</span></td><td>刪除 v1 shell：AppShell(9.9k 行)、contract test、activity-rail、workspace-switcher、CommandPalette、command-registry/palette-model、editor-buffer-state、workspace-bootstrap（各含測試）</td><td>Bash rm</td><td>使用者指示移除 v1 舊版本；共用測試與 workspace state 支援已搬到非 v1 路徑</td></tr>
+                <tr><td class="file">src/features/workspace/workspace-view-state.ts</td><td><span class="pill mod">mod</span></td><td>保留 workspace-scoped view state 與 ActivityId 型別，移入 workspace feature</td><td>Edit</td><td>解除對 v1 rail 與 src/app/ 位置的依賴</td></tr>
+                <tr><td class="file">bunfig.toml<br>src/test/test-dom.preload.ts</td><td><span class="pill add">new</span></td><td>bun test preload：在任何測試載入前註冊 happy-dom</td><td>Write</td><td>修復隱性順序依賴 — @testing-library 的 screen 在模組載入時綁定 document；測試 DOM 支援已移到 src/test/</td></tr>
+            </tbody>
+        </table>
+
+        <h2 class="section-title">關鍵程式碼</h2>
+
+        <details class="file-section" id="f-store" open>
+            <summary><span class="indicator modified"></span>v2-store.ts — RealDelegate 注入</summary>
+            <div class="body">
+                <div class="diff">
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">let realDelegate: RealDelegate | null = null</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">export function registerRealDelegate(d: RealDelegate | null) { realDelegate = d }</span></div>
+                    <div class="diff-line context"><span class="line-num"></span><span class="line-content">// 動作內：</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">openFile: (path) =&gt; {</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">    if (get().mode === "real") { realDelegate?.openFile(path); return }</span></div>
+                    <div class="diff-line context"><span class="line-num"></span><span class="line-content">    /* demo 原邏輯不變 */</span></div>
+                </div>
+                <div class="annotation"><span class="severity info">Info</span><div>store ↛ controller 無 import（避免循環）；demo 測試 0 改動全綠，證明 fallback 完整。</div></div>
+            </div>
+        </details>
+
+        <details class="file-section" id="f-controller">
+            <summary><span class="indicator added"></span>controller.ts — PTY 與 lazy 載入</summary>
+            <div class="body">
+                <div class="diff">
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">void onTerminalOutput((e) =&gt; appendTerminalReplayOutput(e.session_id, e.chunk))</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">// azNew: spawnTerminalSession → win.sessionId → AgentZone 掛 TerminalTab(xterm)</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">// ensureTree: scanWorkspace(root)；toggleDir 展開未載入目錄時掃該層</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">// reloadGit: getGitStatus + getGitLogPage(120) → mapGitLog → 首個 commit 自動載詳情</span></div>
+                </div>
+                <div class="annotation"><span class="severity done">Verified</span><div>實機截圖：AgentZone 的 PTY 內互動式 Claude Code TUI 正常渲染（box drawing、色彩、即時輸入）。</div></div>
+            </div>
+        </details>
+
+        <details class="file-section" id="f-bridge">
+            <summary><span class="indicator added"></span>bridge.ts — GitLogRow → DAG</summary>
+            <div class="body">
+                <div class="diff">
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">const indexByHash = new Map(rows.map((r, i) =&gt; [r.hash, i]))</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">par: r.parents.map((h) =&gt; indexByHash.get(h)).filter(isNumber)</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">lane: Math.min(r.lane, 2)  // 後端 lane，夾到設計的三色</span></div>
+                </div>
+                <div class="annotation"><span class="severity note">Note</span><div>頁尾外的 parent（不在前 120 筆）會被濾掉 — 邊界 commit 不畫斷線，行為合理。</div></div>
+            </div>
+        </details>
+
+        <details class="file-section" id="f-tauri">
+            <summary><span class="indicator modified"></span>tauri.conf.json + Workbench TitleBar — 單層紅綠燈</summary>
+            <div class="body">
+                <div class="diff">
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">"titleBarStyle": "Overlay", "hiddenTitle": true,</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">"trafficLightPosition": { "x": 12, "y": 22 }</span></div>
+                    <div class="diff-line context"><span class="line-num"></span><span class="line-content">// TitleBar.tsx：</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">&lt;div className="yz2-titlebar" data-tauri-drag-region&gt;</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">  {isTauri() ? &lt;div style={{ width: 56 }} /&gt; : &lt;裝飾紅綠燈（網頁預覽）&gt;}</span></div>
+                </div>
+                <div class="annotation"><span class="severity info">Info</span><div>y=21（由 14→18→20→22 依視覺回饋逐步校準；tao 實作：titlebar 容器高 = 按鈕高 + y）；拖曳整列可移動視窗、雙擊最大化（原生行為）。瀏覽器 demo 保留裝飾燈。</div></div>
+            </div>
+        </details>
+
+        <details class="file-section" id="f-model">
+            <summary><span class="indicator modified"></span>其餘檔案（model / views / side / git / overlays / css / app / cap）</summary>
+            <div class="body" id="f-views">
+                <p id="f-az">見變更表。設計上的取捨：</p>
+                <ul style="padding-left:1.25rem" id="f-side">
+                    <li id="f-git">real 模式編輯器 &gt;3000 行檔案降級為無上色渲染（避免 regex 高亮卡頓）</li>
+                    <li id="f-overlays">real 模式 git 詳情面板顯示真實 CHANGED FILES + commit MESSAGE，不再顯示假 diff</li>
+                    <li id="f-css">demo 的鍵盤模擬（cmd/agent 假打字）在 real 模式停用 — xterm 自己收鍵，避免雙重輸入</li>
+                    <li id="f-app">真實 commit 走「提交已 staged」語意（與 v1 相同）；無 staged 內容時後端錯誤以 toast 呈現</li>
+                </ul>
+                <p id="f-cap" style="margin-top:0.5rem" ><span id="f-bridge-test"></span><span id="f-wb"></span>capabilities 增加 start-dragging；bridge.test.ts 12 例與既有 516 例全綠。</p>
+            </div>
+        </details>
+
+        <h2 class="section-title" id="verify">驗證結果</h2>
+        <div class="verify">
+            <ul>
+                <li>✅ <code>bunx tsc --noEmit</code> 乾淨；<code>bun test</code> 528/528（demo 行為 0 迴歸）；<code>bun run build</code> 成功</li>
+                <li>✅ <strong>Tauri 實機（bun run tauri dev）</strong>：rail 顯示真實 registry（yuuzu-hooks=YH、yuuzu-ide=YI active）；側欄/title/狀態列顯示真實 branch <code>main</code>；DB/SSH 徽章 0（真實——此 workspace 無設定檔）</li>
+                <li>✅ AgentZone 真 PTY：session 內實際跑起 Claude Code TUI（互動輸入、box drawing、色彩全部正常）— 終端機鏈路（spawn→events→replay→xterm）端到端成立</li>
+                <li>✅ Git graph 真資料：實機顯示本 repo 完整歷史（integrate git deep dive…），main ref chip、0↑ 0↓、右側真實 CHANGED FILES</li>
+                <li>✅ 紅綠燈單層化：重啟後原生燈號嵌在 v2 title bar 內（未聚焦呈灰色為正常原生行為），原生標題列消失</li>
+                <li>✅ 瀏覽器 demo 回歸：裝飾紅綠燈、demo 專案/tabs、AgentZone 打字、git 假資料均正常</li>
+                <li>⚠️ 已知：status bar 的 ⟳ 1↓ 2↑ / ✗ 0 ⚠ 3 / Ln Col 仍為靜態文案；tauri.conf 變更觸發 app 重啟會中斷既有 PTY session（一次性）</li>
+            </ul>
+            <p style="margin-top:0.75rem;font-size:0.85rem;color:var(--color-text-secondary)">實機截圖：docs/code-review/v2-screens/real-agentzone-claude.png · real-gitgraph-overlay.png · real-titlebar-trafficlights.png</p>
+        </div>
+
+        <div class="summary">
+            <h2>下一步（建議順序）</h2>
+            <ul>
+                <li>編輯器寫入：Monaco（v1 既有 loader）或 textarea + writeTextFile + dirty 流程</li>
+                <li>DB 查詢執行：executeDatabaseQuery + Mutation/Destructive 確認對話框（v1 已有分類器）</li>
+                <li>SFTP 真實會話：connectRemoteHost + listSftpDirectory + upload/download 接 v2 雙欄</li>
+                <li>status bar 接真實 ahead/behind 與游標位置；瀏覽器分頁嵌 webview</li>
+                <li>持續用 active-reference scan 防止 v1 shell 路徑回流</li>
+            </ul>
+        </div>
+    </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-Hant"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>v2 接線大計劃總覽</title>
+<style>
+:root{--font-sans:system-ui,-apple-system,"PingFang TC","Noto Sans TC",sans-serif;--font-mono:'JetBrains Mono',monospace;--color-bg:#faf9f7;--color-surface:#fff;--color-text:#1a1a1a;--color-text-secondary:#6b7280;--color-border:#e5e5e5;--color-accent:#5f7d2e;--color-accent-light:#eef3e3;--color-success:#22c55e;--color-warning:#f59e0b;--color-error:#ef4444;--radius-md:10px;--radius-lg:16px;--shadow-sm:0 1px 3px rgba(0,0,0,.08)}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--font-sans);background:var(--color-bg);color:var(--color-text);line-height:1.6;padding:2rem}
+.container{max-width:960px;margin:0 auto}
+header .label{font-size:.75rem;text-transform:uppercase;letter-spacing:.1em;color:var(--color-accent);font-weight:600}
+header h1{font-size:2rem;margin:.25rem 0}
+header .meta{color:var(--color-text-secondary);font-size:.9rem;font-family:var(--font-mono)}
+.tldr{background:var(--color-accent-light);border-left:4px solid var(--color-accent);border-radius:var(--radius-md);padding:1.25rem;margin:1.5rem 0 2rem}
+.tldr h3{font-size:.8rem;text-transform:uppercase;letter-spacing:.1em;color:#45611a;margin-bottom:.5rem}
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1rem;margin-bottom:2rem}
+.metric-card{background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-md);padding:1.1rem 1.25rem}
+.metric-card .value{font-size:1.9rem;font-weight:700}
+.metric-card .label{font-size:.78rem;color:var(--color-text-secondary);margin-top:.2rem}
+.tabs{display:flex;gap:0;border-bottom:2px solid var(--color-border);margin-bottom:1.5rem;flex-wrap:wrap}
+.tab{padding:.7rem 1.1rem;border:none;background:none;cursor:pointer;font-size:.9rem;font-weight:600;color:var(--color-text-secondary);border-bottom:2px solid transparent;margin-bottom:-2px}
+.tab.active{color:var(--color-accent);border-bottom-color:var(--color-accent)}
+.tab-content{display:none}.tab-content.active{display:block}
+section{margin-bottom:1.5rem}section h2{font-size:1.2rem;margin-bottom:1rem}
+.sp-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+@media(max-width:760px){.sp-grid{grid-template-columns:1fr}body{padding:1rem}.metrics{grid-template-columns:1fr 1fr}}
+.sp-card{background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-md);padding:1rem 1.1rem}
+.sp-head{display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;flex-wrap:wrap}
+.sp-id{color:#fff;font-weight:700;font-size:.72rem;font-family:var(--font-mono);padding:.1rem .45rem;border-radius:5px}
+.sp-title{font-weight:700;font-size:.95rem;flex:1}
+.sp-size{font-size:.68rem;font-weight:700;padding:.1rem .5rem;border-radius:999px;background:#f3f4f6;color:#374151}
+.sz-L{background:#fde8e8;color:#991b1b}.sz-M{background:#fef3c7;color:#92400e}.sz-S{background:#dcfce7;color:#166534}
+.sp-sum{font-size:.82rem;color:#374151;margin-bottom:.5rem}
+.sp-risk{font-size:.76rem;color:#6b7280;background:#fafaf8;border-radius:6px;padding:.4rem .6rem;margin-bottom:.5rem}
+.sp-foot code{font-size:.7rem;color:var(--color-accent);font-family:var(--font-mono)}
+.chart-container{background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:1.5rem;margin-bottom:1.5rem;overflow-x:auto}
+.chart-container h3{font-size:.85rem;margin-bottom:1rem;color:var(--color-text-secondary)}
+.timeline{position:relative;padding-left:2rem}
+.timeline::before{content:'';position:absolute;left:7px;top:0;bottom:0;width:2px;background:var(--color-border)}
+.timeline-item{position:relative;margin-bottom:1.25rem}
+.timeline-item::before{content:'';position:absolute;left:-2rem;top:.5rem;width:12px;height:12px;border-radius:50%;background:var(--color-accent);border:2px solid var(--color-bg)}
+.timeline-item .date{font-size:.78rem;color:var(--color-accent);font-weight:700;font-family:var(--font-mono)}
+.timeline-item .content{background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-md);padding:.85rem 1rem;margin-top:.4rem}
+.timeline-item .content p{font-size:.82rem;color:#374151;margin-top:.3rem}
+table{width:100%;border-collapse:collapse;font-size:.85rem;background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-md);overflow:hidden}
+th{text-align:left;padding:.6rem .8rem;background:var(--color-accent-light);font-size:.74rem;text-transform:uppercase;letter-spacing:.04em;color:#45611a}
+td{padding:.6rem .8rem;border-top:1px solid var(--color-border);vertical-align:top}
+.cov-sp{color:#fff;font-weight:700;font-size:.7rem;font-family:var(--font-mono);padding:.1rem .45rem;border-radius:5px}
+ul.risks{padding-left:1.2rem}ul.risks li{font-size:.85rem;margin-bottom:.5rem}
+.actions{display:flex;gap:1rem;margin-top:2rem}
+.btn{padding:.55rem 1.1rem;border-radius:var(--radius-md);border:2px solid var(--color-border);background:var(--color-surface);cursor:pointer;font-size:.85rem;font-weight:600}
+.btn:hover{border-color:var(--color-accent)}
+@media print{.tabs,.actions{display:none}.tab-content{display:block!important}}
+</style></head><body><div class="container">
+<header><div class="label">Multi-Agent Plan · ultracode</div><h1>v2 接線大計劃</h1>
+<p class="meta">多階段 subagent review · 2026-06-13 · 對抗式審查 · SP0-SP4 automated complete</p></header>
+
+<div class="tldr"><h3>TL;DR</h3><p>把 v2 Yuzu shell 從「只接 7 域的一半」推進到 <strong>SP0-SP4 自動化實作完成</strong>,拆成 5 個子計劃、共 44 個 TDD task(含已明確延後項)。後端早已齊全(Node 0-13 + Git Deep Dive),<strong>幾乎零 Rust 改動</strong>(唯一例外 SP1-T0 修前端 latent bug),工作量集中在 store→RealDelegate→controller→features/*-api 分層接線。SP3 T11 hover/completion 已依 owner option 2 延後;SP4 T12 run_remote_command 已接自動化/IPC gate,native smoke 待真 SSH profile。</p></div>
+
+<div class="metrics">
+<div class="metric-card"><div class="value">5</div><div class="label">子計劃</div></div>
+<div class="metric-card"><div class="value">42</div><div class="label">core tasks done</div></div>
+<div class="metric-card"><div class="value" style="color:var(--color-success)">≈0</div><div class="label">Rust 改動</div></div>
+<div class="metric-card"><div class="value" style="color:var(--color-error)">3</div><div class="label">既有 bug 修復</div></div>
+</div>
+
+<div class="tabs">
+<button class="tab active" onclick="showTab('overview',event)">子計劃</button>
+<button class="tab" onclick="showTab('deps',event)">相依與順序</button>
+<button class="tab" onclick="showTab('milestones',event)">里程碑</button>
+<button class="tab" onclick="showTab('coverage',event)">需求覆蓋</button>
+<button class="tab" onclick="showTab('risks',event)">風險</button>
+</div>
+
+<div id="overview" class="tab-content active"><section><div class="sp-grid">
+      <div class="sp-card" style="border-top:3px solid #e0894a">
+        <div class="sp-head">
+          <span class="sp-id" style="background:#e0894a">SP0</span>
+          <span class="sp-title">folder-expand-bugfix</span>
+          <span class="sp-size sz-S">S · 2 tasks</span>
+        </div>
+        <p class="sp-sum">real(Tauri)模式下點開檔案樹**子資料夾**,chevron 翻成 ▾ 但底下永遠空白。根因:controller.toggleDir(controller.ts:347)對子目錄絕對路徑呼叫 scanWorkspace(node.p),而後端 scan_workspace→trusted_workspace_root(commands.rs:1071/126)僅放行「已註冊 root 本身」,子目錄(如 /root/src)canonicalize 後 != 任何 registered root → Err'workspace not registered' → Promise reject → catch 出 toas…</p>
+        <div class="sp-risk"><strong>主要風險:</strong> controller 綁模組級單例 v2Store + 一次性 bootstrapped 旗標,測試不能用 createV2Store() fresh,須整檔只 bootstrapV2() 一次後依序操作、pid 從 getState().active 取</div>
+        <div class="sp-foot"><code>2026-06-13-v2-SP0-folder-expand-bugfix.md</code></div>
+      </div>
+      <div class="sp-card" style="border-top:3px solid #3b82f6">
+        <div class="sp-head">
+          <span class="sp-id" style="background:#3b82f6">SP1</span>
+          <span class="sp-title">Observability &amp; Stability 三件套（ide-logger / 效能監控 / recovery）</span>
+          <span class="sp-size sz-M">M · 7 tasks</span>
+        </div>
+        <p class="sp-sum">在 v2 SettingsModal 內開一個依 section.id 的「自訂 React render 出口」，並接上三塊後端已 100% ready 但前端完全 orphan 的穩定性能力：ide-logger（append/list_diagnostic_events：關鍵 action fire-and-forget 埋點 + 事件清單）、效能監控（metric_snapshot：記憶體/uptime/index/workspace 數字卡 + 手動 Refresh）、recovery（save/list/discard_unsaved_backup：autosave debounce 備份 + 還原把 content 灌…</p>
+        <div class="sp-risk"><strong>主要風險:</strong> append_diagnostic_event 的 orphan api 送 flat 參數而非 {event:{...}}（後端 commands.rs:230 簽名 event:DiagnosticEventInput 已確認），不先修（T0）則所有 logger 埋點 silently 失敗（被 .catch((…</div>
+        <div class="sp-foot"><code>2026-06-13-v2-SP1-observability-stability.md</code></div>
+      </div>
+      <div class="sp-card" style="border-top:3px solid #5f7d2e">
+        <div class="sp-head">
+          <span class="sp-id" style="background:#5f7d2e">SP2</span>
+          <span class="sp-title">Git Power &amp; UI</span>
+          <span class="sp-size sz-L">L · 12 tasks</span>
+        </div>
+        <p class="sp-sum">把後端早已齊全的 git 指令裡尚未接的 ~30 個（41 個 git command + 對應 git-api wrapper 全齊、0 後端改動）接進 v2 兩個既有 surface（SidePanel GitBody + GitGraphView），讓 source control 具備一般 IDE 的完整能力：working-tree 變更清單與 path/hunk/line 級 staging、unstaged/commit diff viewer、branch popup（建立/切換/合併/刪除/改名，並修掉「checkout 只能 detached」的明確 bug）、stash 清單與 apply/pop/drop/b…</p>
+        <div class="sp-risk"><strong>主要風險:</strong> 檔案路徑修正:git-model.ts/git-diff-model.ts/git-api.ts 在 src/features/git/ 而非草案誤寫的 src/v2/;一律走 ../features/git/ import(bridge/controller 已是此模式)。st 映射用 exported decora…</div>
+        <div class="sp-foot"><code>2026-06-13-v2-SP2-git-power-and-ui.md</code></div>
+      </div>
+      <div class="sp-card" style="border-top:3px solid #8b5cf6">
+        <div class="sp-head">
+          <span class="sp-id" style="background:#8b5cf6">SP3</span>
+          <span class="sp-title">language-lsp</span>
+          <span class="sp-size sz-L">L · 11 tasks</span>
+        </div>
+        <p class="sp-sum">把後端 14 個 lsp_* 指令(全部 completed)接進 v2 Yuzu shell。核心工程決策:v2 編輯器維持「textarea 疊高亮層」不升級 Monaco,分階段路線——階段 1(本子計劃主體,必做)接「只需行級定位 + 面板/浮層」的高 CP 值能力:LSP 文件生命週期(didOpen/didChange/didClose)、diagnostics(行級底線 + gutter 圓點 + Language 面板)、go-to-definition、find references、rename;階段 2 是 hover/completion——這兩項後端與 language-api wrapper 全 read…</p>
+        <div class="sp-risk"><strong>主要風險:</strong> hover/completion 對使用者焦點的偏差(須 owner 拍板):兩項明列在焦點內、後端與 language-api wrapper 全 ready,卻因 textarea 字元級像素定位脆弱被隔離成 T11;這是範圍縮減而非完整覆蓋,T11 在 owner 三選一(textarea 自製/延後/接回 Mo…</div>
+        <div class="sp-foot"><code>2026-06-13-v2-SP3-language-lsp.md</code></div>
+      </div>
+      <div class="sp-card" style="border-top:3px solid #0d9488">
+        <div class="sp-head">
+          <span class="sp-id" style="background:#0d9488">SP4</span>
+          <span class="sp-title">connected-domains</span>
+          <span class="sp-size sz-M">M · 12 tasks</span>
+        </div>
+        <p class="sp-sum">補完三個「已部分接線」功能域裡後端 100% ready、v2 卻沒接或接了丟資料的子集。已完成:DB query history(list_database_query_history)+ mutation 被動分類 chip + data footer total fallback;remote 顯式 disconnect/reconnect + run_remote_command prompt;browser 區域截圖縮圖。run_remote_command native smoke 待真 SSH profile。</p>
+        <div class="sp-risk"><strong>主要風險:</strong> browser bounds 螢幕座標換算在多螢幕/高 DPI 可能偏移數 px(screencapture -R 用實體像素,getBoundingClientRect+window.screenX/Y 為邏輯像素)——MVP 單螢幕驗證,DPI 縮放列已知風險</div>
+        <div class="sp-foot"><code>2026-06-13-v2-SP4-connected-domains.md</code></div>
+      </div></div></section></div>
+
+<div id="deps" class="tab-content">
+<div class="chart-container"><h3>執行順序與軟依賴(實線=建議順序,虛線=非阻塞 logger 埋點)</h3>
+<svg viewBox="0 0 720 200" xmlns="http://www.w3.org/2000/svg" font-family="system-ui,sans-serif">
+<defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b7280"/></marker>
+<marker id="arg" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#3b82f6"/></marker></defs>
+<rect x="40" y="60" width="104" height="44" rx="9" fill="#fff" stroke="#e0894a" stroke-width="2"/><rect x="40" y="60" width="104" height="44" rx="9" fill="#e0894a" fill-opacity="0.08"/><text x="92" y="80" font-size="13" font-weight="700" text-anchor="middle" fill="#e0894a">SP0</text><text x="92" y="96" font-size="9" text-anchor="middle" fill="#6b7280">S · 2t</text><rect x="178" y="60" width="104" height="44" rx="9" fill="#fff" stroke="#3b82f6" stroke-width="2"/><rect x="178" y="60" width="104" height="44" rx="9" fill="#3b82f6" fill-opacity="0.08"/><text x="230" y="80" font-size="13" font-weight="700" text-anchor="middle" fill="#3b82f6">SP1</text><text x="230" y="96" font-size="9" text-anchor="middle" fill="#6b7280">M · 7t</text><rect x="316" y="60" width="104" height="44" rx="9" fill="#fff" stroke="#5f7d2e" stroke-width="2"/><rect x="316" y="60" width="104" height="44" rx="9" fill="#5f7d2e" fill-opacity="0.08"/><text x="368" y="80" font-size="13" font-weight="700" text-anchor="middle" fill="#5f7d2e">SP2</text><text x="368" y="96" font-size="9" text-anchor="middle" fill="#6b7280">L · 12t</text><rect x="454" y="60" width="104" height="44" rx="9" fill="#fff" stroke="#8b5cf6" stroke-width="2"/><rect x="454" y="60" width="104" height="44" rx="9" fill="#8b5cf6" fill-opacity="0.08"/><text x="506" y="80" font-size="13" font-weight="700" text-anchor="middle" fill="#8b5cf6">SP3</text><text x="506" y="96" font-size="9" text-anchor="middle" fill="#6b7280">L · 11t</text><rect x="592" y="60" width="104" height="44" rx="9" fill="#fff" stroke="#0d9488" stroke-width="2"/><rect x="592" y="60" width="104" height="44" rx="9" fill="#0d9488" fill-opacity="0.08"/><text x="644" y="80" font-size="13" font-weight="700" text-anchor="middle" fill="#0d9488">SP4</text><text x="644" y="96" font-size="9" text-anchor="middle" fill="#6b7280">M · 12t</text>
+<line x1="144" y1="82" x2="176" y2="82" stroke="#6b7280" stroke-width="2" marker-end="url(#ar)"/><line x1="282" y1="82" x2="314" y2="82" stroke="#6b7280" stroke-width="2" marker-end="url(#ar)"/><line x1="420" y1="82" x2="452" y2="82" stroke="#6b7280" stroke-width="2" marker-end="url(#ar)"/><line x1="558" y1="82" x2="590" y2="82" stroke="#6b7280" stroke-width="2" marker-end="url(#ar)"/>
+<path d="M 196 104 Q 350 165 420 104" fill="none" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arg)"/>
+<path d="M 196 104 Q 420 180 558 104" fill="none" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arg)"/>
+<path d="M 196 104 Q 490 195 668 104" fill="none" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arg)"/>
+<text x="360" y="150" font-size="10" fill="#3b82f6">SP1 logDiag 埋點(非阻塞)</text>
+<text x="40" y="30" font-size="11" fill="#6b7280">硬依賴(跨子專案):無 — 五個可獨立交付</text>
+</svg></div>
+<section><h2>跨專案相依(全部軟依賴)</h2><table><thead><tr><th>邊</th><th>說明</th></tr></thead><tbody><tr><td><code>SP2 → SP1</code></td><td>軟相依非阻塞:SP2 git 寫操作(commit/checkout/reset/stash/merge)可選擇性掛 SP1 的 logDiag helper 做 fire-and-forget 埋點;SP1 未就緒時 SP2 仍可獨立交付,只是少了 diagnostic event 埋點</td></tr><tr><td><code>SP3 → SP1</code></td><td>軟相依非阻塞:SP3 LSP 動作(gotoDefinition/findReferences/renameSymbol/openFile)可掛 SP1 logDiag 埋點;SP1 未完成時 SP3 接線仍可獨立交付</td></tr><tr><td><code>SP4 → SP1</code></td><td>軟相依非阻塞:SP4 db/remote/browser 動作可掛 SP1 logger/共用基礎;無跨子專案硬依賴,SP4 自身 T1-T6 純函式為其 T7 controller、T8-T10 UI 的內部前置</td></tr></tbody></table></section></div>
+
+<div id="milestones" class="tab-content"><section><h2>里程碑與驗證 gate</h2><div class="timeline"><div class="timeline-item"><div class="date">M0</div><div class="content"><strong>SP0 綠:controller 整合測試先 RED 重現子資料夾空白,改 5 行(168/347/772/829/862 scanWorkspace→scanDirectory)+1 import+toggleDir 守門後轉綠;native 驗證子資料夾可展開且 144/158/719 root 層不退步。Gate:bun test src/v2/ ≥ 71+新測試、bunx tsc --noEmit EXIT 0</strong><p></p></div></div><div class="timeline-item"><div class="date">M1</div><div class="content"><strong>SP1 三件套:先修 T0(appendDiagnosticEvent 包 {event},解開 logger 鏈);純函式測試綠;SettingsModal 三 custom section 可開;native 驗 metric_snapshot 回真實數字(v1 從未實跑)、logger 清單有資料、recovery restore 灌回 tab 不立即 dirty。Gate:測試數再增、tsc EXIT 0、logDiag helper 對外可用</strong><p></p></div></div><div class="timeline-item"><div class="date">M2</div><div class="content"><strong>SP2 Git 完整:T1(working-tree 源頭)→T3(typed ConfirmModal,先補 --yz-5b2730/0e131d/3a1a22)→...→T12 依序綠;純函式 TDD;checkout detached bug 修復(gitCheckoutBranch 送 branch 名);typed-confirmation token 與後端逐字相符;export 用絕對路徑成功。Gate:bun test src/v2/ 維持 71 不退+新 case、tsc EXIT 0</strong><p></p></div></div><div class="timeline-item"><div class="date">M3</div><div class="content"><strong>SP3 LSP 階段 1:T1-T10 已綠;2026-06-13 gate:bun test src/v2/ = 158 pass,bunx tsc --noEmit = 0。Owner 已選 T11 option 2,hover/completion 延後。</strong><p></p></div></div><div class="timeline-item"><div class="date">M4</div><div class="content"><strong>SP4 三域:T1-T12 自動化實作已綠且 review 通過;sftpReconnect stale host/browser stale URL race 已修;sftpEnter/sftpTransfer stale response guard 已補;mutation chip re-run 不閃失(627 補 kind);browser 截圖縮圖顯示;run_remote_command prompt + exit/stdout preview。2026-06-13 gate:bun test src/v2/ = 180 pass,bunx tsc --noEmit = 0。Native one-off command smoke 待真 SSH profile。</strong><p></p></div></div></div></section></div>
+
+<div id="coverage" class="tab-content"><section><h2>原始 7 項需求覆蓋對照</h2><table><thead><tr><th>需求</th><th>子計劃</th><th>做法</th></tr></thead><tbody><tr><td>① 資料夾無法展開 bug</td><td><span class="cov-sp" style="background:#e0894a">SP0</span></td><td>scanWorkspace→scanDirectory 5 行 + toggleDir 守門</td></tr><tr><td>② language / LSP</td><td><span class="cov-sp" style="background:#8b5cf6">SP3</span></td><td>階段1:diagnostics/definition/references/rename;階段2 hover/completion 依 option 2 延後</td></tr><tr><td>③ 效能預算/監控</td><td><span class="cov-sp" style="background:#3b82f6">SP1</span></td><td>metric_snapshot 數字卡 + 手動 Refresh(Settings 頁籤)</td></tr><tr><td>④ recovery</td><td><span class="cov-sp" style="background:#3b82f6">SP1</span></td><td>autosave debounce 備份 + 還原灌回 tab + 丟棄走 ConfirmModal</td></tr><tr><td>⑤ ide-logger(設定頁籤)</td><td><span class="cov-sp" style="background:#3b82f6">SP1</span></td><td>append/list_diagnostic_events + 事件清單(先修 T0 append 參數 bug)</td></tr><tr><td>⑥ 更完整 git + UI 美觀</td><td><span class="cov-sp" style="background:#5f7d2e">SP2</span></td><td>staging/diff/branch/stash/reset/conflict/blame/history/export + git head 重排間距</td></tr><tr><td>⑦ database/remote/browser</td><td><span class="cov-sp" style="background:#0d9488">SP4</span></td><td>DB history+mutation chip、remote disconnect/reconnect + run_remote_command、browser 截圖縮圖;native command smoke 待真 SSH profile</td></tr></tbody></table></section></div>
+
+<div id="risks" class="tab-content"><section><h2>殘留風險</h2><ul class="risks"><li>controller real 路徑普遍無單元測試(SP1-T4/SP2/SP3/SP4):import 即拉 Tauri 模組,mock.module 須 import 前生效且完整 export transformCallback/Channel,否則 module-eval 期 throw(load error 非 test fail);緩解=純函式下沉+smoke+native gate,對齊 MEMORY 陷阱</li><li>多項能力 mock-IPC 綠不等於 native 綠,須桌面殼逐一確認:metric_snapshot(SP1,v1 從未實跑)、全部 lsp_*(SP3 orphan)、~30 git 寫操作(SP2)、browser_capture_preview(SP4 macOS-only)</li><li>camelCase/token 逐字相符陷阱:SP0 args.workspaceRoot 非底線版(誤用假綠)、SP2 typed-confirmation 須與 Rust require_confirmation expected 逐字一致(reset/revert short 後端用 short_hash_of 重算,abbrev 長度不同會被拒)、SP3 diagnostics 入站 key 須與 tab.path 同源;任一錯位=測試綠但功能空/被拒</li><li>ConfirmModal 雙寫:SP1 recovery discard 與 SP2 寫操作若並行各改 ConfirmState 會衝突;須 SP2-T3 先落地 typed 變體+補 3 個 CSS 變數(--yz-5b2730/0e131d/3a1a22),其餘沿用</li><li>範圍偏差須顯式向 owner 提報而非靜默縮減:SP3-T11 hover/completion(textarea 像素定位脆弱,M3 gate 三選一)、SP4 被排除子集 SFTP delete/rename/mkdir + browser console/network + DB 主動攔截(後端缺口,需先動 Rust)</li><li>效能退化(SP2):reloadGit 多帶 working-tree groups 後變重,頻繁寫操作後全量 reload 成本上升;維持現範式先不優化,記為後續 perf 候選</li><li>多螢幕/高 DPI 座標偏移(SP4 browser):screencapture -R 實體像素 vs getBoundingClientRect 邏輯像素,MVP 單螢幕驗證,DPI 縮放列已知風險;browser_capture_preview 非 mac 回 Err 但 UI 鈕仍可見(刻意不硬編平台判斷,errMsg→toast 兜底)</li><li>autosave debounce 生命週期(SP1):setTabContent 高頻 onChange→controller 模組級 Map debounce 600ms,切 project/關 tab 須清 timer 否則寫到舊 tab;restore 後 realPath 未設會讓 saveFile(行 592 !tab.realPath 守衛)後續 silently no-op</li></ul></section></div>
+
+<div class="actions"><button class="btn" onclick="window.print()">🖨 列印 / PDF</button></div>
+</div>
+<script>function showTab(id,e){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));document.getElementById(id).classList.add('active');e.target.classList.add('active')}</script>
+</body></html>

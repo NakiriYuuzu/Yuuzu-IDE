@@ -4,7 +4,7 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 
 import { BrowserPanel } from "./BrowserPanel";
 import { addBrowserConsoleError, createBrowserState } from "./browser-model";
-import { ensureTestDom } from "../../app/test-dom";
+import { ensureTestDom } from "../../test/test-dom";
 
 ensureTestDom();
 

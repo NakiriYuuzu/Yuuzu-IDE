@@ -1,7 +1,7 @@
 import { FileCode2, Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { useWorkspaceStore } from "../../app/workspace-store";
+import { useWorkspaceStore } from "./workspace-store";
 import { searchWorkspace } from "../files/file-api";
 import {
   createSearchRequestIdentity,

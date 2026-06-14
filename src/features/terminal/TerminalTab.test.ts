@@ -3,7 +3,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import React from "react";
 
-import { ensureTestDom } from "../../app/test-dom";
+import { ensureTestDom } from "../../test/test-dom";
 
 const loadXtermMock = mock<() => Promise<unknown>>();
 

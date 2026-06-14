@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>變更報告:AgentZone 欄數分段切換</title>
+<style>
+:root {
+    --font-sans: system-ui, -apple-system, "PingFang TC", "Noto Sans TC", sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+    --color-bg: #faf9f7;
+    --color-surface: #ffffff;
+    --color-text: #1a1a1a;
+    --color-text-secondary: #6b7280;
+    --color-border: #e5e5e5;
+    --color-accent: #5f7d2e;
+    --color-accent-light: #eef3e3;
+    --color-success: #22c55e;
+    --color-warning: #f59e0b;
+    --color-error: #ef4444;
+    --color-info: #3b82f6;
+    --color-diff-add-bg: #dcfce7;
+    --color-diff-add-line: #bbf7d0;
+    --color-diff-del-bg: #fee2e2;
+    --color-diff-del-line: #fecaca;
+    --radius-md: 10px;
+    --radius-lg: 16px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--font-sans); background: var(--color-bg); color: var(--color-text); line-height: 1.6; }
+
+.layout { display: grid; grid-template-columns: 250px 1fr; min-height: 100vh; }
+@media (max-width: 860px) { .layout { grid-template-columns: 1fr; } .sidebar { display: none; } }
+
+.sidebar { background: var(--color-surface); border-right: 1px solid var(--color-border); padding: 1.5rem; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+.sidebar h3 { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-secondary); margin-bottom: 0.75rem; margin-top: 1.25rem; }
+.sidebar h3:first-child { margin-top: 0; }
+.file-list { list-style: none; }
+.file-list li { margin-bottom: 0.2rem; }
+.file-list a { color: var(--color-text); text-decoration: none; font-size: 0.8rem; font-family: var(--font-mono); padding: 0.3rem 0.5rem; display: flex; align-items: center; gap: 0.5rem; border-radius: 6px; transition: background 0.15s; }
+.file-list a:hover { background: var(--color-bg); }
+.file-list .indicator { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.file-list .indicator.added { background: var(--color-success); }
+.file-list .indicator.modified { background: var(--color-warning); }
+.nav-list { list-style: none; }
+.nav-list a { color: var(--color-text-secondary); text-decoration: none; font-size: 0.85rem; padding: 0.25rem 0.5rem; display: block; border-radius: 6px; }
+.nav-list a:hover { background: var(--color-bg); color: var(--color-text); }
+
+.main { padding: 2rem; max-width: 980px; }
+header { margin-bottom: 1.5rem; }
+header .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-accent); font-weight: 600; }
+header h1 { font-size: 1.7rem; margin: 0.25rem 0; }
+header .meta { color: var(--color-text-secondary); font-size: 0.9rem; font-family: var(--font-mono); }
+
+.stats { display: flex; gap: 1rem; margin: 1.5rem 0; flex-wrap: wrap; }
+.stat { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 0.9rem 1.2rem; min-width: 110px; }
+.stat .value { font-size: 1.5rem; font-weight: 700; }
+.stat .label { font-size: 0.78rem; color: var(--color-text-secondary); }
+
+section { margin-bottom: 2.25rem; }
+section > h2 { font-size: 1.2rem; margin-bottom: 0.85rem; padding-bottom: 0.4rem; border-bottom: 2px solid var(--color-accent-light); display: flex; align-items: center; gap: 0.5rem; }
+section > h2 .n { background: var(--color-accent); color: #fff; width: 1.5rem; height: 1.5rem; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 0.85rem; flex-shrink: 0; }
+
+.summary { background: var(--color-surface); border-radius: var(--radius-lg); padding: 1.5rem; border: 1px solid var(--color-border); }
+.summary p { font-size: 0.95rem; margin-bottom: 0.5rem; }
+.summary ul { padding-left: 1.25rem; margin-top: 0.5rem; }
+.summary li { margin-bottom: 0.4rem; font-size: 0.92rem; }
+
+table.changes { width: 100%; border-collapse: collapse; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; font-size: 0.85rem; }
+table.changes th { background: var(--color-accent-light); text-align: left; padding: 0.6rem 0.8rem; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: #45611a; }
+table.changes td { padding: 0.6rem 0.8rem; border-top: 1px solid var(--color-border); vertical-align: top; }
+table.changes td.file { font-family: var(--font-mono); font-size: 0.78rem; white-space: nowrap; }
+.tool-chip { display: inline-block; font-family: var(--font-mono); font-size: 0.7rem; padding: 0.1rem 0.45rem; border-radius: 999px; background: #eef2ff; color: #3730a3; }
+
+.how-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.85rem; }
+.how-card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 1rem; }
+.how-card .step { font-size: 0.7rem; font-weight: 700; color: var(--color-accent); text-transform: uppercase; letter-spacing: 0.05em; }
+.how-card h4 { font-size: 0.95rem; margin: 0.25rem 0 0.4rem; }
+.how-card p { font-size: 0.82rem; color: var(--color-text-secondary); }
+
+details.file-section { margin-bottom: 1rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; background: var(--color-surface); }
+details.file-section > summary { display: flex; align-items: center; gap: 0.6rem; padding: 0.7rem 1rem; font-family: var(--font-mono); font-size: 0.82rem; cursor: pointer; background: var(--color-surface); list-style: none; }
+details.file-section > summary::-webkit-details-marker { display: none; }
+details.file-section > summary::before { content: "▸"; color: var(--color-text-secondary); }
+details.file-section[open] > summary::before { content: "▾"; }
+details.file-section > summary .badge { margin-left: auto; font-size: 0.68rem; padding: 0.1rem 0.5rem; border-radius: 999px; background: var(--color-accent-light); color: #45611a; font-family: var(--font-sans); }
+
+.diff { border-top: 1px solid var(--color-border); font-family: var(--font-mono); font-size: 0.76rem; line-height: 1.7; overflow-x: auto; }
+.diff-line { display: flex; min-width: max-content; }
+.diff-line .line-num { width: 44px; text-align: right; padding: 0 0.6rem; color: var(--color-text-secondary); user-select: none; flex-shrink: 0; }
+.diff-line .line-content { flex: 1; padding: 0 1rem; white-space: pre; }
+.diff-line.add { background: var(--color-diff-add-bg); }
+.diff-line.add .line-num { background: var(--color-diff-add-line); }
+.diff-line.del { background: var(--color-diff-del-bg); }
+.diff-line.del .line-num { background: var(--color-diff-del-line); }
+.diff-line.context { background: var(--color-surface); }
+.diff-line.add .line-content::before { content: "+"; color: #166534; margin-right: 0.4rem; }
+.diff-line.del .line-content::before { content: "-"; color: #991b1b; margin-right: 0.4rem; }
+.diff-line.context .line-content::before { content: " "; margin-right: 0.4rem; }
+
+.annotation { margin: 0; background: #fafaf8; border-top: 1px solid var(--color-border); padding: 0.7rem 1rem; font-size: 0.82rem; display: flex; gap: 0.7rem; align-items: flex-start; }
+.annotation .severity { font-size: 0.65rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 999px; text-transform: uppercase; flex-shrink: 0; }
+.annotation .severity.note { background: #e0e7ff; color: #3730a3; }
+.annotation .severity.praise { background: #dcfce7; color: #166534; }
+
+.verify { width: 100%; border-collapse: collapse; font-size: 0.85rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; }
+.verify th, .verify td { padding: 0.55rem 0.8rem; text-align: left; border-top: 1px solid var(--color-border); }
+.verify th { background: var(--color-accent-light); color: #45611a; font-size: 0.74rem; text-transform: uppercase; border-top: none; }
+.verify td.mono { font-family: var(--font-mono); }
+.verify .ok { color: var(--color-success); font-weight: 700; }
+.verify .pill { font-family: var(--font-mono); font-size: 0.72rem; padding: 0.08rem 0.45rem; border-radius: 6px; background: var(--color-accent); color: #fff; }
+.verify .pill.dim { background: #d6d3cd; color: #44403c; }
+.verify .pill.hint { background: transparent; color: var(--color-accent); box-shadow: inset 0 0 0 1px #8aa356; }
+
+.diagram-container { overflow-x: auto; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 1rem; }
+
+.toolbar { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; }
+.btn { font-family: var(--font-sans); font-size: 0.8rem; padding: 0.45rem 0.9rem; border-radius: 8px; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); cursor: pointer; }
+.btn:hover { background: var(--color-accent-light); border-color: var(--color-accent); }
+
+@media print { .sidebar, .toolbar { display: none; } .layout { grid-template-columns: 1fr; } details.file-section { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<div class="layout">
+    <nav class="sidebar">
+        <h3>變更檔案</h3>
+        <ul class="file-list">
+            <li><a href="#f-model"><span class="indicator modified"></span>v2-model.ts</a></li>
+            <li><a href="#f-store"><span class="indicator modified"></span>v2-store.ts</a></li>
+            <li><a href="#f-agentzone"><span class="indicator modified"></span>AgentZone.tsx</a></li>
+            <li><a href="#f-css"><span class="indicator modified"></span>yuzu.css</a></li>
+            <li><a href="#f-test"><span class="indicator modified"></span>*.test.ts ×2</a></li>
+        </ul>
+        <h3>章節</h3>
+        <ul class="nav-list">
+            <li><a href="#what">① What — 改了什麼</a></li>
+            <li><a href="#how">② How — 怎麼改的</a></li>
+            <li><a href="#why">③ Why — 為什麼</a></li>
+            <li><a href="#arch">④ Architecture — 架構</a></li>
+            <li><a href="#verify">驗證證據</a></li>
+        </ul>
+    </nav>
+
+    <main class="main">
+        <header>
+            <div class="label">Change Report · Co-Learning</div>
+            <h1>AgentZone 欄數分段切換(Auto + 2 / 3 / 4)</h1>
+            <p class="meta">yuuzu &middot; src/v2 (Yuzu shell) &middot; 2026-06-13</p>
+        </header>
+
+        <div class="toolbar">
+            <button class="btn" onclick="copySummary()">📋 複製變更摘要</button>
+            <button class="btn" onclick="window.print()">🖨 列印 / 存 PDF</button>
+        </div>
+
+        <div class="stats">
+            <div class="stat"><div class="value">6</div><div class="label">檔案異動</div></div>
+            <div class="stat"><div class="value" style="color:var(--color-success)">+~90</div><div class="label">新增行數</div></div>
+            <div class="stat"><div class="value">+3</div><div class="label">新增測試</div></div>
+            <div class="stat"><div class="value" style="color:var(--color-success)">71/71</div><div class="label">v2 測試通過</div></div>
+        </div>
+
+        <!-- ① WHAT -->
+        <section id="what">
+            <h2><span class="n">1</span> What — 改了什麼</h2>
+            <div class="summary">
+                <p>AgentZone(終端叢集畫面)header 原本的 <code>▦ N columns</code> 是<strong>唯讀</strong>標籤,grid 欄數完全由 canvas 寬度自動決定(<code>azColsForWidth</code>:≥3200→4、≥2000→3、≥760→2、否則 1)。</p>
+                <p>本次將它改為可互動的<strong>分段控制 <code>▦ │ Auto │ 2 │ 3 │ 4 │</code></strong>:</p>
+                <ul>
+                    <li><strong>Auto(預設):</strong> 維持原本行為,欄數跟著 canvas 寬度自動變;對應「目前自動解析到的欄數」那顆數字會顯示<strong>淡綠提示(is-auto)</strong>。</li>
+                    <li><strong>點 2 / 3 / 4:</strong> 鎖定欄數,grid 立即切到該欄數且不再隨寬度變;被選的那顆顯示<strong>實心反白(is-on)</strong>。</li>
+                    <li><strong>點 Auto:</strong> 清除鎖定,回到自動模式。</li>
+                </ul>
+                <h3 style="font-size:0.9rem;margin-top:1rem;">關鍵改動</h3>
+                <ul>
+                    <li><strong>v2-model.ts:</strong> 新增純函式 <code>resolveAzCols(override, width)</code> — override 優先、否則 fallback 到 <code>azColsForWidth</code>。</li>
+                    <li><strong>v2-store.ts:</strong> 新增全域 state <code>azColsOverride: number | null</code> 與 action <code>setAzColsOverride</code>。</li>
+                    <li><strong>AgentZone.tsx:</strong> 接線 store、改用 <code>resolveAzCols</code>、唯讀 span → 分段控制按鈕。</li>
+                    <li><strong>yuzu.css:</strong> <code>.yz2-az-cols</code> 改成分段容器,新增 <code>.seg / .is-on / .is-auto</code> 樣式。</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- ② HOW -->
+        <section id="how">
+            <h2><span class="n">2</span> How — 用什麼方法改的</h2>
+            <p style="margin-bottom:1rem;font-size:0.9rem;color:var(--color-text-secondary)">遵循專案 TDD 慣例(<code>docs/goal.md</code>):先寫失敗測試 → 觀察 RED 為預期原因 → 最小實作 → GREEN → 瀏覽器實測。</p>
+            <div class="how-grid">
+                <div class="how-card"><div class="step">RED</div><h4>先寫測試</h4><p>於 <code>v2-model.test.ts</code> / <code>v2-store.test.ts</code> 新增 <code>resolveAzCols</code> 與 <code>setAzColsOverride</code> 測試,跑 <code>bun test</code> 確認 2 fail(原因:export/property 不存在)。</p></div>
+                <div class="how-card"><div class="step">GREEN</div><h4>最小實作</h4><p>以 <span class="tool-chip">Edit</span> 在 model 加純函式、在 store 加 state+action,再接線 AgentZone 與 CSS。重跑 <code>bun test</code> → 71 pass。</p></div>
+                <div class="how-card"><div class="step">TYPECHECK</div><h4>型別把關</h4><p><span class="tool-chip">Bash</span> <code>bunx tsc --noEmit</code> 過濾出本次 3 個 v2 檔 → 無型別錯誤;確認無殘留 <code>azColsForWidth</code> 誤用。</p></div>
+                <div class="how-card"><div class="step">VERIFY</div><h4>瀏覽器實測</h4><p><span class="tool-chip">Playwright</span> 連 vite dev(demo 模式),以 DOM evaluate 跑 Auto→3→4→Auto,讀 grid 實際欄數與按鈕狀態。</p></div>
+            </div>
+
+            <h3 style="font-size:0.95rem;margin:1.5rem 0 0.6rem;">檔案變更表</h3>
+            <table class="changes">
+                <thead><tr><th>檔案</th><th>變更描述</th><th>工具</th><th>理由</th></tr></thead>
+                <tbody>
+                    <tr><td class="file">v2-model.ts</td><td>新增 <code>resolveAzCols(override, width)</code> 純函式</td><td><span class="tool-chip">Edit</span></td><td>邏輯歸 model,符合「React 只管渲染」;可單元測試</td></tr>
+                    <tr><td class="file">v2-store.ts</td><td>新增 <code>azColsOverride</code> state + <code>setAzColsOverride</code> action(type/初始值/實作)</td><td><span class="tool-chip">Edit</span></td><td>欄數覆蓋是全域 UI 狀態,與既有 <code>azWidth</code> 平行放置</td></tr>
+                    <tr><td class="file">AgentZone.tsx</td><td>import 換 <code>resolveAzCols</code>、讀 store、唯讀 span → Auto/2/3/4 分段控制</td><td><span class="tool-chip">Edit</span></td><td>把唯讀標籤變成可點擊切換控制項(使用者需求)</td></tr>
+                    <tr><td class="file">yuzu.css</td><td><code>.yz2-az-cols</code> 改分段容器 + <code>.ic/.seg/.seg:hover/.is-on/.is-auto</code></td><td><span class="tool-chip">Edit</span></td><td>沿用既有 Yuzu 色票,區分「鎖定(實心)」與「自動(淡提示)」</td></tr>
+                    <tr><td class="file">v2-model.test.ts</td><td>新增 <code>resolveAzCols</code> 兩個測試(fallback / override 優先)</td><td><span class="tool-chip">Edit</span></td><td>TDD RED;鎖定 override 優先於 auto 的契約</td></tr>
+                    <tr><td class="file">v2-store.test.ts</td><td>新增「override 鎖定 + Auto(null) 清除」測試</td><td><span class="tool-chip">Edit</span></td><td>TDD RED;鎖定 action 的狀態轉移</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- DIFFS -->
+        <section>
+            <h2><span class="n">±</span> 程式碼差異(可展開)</h2>
+
+            <details class="file-section" id="f-model" open>
+                <summary><span class="indicator modified"></span> src/v2/v2-model.ts <span class="badge">+6</span></summary>
+                <div class="diff">
+                    <div class="diff-line context"><span class="line-num">516</span><span class="line-content">    if (width >= 760) return 2</span></div>
+                    <div class="diff-line context"><span class="line-num">517</span><span class="line-content">    return 1</span></div>
+                    <div class="diff-line context"><span class="line-num">518</span><span class="line-content">}</span></div>
+                    <div class="diff-line add"><span class="line-num">519</span><span class="line-content"></span></div>
+                    <div class="diff-line add"><span class="line-num">520</span><span class="line-content">// Resolve the AgentZone column count: a manual override (2 / 3 / 4) wins,</span></div>
+                    <div class="diff-line add"><span class="line-num">521</span><span class="line-content">// otherwise fall back to the width-driven automatic count.</span></div>
+                    <div class="diff-line add"><span class="line-num">522</span><span class="line-content">export function resolveAzCols(override: number | null, width: number): number {</span></div>
+                    <div class="diff-line add"><span class="line-num">523</span><span class="line-content">    return override ?? azColsForWidth(width)</span></div>
+                    <div class="diff-line add"><span class="line-num">524</span><span class="line-content">}</span></div>
+                </div>
+                <div class="annotation"><span class="severity praise">Praise</span><div>單行邏輯仍抽成具名函式,讓 component 端 <code>const cols = resolveAzCols(azColsOverride, azWidth)</code> 一眼可讀,且把「override 優先」契約釘進可測試的純函式。</div></div>
+            </details>
+
+            <details class="file-section" id="f-store">
+                <summary><span class="indicator modified"></span> src/v2/v2-store.ts <span class="badge">+4 · 4 處</span></summary>
+                <div class="diff">
+                    <div class="diff-line context"><span class="line-num">236</span><span class="line-content">    azWidth: number</span></div>
+                    <div class="diff-line add"><span class="line-num">237</span><span class="line-content">    azColsOverride: number | null</span></div>
+                    <div class="diff-line context"><span class="line-num">238</span><span class="line-content">    confirm: ConfirmState | null</span></div>
+                </div>
+                <div class="diff">
+                    <div class="diff-line context"><span class="line-num">250</span><span class="line-content">    setAzWidth: (width: number) =&gt; void</span></div>
+                    <div class="diff-line add"><span class="line-num">251</span><span class="line-content">    setAzColsOverride: (cols: number | null) =&gt; void</span></div>
+                </div>
+                <div class="diff">
+                    <div class="diff-line context"><span class="line-num">435</span><span class="line-content">            azWidth: 0,</span></div>
+                    <div class="diff-line add"><span class="line-num">436</span><span class="line-content">            azColsOverride: null,</span></div>
+                </div>
+                <div class="diff">
+                    <div class="diff-line context"><span class="line-num">505</span><span class="line-content">                if (Math.abs(width - get().azWidth) &gt; 4) set({ azWidth: width })</span></div>
+                    <div class="diff-line context"><span class="line-num">506</span><span class="line-content">            },</span></div>
+                    <div class="diff-line add"><span class="line-num">507</span><span class="line-content">            setAzColsOverride: (cols) =&gt; set({ azColsOverride: cols }),</span></div>
+                </div>
+                <div class="annotation"><span class="severity note">Note</span><div><code>azColsOverride</code> 放在 <code>V2State</code> 頂層(與 <code>azWidth</code> 平行),而非 per-project 的 <code>ProjectUI</code> — 因為 AgentZone 寬度本身就是全域共用,欄數偏好跟著一致。</div></div>
+            </details>
+
+            <details class="file-section" id="f-agentzone">
+                <summary><span class="indicator modified"></span> src/v2/AgentZone.tsx <span class="badge">+26 / -2</span></summary>
+                <div class="diff">
+                    <div class="diff-line del"><span class="line-num">9</span><span class="line-content">import { azColsForWidth, termSegs } from "./v2-model"</span></div>
+                    <div class="diff-line add"><span class="line-num">9</span><span class="line-content">import { resolveAzCols, termSegs } from "./v2-model"</span></div>
+                </div>
+                <div class="diff">
+                    <div class="diff-line context"><span class="line-num">19</span><span class="line-content">    const setAzWidth = useV2Store((s) =&gt; s.setAzWidth)</span></div>
+                    <div class="diff-line add"><span class="line-num">20</span><span class="line-content">    const azColsOverride = useV2Store((s) =&gt; s.azColsOverride)</span></div>
+                    <div class="diff-line add"><span class="line-num">21</span><span class="line-content">    const setAzColsOverride = useV2Store((s) =&gt; s.setAzColsOverride)</span></div>
+                </div>
+                <div class="diff">
+                    <div class="diff-line del"><span class="line-num">39</span><span class="line-content">    const cols = azColsForWidth(azWidth)</span></div>
+                    <div class="diff-line add"><span class="line-num">41</span><span class="line-content">    const cols = resolveAzCols(azColsOverride, azWidth)</span></div>
+                </div>
+                <div class="diff">
+                    <div class="diff-line del"><span class="line-num">52</span><span class="line-content">                &lt;span className="yz2-az-cols"&gt;▦ {cols} columns&lt;/span&gt;</span></div>
+                    <div class="diff-line add"><span class="line-num">54</span><span class="line-content">                &lt;div className="yz2-az-cols" role="group" aria-label="AgentZone column layout"&gt;</span></div>
+                    <div class="diff-line add"><span class="line-num">55</span><span class="line-content">                    &lt;span className="ic"&gt;▦&lt;/span&gt;</span></div>
+                    <div class="diff-line add"><span class="line-num">56</span><span class="line-content">                    &lt;button type="button" className={"seg" + (azColsOverride === null ? " is-on" : "")}</span></div>
+                    <div class="diff-line add"><span class="line-num">57</span><span class="line-content">                        onClick={() =&gt; setAzColsOverride(null)} title="Auto — columns follow the canvas width"&gt;Auto&lt;/button&gt;</span></div>
+                    <div class="diff-line add"><span class="line-num">58</span><span class="line-content">                    {[2, 3, 4].map((n) =&gt; (</span></div>
+                    <div class="diff-line add"><span class="line-num">59</span><span class="line-content">                        &lt;button key={n} type="button"</span></div>
+                    <div class="diff-line add"><span class="line-num">60</span><span class="line-content">                            className={"seg" + (azColsOverride === n ? " is-on" : "") + (azColsOverride === null &amp;&amp; cols === n ? " is-auto" : "")}</span></div>
+                    <div class="diff-line add"><span class="line-num">61</span><span class="line-content">                            onClick={() =&gt; setAzColsOverride(n)} title={"Lock AgentZone to " + n + " columns"}&gt;{n}&lt;/button&gt;</span></div>
+                    <div class="diff-line add"><span class="line-num">62</span><span class="line-content">                    ))}</span></div>
+                    <div class="diff-line add"><span class="line-num">63</span><span class="line-content">                &lt;/div&gt;</span></div>
+                </div>
+                <div class="annotation"><span class="severity note">Note</span><div><code>is-auto</code> 提示只在 Auto 模式(<code>azColsOverride === null</code>)且 <code>cols === n</code> 時出現,讓使用者在自動模式下也能一眼看出「現在自動幫我選了幾欄」;鎖定後提示消失。</div></div>
+            </details>
+
+            <details class="file-section" id="f-css">
+                <summary><span class="indicator modified"></span> src/v2/yuzu.css <span class="badge">+31 / -1</span></summary>
+                <div class="diff">
+                    <div class="diff-line context"><span class="line-num">1274</span><span class="line-content">.yz2-az-cols {</span></div>
+                    <div class="diff-line del"><span class="line-num">1276</span><span class="line-content">    gap: 6px;</span></div>
+                    <div class="diff-line add"><span class="line-num">1276</span><span class="line-content">    gap: 2px;</span></div>
+                    <div class="diff-line del"><span class="line-num">1279</span><span class="line-content">    padding: 0 12px;</span></div>
+                    <div class="diff-line add"><span class="line-num">1279</span><span class="line-content">    padding: 0 4px 0 9px;</span></div>
+                    <div class="diff-line context"><span class="line-num">1285</span><span class="line-content">}</span></div>
+                    <div class="diff-line add"><span class="line-num">1286</span><span class="line-content">.yz2-az-cols .seg { min-width: 22px; height: 20px; border-radius: 5px; background: transparent; ... }</span></div>
+                    <div class="diff-line add"><span class="line-num">1300</span><span class="line-content">.yz2-az-cols .seg.is-on { background: var(--yz-a8e23f); color: var(--yz-0a0e15); }</span></div>
+                    <div class="diff-line add"><span class="line-num">1304</span><span class="line-content">.yz2-az-cols .seg.is-auto { color: var(--yz-a8e23f); box-shadow: inset 0 0 0 1px var(--yz-45611a); }</span></div>
+                </div>
+                <div class="annotation"><span class="severity praise">Praise</span><div>全部沿用既有 Yuzu 色變數(<code>--yz-a8e23f</code> 品牌綠、<code>--yz-45611a</code> 綠框、<code>--yz-1c2433</code> hover 底),無新增 magic color,與產品其餘 UI 一致。</div></div>
+            </details>
+
+            <details class="file-section" id="f-test">
+                <summary><span class="indicator modified"></span> v2-model.test.ts + v2-store.test.ts <span class="badge">+27</span></summary>
+                <div class="diff">
+                    <div class="diff-line add"><span class="line-num">+</span><span class="line-content">describe("resolveAzCols", () =&gt; {</span></div>
+                    <div class="diff-line add"><span class="line-num">+</span><span class="line-content">    test("null override falls back to width-based auto columns", ...) // 2 / 1 / 3 / 4</span></div>
+                    <div class="diff-line add"><span class="line-num">+</span><span class="line-content">    test("a manual override wins over the auto breakpoint", ...) // 2@3200, 3@500, 4@0</span></div>
+                    <div class="diff-line add"><span class="line-num">+</span><span class="line-content">})</span></div>
+                    <div class="diff-line add"><span class="line-num">+</span><span class="line-content">test("column override locks the count and Auto (null) clears it", ...) // null→3→4→null</span></div>
+                </div>
+                <div class="annotation"><span class="severity praise">Praise</span><div>RED 階段觀察到的失敗原因正確:<code>Export named 'resolveAzCols' not found</code> 與 <code>azColsOverride</code> 為 <code>undefined</code> — 而非其他無關錯誤,確保測試真的在測新行為。</div></div>
+            </details>
+        </section>
+
+        <!-- ③ WHY -->
+        <section id="why">
+            <h2><span class="n">3</span> Why — 為什麼這樣設計</h2>
+            <div class="summary">
+                <ul>
+                    <li><strong>為何保留 Auto(而非純手動):</strong> 使用者在 4 個 UI 方案中選了「Auto + 2/3/4 分段」。保留自動模式可在小視窗下避免硬塞 4 欄造成擁擠,同時給需要時的手動鎖定能力。</li>
+                    <li><strong>為何抽 <code>resolveAzCols</code> 純函式:</strong> roadmap 設計原則「React owns UI rendering only」。把「override 優先、否則 auto」的決策放進 model 層,component 只呼叫,邏輯得以單元測試。</li>
+                    <li><strong>為何 override 放全域 state:</strong> <code>azWidth</code> 本來就在 <code>V2State</code> 頂層(AgentZone canvas 全域共用),欄數偏好放一起最自然,不需 per-project 複製。</li>
+                    <li><strong>為何加 <code>is-auto</code> 淡提示:</strong> 純分段控制在 Auto 模式下,使用者看不出「自動現在是幾欄」。淡提示用極低成本補足這個資訊缺口,鎖定後即消失,不干擾。</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- ④ ARCHITECTURE -->
+        <section id="arch">
+            <h2><span class="n">4</span> Architecture — 改動落在 v2 分層的哪裡</h2>
+            <p style="margin-bottom:1rem;font-size:0.88rem;color:var(--color-text-secondary)">v2 的單向資料流:<strong>component → store(state/action)→ model(純邏輯)→ CSS 呈現</strong>。本次四個改動點(綠色高亮)落在每一層,彼此職責清楚、無循環依賴。</p>
+            <div class="diagram-container">
+                <svg viewBox="0 0 860 430" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">
+                    <defs>
+                        <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                            <path d="M0,0 L8,3 L0,6 Z" fill="#6b7280"/>
+                        </marker>
+                        <marker id="arrowG" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                            <path d="M0,0 L8,3 L0,6 Z" fill="#5f7d2e"/>
+                        </marker>
+                    </defs>
+
+                    <!-- AgentZone component -->
+                    <rect x="30" y="30" width="260" height="120" rx="10" fill="#ffffff" stroke="#5f7d2e" stroke-width="2"/>
+                    <text x="45" y="55" font-size="13" font-weight="700" fill="#1a1a1a">AgentZone.tsx</text>
+                    <text x="45" y="76" font-size="11" fill="#6b7280">分段控制 ▦ Auto 2 3 4</text>
+                    <rect x="45" y="88" width="230" height="22" rx="5" fill="#eef3e3"/>
+                    <text x="52" y="103" font-size="10.5" font-family="monospace" fill="#45611a">cols = resolveAzCols(override, w)</text>
+                    <text x="45" y="130" font-size="10.5" fill="#6b7280">onClick → setAzColsOverride(n | null)</text>
+
+                    <!-- store -->
+                    <rect x="30" y="210" width="260" height="120" rx="10" fill="#ffffff" stroke="#5f7d2e" stroke-width="2"/>
+                    <text x="45" y="235" font-size="13" font-weight="700" fill="#1a1a1a">v2-store.ts</text>
+                    <text x="45" y="256" font-size="11" fill="#6b7280">zustand · V2State(全域)</text>
+                    <rect x="45" y="268" width="230" height="22" rx="5" fill="#eef3e3"/>
+                    <text x="52" y="283" font-size="10.5" font-family="monospace" fill="#45611a">+ azColsOverride: number | null</text>
+                    <rect x="45" y="296" width="230" height="22" rx="5" fill="#eef3e3"/>
+                    <text x="52" y="311" font-size="10.5" font-family="monospace" fill="#45611a">+ setAzColsOverride(cols)</text>
+
+                    <!-- model -->
+                    <rect x="560" y="30" width="270" height="150" rx="10" fill="#ffffff" stroke="#5f7d2e" stroke-width="2"/>
+                    <text x="575" y="55" font-size="13" font-weight="700" fill="#1a1a1a">v2-model.ts</text>
+                    <text x="575" y="76" font-size="11" fill="#6b7280">純邏輯 · 無 React</text>
+                    <rect x="575" y="88" width="240" height="22" rx="5" fill="#eef3e3"/>
+                    <text x="582" y="103" font-size="10.5" font-family="monospace" fill="#45611a">+ resolveAzCols(override, w)</text>
+                    <text x="575" y="130" font-size="10.5" fill="#6b7280">override ?? azColsForWidth(w)</text>
+                    <rect x="575" y="142" width="240" height="22" rx="5" fill="#f3f4f6"/>
+                    <text x="582" y="157" font-size="10.5" font-family="monospace" fill="#6b7280">azColsForWidth(w)  (既有)</text>
+
+                    <!-- CSS -->
+                    <rect x="560" y="240" width="270" height="120" rx="10" fill="#ffffff" stroke="#5f7d2e" stroke-width="2"/>
+                    <text x="575" y="265" font-size="13" font-weight="700" fill="#1a1a1a">yuzu.css</text>
+                    <text x="575" y="286" font-size="11" fill="#6b7280">.yz2-az-cols .seg</text>
+                    <rect x="575" y="298" width="115" height="22" rx="5" fill="#eef3e3"/>
+                    <text x="582" y="313" font-size="10" font-family="monospace" fill="#45611a">.is-on 實心</text>
+                    <rect x="700" y="298" width="115" height="22" rx="5" fill="#ffffff" stroke="#8aa356"/>
+                    <text x="707" y="313" font-size="10" font-family="monospace" fill="#5f7d2e">.is-auto 淡提示</text>
+                    <text x="575" y="342" font-size="10.5" fill="#6b7280">grid-template-columns: repeat(cols)</text>
+
+                    <!-- arrows -->
+                    <!-- component <-> store -->
+                    <line x1="120" y1="150" x2="120" y2="208" stroke="#5f7d2e" stroke-width="2" marker-end="url(#arrowG)"/>
+                    <text x="128" y="183" font-size="10" fill="#5f7d2e">setAzColsOverride</text>
+                    <line x1="200" y1="208" x2="200" y2="152" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+                    <text x="208" y="183" font-size="10" fill="#6b7280">subscribe</text>
+
+                    <!-- component -> model -->
+                    <line x1="290" y1="100" x2="558" y2="100" stroke="#5f7d2e" stroke-width="2" marker-end="url(#arrowG)"/>
+                    <text x="360" y="92" font-size="10" fill="#5f7d2e">呼叫 resolveAzCols</text>
+
+                    <!-- model -> css (cols feeds grid) -->
+                    <line x1="695" y1="180" x2="695" y2="238" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+                    <text x="703" y="213" font-size="10" fill="#6b7280">cols → grid</text>
+
+                    <!-- legend -->
+                    <rect x="30" y="380" width="14" height="14" rx="3" fill="#ffffff" stroke="#5f7d2e" stroke-width="2"/>
+                    <text x="52" y="391" font-size="11" fill="#6b7280">本次改動點</text>
+                    <line x1="160" y1="387" x2="190" y2="387" stroke="#5f7d2e" stroke-width="2" marker-end="url(#arrowG)"/>
+                    <text x="198" y="391" font-size="11" fill="#6b7280">主要呼叫 / 寫入</text>
+                    <line x1="320" y1="387" x2="350" y2="387" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+                    <text x="358" y="391" font-size="11" fill="#6b7280">訂閱 / 衍生</text>
+                </svg>
+            </div>
+        </section>
+
+        <!-- VERIFY -->
+        <section id="verify">
+            <h2><span class="n">✓</span> 驗證證據</h2>
+            <p style="margin-bottom:0.8rem;font-size:0.88rem;color:var(--color-text-secondary)">Playwright 連 vite dev(demo 模式,yuuzu-api · 2 sessions),DOM evaluate 跑互動序列,讀 grid 實際 track 數與按鈕 class:</p>
+            <table class="verify">
+                <thead><tr><th>步驟</th><th>grid 實際欄數</th><th>反白 (is-on)</th><th>自動提示 (is-auto)</th><th>結果</th></tr></thead>
+                <tbody>
+                    <tr><td class="mono">初始(Auto)</td><td class="mono">2</td><td><span class="pill">Auto</span></td><td><span class="pill hint">2</span></td><td class="ok">✓</td></tr>
+                    <tr><td class="mono">點「3」</td><td class="mono">3</td><td><span class="pill">3</span></td><td>—</td><td class="ok">✓</td></tr>
+                    <tr><td class="mono">點「4」</td><td class="mono">4</td><td><span class="pill">4</span></td><td>—</td><td class="ok">✓</td></tr>
+                    <tr><td class="mono">點「Auto」</td><td class="mono">2(回自動)</td><td><span class="pill">Auto</span></td><td><span class="pill hint">2</span></td><td class="ok">✓</td></tr>
+                </tbody>
+            </table>
+            <div style="margin-top:1rem;display:flex;gap:1.5rem;flex-wrap:wrap;font-size:0.85rem;font-family:var(--font-mono);">
+                <span><strong style="color:var(--color-success)">bun test src/v2/</strong> → 71 pass / 0 fail</span>
+                <span><strong style="color:var(--color-success)">tsc --noEmit</strong> → 本次 3 v2 檔無型別錯誤</span>
+            </div>
+        </section>
+
+        <p style="text-align:center;color:var(--color-text-secondary);font-size:0.8rem;margin-top:2rem;">
+            由 Claude Code 依 co-learning 規則產生 · src/v2 為未追蹤新檔(尚未 commit)
+        </p>
+    </main>
+</div>
+
+<script>
+function copySummary() {
+    const text = [
+        "AgentZone 欄數分段切換(Auto + 2/3/4)— 變更摘要",
+        "",
+        "WHAT: AgentZone header 的唯讀「▦ N columns」改成分段控制 ▦|Auto|2|3|4。",
+        "  Auto=跟寬度自動(預設);點 2/3/4 鎖定欄數;點 Auto 回自動。Auto 模式下目前自動欄數有淡提示(is-auto)。",
+        "",
+        "檔案(6):",
+        "  v2-model.ts   +resolveAzCols(override,width) 純函式",
+        "  v2-store.ts   +azColsOverride state + setAzColsOverride action",
+        "  AgentZone.tsx 接線 store + 唯讀 span 改分段控制按鈕",
+        "  yuzu.css      .yz2-az-cols 分段容器 + .seg/.is-on/.is-auto",
+        "  v2-model.test.ts / v2-store.test.ts  +3 測試",
+        "",
+        "HOW: TDD(RED→GREEN)+ tsc + Playwright DOM 互動驗證。",
+        "VERIFY: bun test src/v2/ 71 pass;互動 Auto→3→4→Auto grid 欄數 2→3→4→2 全部正確。"
+    ].join("\\n");
+    navigator.clipboard.writeText(text).then(() => {
+        event.target.textContent = "✓ 已複製";
+        setTimeout(() => event.target.textContent = "📋 複製變更摘要", 1500);
+    });
+}
+</script>
+</body>
+</html>

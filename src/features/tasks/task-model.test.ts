@@ -20,7 +20,7 @@ import {
   upsertTaskRun,
 } from "./task-model";
 import type { TaskRun } from "./task-model";
-import { createWorkspaceViewStore } from "../../app/workspace-view-state";
+import { createWorkspaceViewStore } from "../workspace/workspace-view-state";
 
 function runningRun(overrides: Partial<TaskRun> = {}): TaskRun {
   return {

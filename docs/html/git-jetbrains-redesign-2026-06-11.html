@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Design: Yuuzu-IDE Git Deep Dive — JetBrains 等級 Git 功能設計</title>
+<style>
+/* ============================================================
+   文件外層（提案文件本身）
+   ============================================================ */
+:root {
+    --doc-font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --doc-font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+    --doc-bg: #faf9f7;
+    --doc-surface: #ffffff;
+    --doc-text: #1a1a1a;
+    --doc-text-2: #6b7280;
+    --doc-border: #e5e5e5;
+    --doc-accent: #5e8c14;
+    --doc-accent-light: #eef6dc;
+    --doc-radius: 10px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--doc-font-sans); background: var(--doc-bg); color: var(--doc-text); line-height: 1.65; padding: 2rem 2rem 4rem; }
+.container { max-width: 1080px; margin: 0 auto; }
+header.doc { margin-bottom: 1.5rem; }
+header.doc .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--doc-accent); font-weight: 700; }
+header.doc h1 { font-size: 1.85rem; letter-spacing: -0.02em; margin: 0.25rem 0; }
+header.doc .meta { color: var(--doc-text-2); font-size: 0.9rem; }
+.tldr { background: var(--doc-accent-light); border-left: 4px solid var(--doc-accent); border-radius: var(--doc-radius); padding: 1.25rem; margin-bottom: 1.5rem; }
+.tldr h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--doc-accent); margin-bottom: 0.5rem; }
+
+nav.toc { position: sticky; top: 0; z-index: 50; display: flex; gap: 0; border-bottom: 2px solid var(--doc-border); margin-bottom: 2rem; background: var(--doc-bg); flex-wrap: wrap; }
+nav.toc a { padding: 0.7rem 1rem; font-size: 0.85rem; font-weight: 600; color: var(--doc-text-2); text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -2px; }
+nav.toc a:hover { color: var(--doc-text); }
+nav.toc a.on { color: var(--doc-accent); border-bottom-color: var(--doc-accent); }
+
+section.surface { margin-bottom: 3.5rem; }
+section.surface > h2 { font-size: 1.3rem; letter-spacing: -0.01em; margin-bottom: 0.25rem; }
+section.surface > .sub { color: var(--doc-text-2); font-size: 0.92rem; margin-bottom: 1rem; }
+.spec-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
+.spec-card { background: var(--doc-surface); border: 1px solid var(--doc-border); border-radius: var(--doc-radius); padding: 1rem 1.25rem; }
+.spec-card h4 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--doc-text-2); margin-bottom: 0.5rem; }
+.spec-card ul { padding-left: 1.1rem; font-size: 0.9rem; }
+.spec-card li { margin-bottom: 0.35rem; }
+.spec-card li::marker { color: var(--doc-accent); }
+code.doc { font-family: var(--doc-font-mono); font-size: 0.84em; background: #f0efed; padding: 0.1em 0.35em; border-radius: 4px; }
+table.spec { width: 100%; border-collapse: collapse; font-size: 0.86rem; background: var(--doc-surface); border: 1px solid var(--doc-border); border-radius: var(--doc-radius); overflow: hidden; }
+table.spec th { text-align: left; padding: 0.55rem 0.75rem; border-bottom: 2px solid var(--doc-border); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--doc-text-2); background: #f5f4f2; }
+table.spec td { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--doc-border); vertical-align: top; }
+.pill { display: inline-block; padding: 0.05rem 0.5rem; border-radius: 999px; font-size: 0.72rem; font-weight: 700; white-space: nowrap; }
+.pill.new { background: #eef6dc; color: #5e8c14; }
+.pill.upg { background: #e0ecff; color: #1d4ed8; }
+.pill.danger { background: #fee2e2; color: #b91c1c; }
+.note { font-size: 0.85rem; color: var(--doc-text-2); margin-top: 0.6rem; }
+@media (max-width: 880px) { .spec-grid { grid-template-columns: 1fr; } body { padding: 1rem 1rem 3rem; } }
+@media print { nav.toc { display: none; } }
+
+/* ============================================================
+   Yuuzu-IDE 設計系統（原樣取自 docs/ui-design/ide.css +
+   colors_and_type.css 的 dark tokens）— mockup 容器
+   ============================================================ */
+.yz {
+    --chrome:       #0c1018;
+    --chrome-2:     #10151f;
+    --rail:         #090c12;
+    --panel:        #0c1018;
+    --editor:       #0a0e15;
+    --editor-gutter:#0a0e15;
+    --line:         #1c2433;
+    --line-strong:  #2b3547;
+    --txt:          #e6edf3;
+    --txt-dim:      #8b97a7;
+    --txt-faint:    #5a6675;
+    --hover:        #141a26;
+    --active:       #1a2230;
+    --selection:    #34421d;
+    --yuzu:         #a8e23f;
+    --yuzu-bright:  #bdf04f;
+    --yuzu-wash:    #1b2410;
+    --yuzu-edge:    #45611a;
+    --c-key:  #c792ea; --c-str: #9ccc65; --c-num: #f78c6c; --c-fn: #82aaff;
+    --c-com:  #5a6675; --c-tag: #f07178; --c-attr:#ffcb6b; --c-punc:#8b97a7; --c-var:#e6edf3;
+    --radius:    0.5rem;
+    --radius-lg: 0.5rem;
+    --radius-md: calc(0.5rem - 2px);
+    --radius-sm: calc(0.5rem - 4px);
+    --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, Menlo, Monaco, Consolas, monospace;
+    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.4), 0 4px 6px -4px rgb(0 0 0 / 0.4);
+    --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.5), 0 8px 10px -6px rgb(0 0 0 / 0.5);
+
+    background: var(--editor);
+    color: var(--txt);
+    font-size: 13px;
+    font-family: var(--font-sans);
+    border: 1px solid #2b3547;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 14px 40px rgb(2 8 15 / 0.35);
+    margin: 1.1rem 0;
+    -webkit-font-smoothing: antialiased;
+}
+.yz .mockbar { height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 12px; background: var(--chrome); border-bottom: 1px solid var(--line); }
+.yz .mockbar .traffic { display: flex; gap: 7px; }
+.yz .mockbar .traffic i { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+.yz .mockbar .traffic .r { background: #ff5f57; } .yz .mockbar .traffic .y { background: #febc2e; } .yz .mockbar .traffic .g { background: #28c840; }
+.yz .mockbar .mt { font-size: 11.5px; color: var(--txt-dim); font-family: var(--font-mono); }
+.yz .mono { font-family: var(--font-mono); }
+
+/* ide.css 元件（原樣） */
+.yz .iconbtn { width: 26px; height: 26px; border-radius: var(--radius-md); display: grid; place-items: center; cursor: pointer; color: var(--txt-dim); border: 1px solid transparent; background: none; }
+.yz .iconbtn:hover { background: var(--hover); color: var(--txt); }
+.yz .iconbtn svg { width: 15px; height: 15px; }
+.yz .btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: var(--radius-md); border: 1px solid var(--line); background: var(--editor); color: var(--txt); font-size: 13px; font-weight: 500; cursor: pointer; font-family: var(--font-sans); }
+.yz .btn:hover { background: var(--hover); }
+.yz .btn svg { width: 15px; height: 15px; }
+.yz .btn.primary { background: var(--yuzu); border-color: var(--yuzu); color: #0a0e15; font-weight: 600; }
+.yz .btn.primary:hover { background: var(--yuzu-bright); }
+.yz .btn.sm { height: 26px; padding: 0 9px; font-size: 12px; }
+.yz .btn.ghost { border-color: transparent; background: none; }
+.yz .btn.ghost:hover { background: var(--hover); }
+.yz .btn.danger { color: var(--c-tag); border-color: color-mix(in srgb, var(--c-tag) 35%, transparent); }
+.yz .input2 { height: 28px; border: 1px solid var(--line); background: var(--editor); border-radius: var(--radius-md); padding: 0 10px; color: var(--txt); font-size: 12.5px; outline: none; font-family: var(--font-sans); }
+.yz .input2:focus { border-color: var(--yuzu); box-shadow: 0 0 0 2px var(--yuzu-wash); }
+.yz .badge2 { display: inline-flex; align-items: center; gap: 5px; height: 19px; padding: 0 7px; border-radius: 9999px; font-size: 11px; font-weight: 600; border: 1px solid var(--line); color: var(--txt-dim); white-space: nowrap; }
+.yz .badge2.green { background: var(--yuzu-wash); color: var(--yuzu); border-color: var(--yuzu-edge); }
+.yz .badge2 svg { width: 10px; height: 10px; }
+.yz .section-label { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--txt-faint); padding: 10px 12px 4px; display: flex; align-items: center; justify-content: space-between; }
+.yz .row { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; cursor: pointer; color: var(--txt); white-space: nowrap; font-size: 12.5px; position: relative; }
+.yz .row:hover { background: var(--hover); }
+.yz .row.sel { background: var(--active); }
+.yz .row.sel::before { content: ""; position: absolute; left: 0; width: 2px; height: 24px; background: var(--yuzu); }
+.yz .row svg { width: 14px; height: 14px; flex: 0 0 14px; }
+.yz .row .nm { overflow: hidden; text-overflow: ellipsis; }
+.yz .row .meta { margin-left: auto; font-size: 11px; color: var(--txt-faint); font-family: var(--font-mono); }
+.yz .git-M { color: #e2b341; } .yz .git-A { color: #57ab5a; } .yz .git-D { color: #e5534b; } .yz .git-U { color: #6cb6ff; }
+.yz .gtoken { font-family: var(--font-mono); font-size: 12px; font-weight: 700; width: 16px; text-align: center; flex: 0 0 16px; }
+.yz .panel-head { height: 36px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px 0 12px; border-bottom: 1px solid var(--line); }
+.yz .panel-title { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--txt-dim); }
+.yz .scene-head { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--chrome); font-size: 13px; }
+.yz .scene-head .st { font-weight: 600; }
+.yz .scene-head svg { width: 15px; height: 15px; }
+.yz .dbgrid { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.yz .dbgrid th { position: sticky; top: 0; text-align: left; font-weight: 600; color: var(--txt-dim); background: var(--chrome); border-bottom: 1px solid var(--line-strong); border-right: 1px solid var(--line); padding: 6px 12px; white-space: nowrap; font-family: var(--font-mono); font-size: 11px; z-index: 2; }
+.yz .dbgrid td { padding: 5px 12px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); white-space: nowrap; color: var(--txt); }
+.yz .dbgrid tbody tr { cursor: pointer; }
+.yz .dbgrid tbody tr:hover td { background: var(--hover); }
+.yz .dbgrid tbody tr.sel td { background: var(--active); }
+.yz .dbgrid.gitlog td { padding: 0 12px; height: 36px; vertical-align: middle; }
+.yz .dbgrid.gitlog td:first-child { padding: 0; width: 92px; border-right: none; }
+.yz .menu { background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); padding: 5px; min-width: 240px; font-size: 13px; }
+.yz .menu .mi { display: flex; align-items: center; gap: 9px; padding: 6px 9px; border-radius: var(--radius-sm); cursor: pointer; color: var(--txt); white-space: nowrap; }
+.yz .menu .mi:hover { background: var(--active); }
+.yz .menu .mi svg { width: 14px; height: 14px; color: var(--txt-dim); flex: 0 0 14px; }
+.yz .menu .mi .sc { margin-left: auto; font-size: 10.5px; color: var(--txt-faint); font-family: var(--font-mono); padding-left: 18px; }
+.yz .menu .mi.danger { color: var(--c-tag); } .yz .menu .mi.danger svg { color: var(--c-tag); }
+.yz .menu .msep { height: 1px; background: var(--line); margin: 5px 4px; }
+.yz .menu .mlabel { font-size: 10px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--txt-faint); padding: 6px 9px 3px; }
+.yz .segmented { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; }
+.yz .segmented button { border: none; background: var(--editor); color: var(--txt-dim); font-size: 12px; font-family: var(--font-mono); padding: 5px 11px; cursor: pointer; border-right: 1px solid var(--line); }
+.yz .segmented button:last-child { border-right: none; }
+.yz .segmented button.on { background: var(--yuzu); color: #0a0e15; font-weight: 600; }
+.yz .kbdtag { font-family: var(--font-mono); font-size: 10.5px; background: var(--chrome-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; line-height: 16px; color: var(--txt-dim); }
+
+/* ---- 本設計新增的 git 元件（沿用設計語言的衍生 class）---- */
+/* Log 過濾列 */
+.yz .log-filters { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--chrome-2); flex-wrap: wrap; }
+.yz .log-filters .fsel { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border-radius: var(--radius-md); border: 1px solid var(--line); background: var(--editor); color: var(--txt-dim); font-size: 12px; cursor: pointer; }
+.yz .log-filters .fsel:hover { color: var(--txt); border-color: var(--line-strong); }
+.yz .log-filters .fsel b { color: var(--txt); font-weight: 600; }
+.yz .log-filters .fsel svg { width: 12px; height: 12px; }
+.yz .log-filters .fsel.active { border-color: var(--yuzu-edge); background: var(--yuzu-wash); color: var(--yuzu); }
+.yz .log-filters .fsel.active b { color: var(--yuzu); }
+
+/* commit 詳情側欄 */
+.yz .commit-detail { border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-width: 0; }
+.yz .cd-head { padding: 12px 14px 10px; border-bottom: 1px solid var(--line); }
+.yz .cd-subject { font-weight: 600; font-size: 13.5px; line-height: 1.45; margin-bottom: 8px; }
+.yz .cd-meta { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--txt-dim); }
+.yz .cd-meta .cdm { display: flex; align-items: center; gap: 7px; }
+.yz .cd-meta svg { width: 12px; height: 12px; color: var(--txt-faint); }
+.yz .cd-meta .mono { color: var(--c-num); }
+.yz .stat-add { color: var(--c-str); font-family: var(--font-mono); font-size: 11px; }
+.yz .stat-del { color: var(--c-tag); font-family: var(--font-mono); font-size: 11px; }
+
+/* diff 視圖 */
+.yz .diffwrap { font-family: var(--font-mono); font-size: 12px; line-height: 19px; overflow-x: auto; }
+.yz .dline { display: flex; white-space: pre; }
+.yz .dline .lno { flex: 0 0 38px; text-align: right; padding-right: 10px; color: var(--txt-faint); user-select: none; background: var(--editor-gutter); }
+.yz .dline .dtext { flex: 1; padding: 0 12px 0 6px; }
+.yz .dline.add { background: color-mix(in srgb, var(--c-str) 12%, transparent); }
+.yz .dline.add .dtext { color: var(--c-str); }
+.yz .dline.del { background: color-mix(in srgb, var(--c-tag) 11%, transparent); }
+.yz .dline.del .dtext { color: var(--c-tag); }
+.yz .dline.ctx .dtext { color: var(--txt-dim); }
+.yz .dline mark { background: color-mix(in srgb, var(--c-str) 38%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
+.yz .dline.del mark { background: color-mix(in srgb, var(--c-tag) 38%, transparent); }
+.yz .hunkbar { display: flex; align-items: center; gap: 8px; padding: 4px 12px; background: var(--chrome-2); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--c-fn); font-family: var(--font-mono); font-size: 11.5px; }
+.yz .hunkbar .hb-act { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+.yz .hunkbar button { border: 1px solid var(--line); background: var(--editor); color: var(--txt-dim); font-size: 10.5px; font-family: var(--font-sans); font-weight: 600; border-radius: var(--radius-sm); padding: 1px 7px; cursor: pointer; }
+.yz .hunkbar button:hover { color: var(--txt); border-color: var(--line-strong); }
+.yz .hunkbar button.stagebtn { color: var(--yuzu); border-color: var(--yuzu-edge); }
+.yz .hunkbar input[type="checkbox"], .yz .dline input[type="checkbox"] { accent-color: #a8e23f; width: 13px; height: 13px; cursor: pointer; }
+.yz .dline .lck { flex: 0 0 22px; display: grid; place-items: center; background: var(--editor-gutter); }
+
+/* side-by-side */
+.yz .sbs { display: grid; grid-template-columns: 1fr 1fr; }
+.yz .sbs .sbscol { min-width: 0; border-right: 1px solid var(--line); }
+.yz .sbs .sbscol:last-child { border-right: none; }
+.yz .sbs .colhead { padding: 4px 12px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--txt-faint); background: var(--chrome-2); border-bottom: 1px solid var(--line); }
+.yz .dline.fill { background: repeating-linear-gradient(45deg, transparent, transparent 4px, color-mix(in srgb, var(--line) 55%, transparent) 4px, color-mix(in srgb, var(--line) 55%, transparent) 5px); }
+
+/* conflict 三向 */
+.yz .conflict3 { display: grid; grid-template-columns: 1fr 1.15fr 1fr; }
+.yz .conflict3 .ccol { min-width: 0; border-right: 1px solid var(--line); }
+.yz .conflict3 .ccol:last-child { border-right: none; }
+.yz .cblock { border-left: 3px solid transparent; }
+.yz .cblock.ours { border-left-color: #6cb6ff; background: color-mix(in srgb, #6cb6ff 8%, transparent); }
+.yz .cblock.theirs { border-left-color: var(--c-key); background: color-mix(in srgb, #c792ea 8%, transparent); }
+.yz .cblock.result { border-left-color: var(--yuzu); background: color-mix(in srgb, #a8e23f 7%, transparent); }
+.yz .cacts { display: flex; gap: 5px; padding: 3px 10px 6px; }
+.yz .cacts button { border: 1px solid var(--line); background: var(--editor); color: var(--txt-dim); font-size: 10.5px; font-weight: 600; border-radius: var(--radius-sm); padding: 1px 8px; cursor: pointer; font-family: var(--font-sans); }
+.yz .cacts button:hover { color: var(--txt); border-color: var(--line-strong); }
+
+/* blame gutter */
+.yz .blame { display: flex; font-family: var(--font-mono); font-size: 12px; line-height: 19px; }
+.yz .blame .bcol { flex: 0 0 218px; border-right: 1px solid var(--line); background: var(--editor-gutter); }
+.yz .blame .brow { height: 19px; padding: 0 10px; display: flex; gap: 8px; align-items: center; color: var(--txt-faint); font-size: 11px; cursor: pointer; white-space: nowrap; overflow: hidden; }
+.yz .blame .brow:hover { color: var(--txt-dim); }
+.yz .blame .brow.hl { background: var(--yuzu-wash); color: var(--yuzu); }
+.yz .blame .brow .ba { width: 44px; overflow: hidden; text-overflow: ellipsis; }
+.yz .blame .brow .bh { color: var(--c-num); }
+.yz .blame .bcode { flex: 1; min-width: 0; }
+.yz .blame .bline { height: 19px; padding: 0 14px; white-space: pre; }
+.yz .blame .bline.hl { background: color-mix(in srgb, var(--yuzu) 7%, transparent); }
+.yz .tok-key { color: var(--c-key); } .yz .tok-str { color: var(--c-str); } .yz .tok-num { color: var(--c-num); }
+.yz .tok-fn { color: var(--c-fn); } .yz .tok-com { color: var(--c-com); font-style: italic; } .yz .tok-punc { color: var(--c-punc); }
+
+/* export modal（ide.css .modal 模式原樣） */
+.yz .modal-stage { position: relative; padding: 26px 18px; background: color-mix(in srgb, #020815 55%, transparent); display: grid; place-items: center; }
+.yz .modal { width: 560px; max-width: 100%; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow-xl); overflow: hidden; }
+.yz .modal-head { display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-bottom: 1px solid var(--line); }
+.yz .modal-head .mt { font-size: 14.5px; font-weight: 700; letter-spacing: -.01em; }
+.yz .modal-head .ms { font-size: 12px; color: var(--txt-dim); font-family: var(--font-mono); }
+.yz .modal-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+.yz .modal-foot { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--chrome); }
+.yz .frow { display: flex; align-items: center; gap: 10px; }
+.yz .frow .fl { flex: 0 0 92px; font-size: 11.5px; color: var(--txt-dim); font-weight: 600; }
+.yz .exptree { border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--editor); max-height: 168px; overflow-y: auto; padding: 4px 0; }
+.yz .exptree .row { height: 22px; font-size: 12px; }
+.yz .exptree .drow { color: var(--txt-dim); }
+.yz .exptree .drow svg { color: #6b97c9; }
+.yz .toast2 { display: inline-flex; align-items: center; gap: 8px; background: var(--chrome-2); border: 1px solid var(--line-strong); color: var(--txt); padding: 8px 14px; border-radius: var(--radius-md); font-size: 12.5px; box-shadow: var(--shadow-lg); }
+.yz .toast2 svg { width: 14px; height: 14px; color: var(--yuzu); }
+
+/* stash 卡 */
+.yz .stashrow { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.yz .stashrow:hover { background: var(--hover); }
+.yz .stashrow .si { color: var(--c-attr); font-family: var(--font-mono); font-size: 11px; flex: 0 0 auto; }
+.yz .stashrow .sm2 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.yz .stashrow .sw { color: var(--txt-faint); font-size: 11px; font-family: var(--font-mono); }
+.yz .stashrow .sacts { display: flex; gap: 4px; }
+
+/* 標註層 */
+.callout-row { display: flex; gap: 0.8rem; align-items: flex-start; flex-wrap: wrap; }
+.callouts { flex: 1 1 250px; min-width: 230px; display: flex; flex-direction: column; gap: 0.55rem; font-size: 0.86rem; }
+.callouts .co { background: var(--doc-surface); border: 1px solid var(--doc-border); border-left: 3px solid var(--doc-accent); border-radius: 8px; padding: 0.6rem 0.8rem; }
+.callouts .co b.n { display: inline-grid; place-items: center; width: 19px; height: 19px; border-radius: 50%; background: var(--doc-accent); color: #fff; font-size: 0.72rem; margin-right: 6px; }
+.mockwrap { flex: 999 1 620px; min-width: 0; }
+.tagn { position: absolute; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #5e8c14; color: #fff; font-size: 11px; font-weight: 700; z-index: 30; box-shadow: 0 2px 6px rgb(0 0 0 / .45); font-family: var(--doc-font-sans); }
+</style>
+</head>
+<body>
+<div class="container">
+    <header class="doc">
+        <div class="label">Design Proposal</div>
+        <h1>Git Deep Dive — JetBrains 等級 Git 功能設計</h1>
+        <p class="meta">Yuuzu-IDE &middot; 2026-06-11 &middot; 設計語言：docs/ui-design/ide.css（dark + yuzu-green）&middot; 對應差距審查 git-feature-jetbrains-comparison-2026-06-11</p>
+    </header>
+
+    <div class="tldr">
+        <h3>TL;DR</h3>
+        <p>本提案把現有 Node 4 git 功能升級到 JetBrains 等級，共 6 個 surface：<strong>① Git Log</strong>（真實 DAG 拓撲圖 + 過濾 + commit 詳情 + 右鍵操作 + 單次 commit 內容匯出）、<strong>② Partial Staging</strong>（hunk/行級暫存）、<strong>③ Diff Viewer</strong>（side-by-side + word-level 高亮）、<strong>④ Merge Conflict 三向解決</strong>、<strong>⑤ Branch Popup 與 Stash 管理</strong>、<strong>⑥ Blame 與 File History</strong>。所有 mockup 直接以 <code class="doc">ide.css</code> 的 tokens 與元件 class（.row/.dbgrid/.menu/.badge2/.btn/.segmented）組成，零新視覺語彙；後端維持「Rust 擁有邏輯 + bounded payload + 打字確認 guardrails」的既有架構紀律。文末附 17 個新 Tauri 命令規格、lane 分配演算法與 roadmap 排程建議。</p>
+    </div>
+
+    <nav class="toc" id="toc">
+        <a href="#s1" class="on">① Git Log / DAG</a>
+        <a href="#s2">② Partial Staging</a>
+        <a href="#s3">③ Diff Viewer</a>
+        <a href="#s4">④ Conflict 解決</a>
+        <a href="#s5">⑤ Branch / Stash</a>
+        <a href="#s6">⑥ Blame / History</a>
+        <a href="#s7">⑦ 技術規格</a>
+    </nav>
+
+    <!-- ============================================================
+         S1 — GIT LOG (DAG)
+         ============================================================ -->
+    <section class="surface" id="s1">
+        <h2>① Git Log — 真實 DAG、過濾、詳情、右鍵操作</h2>
+        <p class="sub">取代現有 Commit Graph 表格。差異核心：lane 不再來自 ASCII 解析，而是後端回傳 <code class="doc">parents[]</code> 拓撲資料、前端畫出連續的分支/合併邊。點擊任一 commit 開啟右側詳情；右鍵開啟操作選單。<strong>（mockup 可互動：點列切換詳情）</strong></p>
+
+        <div class="yz" id="mock-log">
+            <div class="mockbar"><span class="traffic"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="mt">yuuzu-api — Git Log</span></div>
+            <div class="scene-head">
+                <svg viewBox="0 0 24 24" fill="none" stroke="var(--yuzu)" stroke-width="2"><circle cx="6" cy="6" r="2.6"/><circle cx="6" cy="18" r="2.6"/><circle cx="18" cy="12" r="2.6"/><path d="M6 8.6v6.8M8.4 6.8C13 8 15.6 9.4 15.9 9.7"/></svg>
+                <span class="st">Git Log</span>
+                <span class="badge2 green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v12M6 15a3 3 0 1 0 3 3M18 9a3 3 0 1 0-3-3M18 9c0 6-9 3-9 9"/></svg>main · ahead 2</span>
+                <div style="flex:1"></div>
+                <button class="btn sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 21h16"/></svg>Fetch</button>
+                <span class="kbdtag">⌘K → git log</span>
+            </div>
+            <div class="log-filters">
+                <span class="fsel"><b>Branch:</b> all<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></span>
+                <span class="fsel active"><b>Author:</b> mina<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></span>
+                <span class="fsel"><b>Date:</b> any<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></span>
+                <span class="fsel"><b>Path:</b> src/routes/**<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></span>
+                <input class="input2 mono" style="flex:1;min-width:140px;max-width:260px" placeholder="Search subject / hash…">
+                <span class="badge2">7 / 1,284 commits</span>
+            </div>
+            <div style="display:grid;grid-template-columns:minmax(0,1.6fr) minmax(230px,1fr)">
+                <div style="overflow-x:auto">
+                    <table class="dbgrid gitlog">
+                        <thead><tr><th>Graph</th><th>Description</th><th style="width:84px">Author</th><th style="width:64px">When</th><th style="width:78px">Commit</th></tr></thead>
+                        <tbody id="logbody"></tbody>
+                    </table>
+                </div>
+                <div class="commit-detail" id="cdetail"></div>
+            </div>
+        </div>
+
+        <div class="callout-row">
+            <div class="mockwrap">
+                <div class="yz" style="max-width:560px">
+                    <div class="mockbar"><span class="traffic"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="mt">右鍵選單（commit 列 context menu）— .menu 元件原樣</span></div>
+                    <div style="padding:14px;display:flex;gap:14px;background:var(--editor)">
+                        <div class="menu" style="position:static">
+                            <div class="mlabel">a3f9c21 — feat: refine git log filters</div>
+                            <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11.5 12 9l3 2.5M12 9v8M5 4h14"/></svg>Checkout Revision<span class="sc">detached</span></div>
+                            <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v12M6 15a3 3 0 1 0 3 3M18 9a3 3 0 1 0-3-3M18 9c0 6-9 3-9 9"/></svg>New Branch from Here…</div>
+                            <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 12H8m6-6 6 6-6 6M4 4v16"/></svg>Cherry-pick onto main</div>
+                            <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/></svg>Revert Commit…</div>
+                            <div class="msep"></div>
+                            <div class="mi danger"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 12l5-5m-5 5 5 5"/></svg>Reset main to Here…<span class="sc">soft·mixed·hard</span></div>
+                            <div class="mi danger"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20c8 0 4-16 12-16M4 4l16 16"/></svg>Interactive Rebase from Here…</div>
+                            <div class="msep"></div>
+                            <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="10" height="10" rx="2"/><rect x="11" y="11" width="10" height="10" rx="2"/></svg>Compare with Working Tree</div>
+                            <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="var(--yuzu)" stroke-width="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 21h16"/></svg><span style="color:var(--yuzu)">Export Commit…</span><span class="sc">files / zip</span></div>
+                            <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>Copy Hash<span class="sc">⌘C</span></div>
+                        </div>
+                        <div style="flex:1;font-size:12px;color:var(--txt-dim);line-height:1.7;padding-top:4px">
+                            破壞性項目（紅字）沿用既有<br><b style="color:var(--txt)">打字確認</b> guardrail：<br><br>
+                            <span class="mono" style="color:var(--c-tag)">RESET HARD a3f9c21</span><br>
+                            <span class="mono" style="color:var(--c-tag)">REBASE -i 9aa4c18</span><br><br>
+                            非破壞性（checkout -b、cherry-pick<br>無衝突路徑）直接執行。
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="callouts">
+                <div class="co"><b class="n">1</b><b>真實 DAG</b>：後端 <code class="doc">git log --topo-order --pretty=%H%x00%P%x00…</code> 回傳 parents；前端 lane 分配演算法畫連續邊（見 ⑦）。分支線展開/收斂如 mockup 中 <span class="doc mono">feat/editor</span> 藍線。</div>
+                <div class="co"><b class="n">2</b><b>過濾列</b>：branch / author / date / path 四個下拉 + 文字搜尋，全部映射到 <code class="doc">git log</code> 原生參數（<code class="doc">--author --since -- path</code>），Rust 端組裝、拒絕 shell 注入。</div>
+                <div class="co"><b class="n">3</b><b>commit 詳情</b>：點列載入 <code class="doc">git_commit_detail</code>（metadata + name-status + numstat），檔案列點擊開該 commit 的單檔 diff。</div>
+                <div class="co"><b class="n">4</b><b>無限歷史</b>：cursor 分頁（200 筆/頁，<code class="doc">--skip</code>+hash 錨點），捲到底自動載入；取代現行 120 筆硬上限。</div>
+                <div class="co"><b class="n">5</b><b>ref badges</b>：HEAD（yuzu 綠）、branch（灰）、tag（橘 <code class="doc">--c-num</code>，由 <code class="doc">%D</code> 的 <code class="doc">tag:</code> 前綴判斷，取代 startsWith("v") 啟發式）。</div>
+            </div>
+        </div>
+
+        <h2 style="font-size:1.15rem;margin-top:2.2rem">①+ Export Commit — 下載單次 commit 的內容（含資料夾結構）</h2>
+        <p class="sub">從右鍵選單或詳情面板觸發。兩種 scope：<b>Changed files only</b>（僅該次 commit 變更的檔案，依原始資料夾結構寫出——「僅當次內容」的預設語意）與 <b>Full snapshot</b>（該 commit 當下的完整專案樹）。輸出可選直接寫成資料夾或打包 Zip。</p>
+
+        <div class="callout-row">
+            <div class="mockwrap">
+                <div class="yz" style="max-width:660px">
+                    <div class="mockbar"><span class="traffic"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="mt">Export Commit — modal（ide.css .modal 元件）</span></div>
+                    <div class="modal-stage">
+                        <div class="modal">
+                            <div class="modal-head">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="var(--yuzu)" stroke-width="2" style="width:17px;height:17px"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 21h16"/></svg>
+                                <span class="mt">Export Commit</span>
+                                <span class="ms">a3f9c21 · feat: refine git log filters</span>
+                            </div>
+                            <div class="modal-body">
+                                <div class="frow">
+                                    <span class="fl">Scope</span>
+                                    <div class="segmented">
+                                        <button class="on">Changed files only · 3</button>
+                                        <button>Full snapshot · 214 files</button>
+                                    </div>
+                                </div>
+                                <div class="frow">
+                                    <span class="fl">Format</span>
+                                    <div class="segmented">
+                                        <button class="on">Folder</button>
+                                        <button>Zip archive</button>
+                                    </div>
+                                </div>
+                                <div class="frow">
+                                    <span class="fl">Destination</span>
+                                    <input class="input2 mono" style="flex:1" value="~/Downloads/yuuzu-api-a3f9c21/">
+                                    <button class="btn sm">Browse…</button>
+                                </div>
+                                <div>
+                                    <div class="frow" style="margin-bottom:5px"><span class="fl">Preview</span><span style="font-size:11px;color:var(--txt-faint)">依 commit 內的原始路徑寫出，資料夾自動建立</span></div>
+                                    <div class="exptree">
+                                        <div class="row drow" style="padding-left:10px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg><span class="nm mono">src/</span></div>
+                                        <div class="row drow" style="padding-left:26px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg><span class="nm mono">features/git/</span></div>
+                                        <div class="row" style="padding-left:44px"><span class="gtoken git-M">M</span><span class="nm mono">git-model.ts</span><span class="meta">3.1 KB</span></div>
+                                        <div class="row" style="padding-left:44px"><span class="gtoken git-M">M</span><span class="nm mono">GitLogView.tsx</span><span class="meta">4.6 KB</span></div>
+                                        <div class="row" style="padding-left:44px"><span class="gtoken git-A">A</span><span class="nm mono">log-filters.ts</span><span class="meta">1.7 KB</span></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="modal-foot">
+                                <span style="font-size:11.5px;color:var(--txt-faint);font-family:var(--font-mono)">3 files · 9.4 KB</span>
+                                <div style="flex:1"></div>
+                                <button class="btn">Cancel</button>
+                                <button class="btn primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 21h16"/></svg>Export</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display:flex;justify-content:center;padding:0 0 16px;background:color-mix(in srgb, #020815 55%, transparent)">
+                        <span class="toast2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m5 13 4 4L19 7"/></svg>Exported 3 files to <span class="mono" style="color:var(--yuzu)">~/Downloads/yuuzu-api-a3f9c21/</span><button class="btn sm ghost" style="height:20px;font-size:11px;margin-left:4px">Reveal</button></span>
+                    </div>
+                </div>
+            </div>
+            <div class="callouts">
+                <div class="co"><b class="n">1</b><b>Changed files only（預設）</b>：Rust 以 <code class="doc">git diff-tree --no-commit-id --name-status -r &lt;hash&gt;</code> 取得變更清單，逐檔 <code class="doc">git show &lt;hash&gt;:&lt;path&gt;</code> 取出<b>該 commit 版本</b>的內容寫到目的地，巢狀資料夾自動建立；狀態 D（刪除）的檔案自動略過並在 toast 註記。</div>
+                <div class="co"><b class="n">2</b><b>Full snapshot</b>：整棵樹直接走 <code class="doc">git archive --format=zip &lt;hash&gt;</code>（git 原生、零自製打包邏輯）；選 Folder 時解開到目的地。</div>
+                <div class="co"><b class="n">3</b><b>目的地與安全</b>：Browse 走 <code class="doc">@tauri-apps/plugin-dialog</code>（已在依賴中）；寫入路徑必須位於使用者選定目錄內（沿用 git.rs 的路徑消毒模式）；目的地已有同名檔案時需逐次 Overwrite 確認，絕不靜默覆蓋。</div>
+                <div class="co"><b class="n">4</b><b>Bound</b>：changed-files 模式上限 2,000 檔 / 200 MB，超限時引導改用 snapshot zip；binary 檔原樣位元組寫出（<code class="doc">git show</code> 本就回 raw bytes）。匯出在 Rust 非同步執行，進度回報到 status bar，完成丟 toast + Reveal in Finder。</div>
+                <div class="co"><b class="n">5</b><b>入口</b>：① 右鍵選單「Export Commit…」、② 詳情面板 Export… 按鈕、③ command palette「Git: Export Commit…」（作用於 Log 目前選中的 commit）。</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         S2 — PARTIAL STAGING
+         ============================================================ -->
+    <section class="surface" id="s2">
+        <h2>② Commit 面板 — Hunk / 行級 Partial Staging</h2>
+        <p class="sub">Source Control 面板維持現有結構（Staged / Changes 分組），新增：檔案列展開 inline hunk 視圖，每個 hunk 有 checkbox 與 Stage/Revert 動作，行級 checkbox 可只暫存選取行。對應 JetBrains 的 partial commit 與 VS Code 的 stage selected ranges。</p>
+
+        <div class="callout-row">
+            <div class="mockwrap">
+                <div class="yz" style="max-width:660px">
+                    <div class="mockbar"><span class="traffic"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="mt">Source Control — partial staging</span></div>
+                    <div style="display:grid;grid-template-columns:236px 1fr">
+                        <div style="border-right:1px solid var(--line);background:var(--panel)">
+                            <div class="panel-head"><span class="panel-title">Source Control</span>
+                                <span style="display:flex;gap:1px">
+                                    <button class="iconbtn" title="Commit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 13 4 4L19 7"/></svg></button>
+                                    <button class="iconbtn" title="History"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></button>
+                                </span>
+                            </div>
+                            <div style="padding:10px 10px 0">
+                                <textarea class="input2" rows="2" style="height:auto;padding:8px;resize:none;width:100%;font-family:var(--font-sans)">feat: paginate users endpoint</textarea>
+                                <div style="display:flex;align-items:center;gap:8px;margin:7px 0">
+                                    <label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--txt-dim);cursor:pointer"><input type="checkbox" style="accent-color:#a8e23f">Amend</label>
+                                    <span class="fsel" style="display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 7px;border:1px solid var(--line);border-radius:5px;font-size:11px;color:var(--txt-faint);cursor:pointer">訊息歷史 ▾</span>
+                                </div>
+                                <button class="btn primary" style="width:100%;justify-content:center"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21V9m0 0 4 4m-4-4-4 4M4 3h16"/></svg>Commit &amp; Push <span class="mono" style="opacity:.7">main</span></button>
+                            </div>
+                            <div class="section-label"><span>Staged Changes</span><span class="meta" style="background:var(--active);border-radius:8px;padding:0 6px">1</span></div>
+                            <div class="row"><span class="gtoken git-A">A</span><span class="nm mono">src/db/pool.ts</span><span class="meta">+41</span></div>
+                            <div class="section-label"><span>Changes</span><span class="meta" style="background:var(--active);border-radius:8px;padding:0 6px">3</span></div>
+                            <div class="row sel"><span class="gtoken git-M">M</span><span class="nm mono">src/routes/users.ts</span><span class="meta stat-add">+6</span><span class="meta stat-del" style="margin-left:4px">−2</span></div>
+                            <div class="row"><span class="gtoken git-M">M</span><span class="nm mono">package.json</span><span class="meta">+1</span></div>
+                            <div class="row"><span class="gtoken git-U">U</span><span class="nm mono">notes.local.md</span></div>
+                            <div style="height:10px"></div>
+                        </div>
+                        <div style="min-width:0">
+                            <div class="scene-head" style="height:34px">
+                                <span class="mono" style="font-size:12px;color:var(--txt-dim)">src/routes/users.ts</span>
+                                <span class="badge2">2 hunks · 1 staged</span>
+                                <div style="flex:1"></div>
+                                <button class="btn sm stagebtn" style="color:var(--yuzu);border-color:var(--yuzu-edge)">Stage Selected Lines</button>
+                            </div>
+                            <div class="diffwrap">
+                                <div class="hunkbar"><input type="checkbox" checked> @@ -4,7 +4,9 @@ <span style="color:var(--txt-faint)">router.get("/users")</span>
+                                    <span class="hb-act"><button class="stagebtn">✓ Staged</button><button>Unstage</button><button>Revert…</button></span>
+                                </div>
+                                <div class="dline ctx"><span class="lck"></span><span class="lno">4</span><span class="dtext">router.get("/users", async (req, res) =&gt; {</span></div>
+                                <div class="dline del"><span class="lck"><input type="checkbox" checked></span><span class="lno">5</span><span class="dtext">-  const rows = await db.query("SELECT * FROM users");</span></div>
+                                <div class="dline add"><span class="lck"><input type="checkbox" checked></span><span class="lno">5</span><span class="dtext">+  const page = Number(req.query.page ?? 1);</span></div>
+                                <div class="dline add"><span class="lck"><input type="checkbox" checked></span><span class="lno">6</span><span class="dtext">+  const rows = await db.query(USERS_PAGE_SQL, [PAGE_SIZE, offset]);</span></div>
+                                <div class="dline ctx"><span class="lck"></span><span class="lno">7</span><span class="dtext">  res.json({ data: rows });</span></div>
+                                <div class="hunkbar"><input type="checkbox"> @@ -18,4 +20,6 @@ <span style="color:var(--txt-faint)">router.get("/users/:id")</span>
+                                    <span class="hb-act"><button class="stagebtn">Stage Hunk</button><button>Revert…</button></span>
+                                </div>
+                                <div class="dline ctx"><span class="lck"></span><span class="lno">20</span><span class="dtext">  const [user] = await db.query(USER_BY_ID_SQL, [id]);</span></div>
+                                <div class="dline add"><span class="lck"><input type="checkbox"></span><span class="lno">21</span><span class="dtext">+  if (!user) return res.status(404).json({ error: "not found" });</span></div>
+                                <div class="dline add"><span class="lck"><input type="checkbox"></span><span class="lno">22</span><span class="dtext">+  log.debug("user fetched", { id });</span></div>
+                                <div class="dline ctx"><span class="lck"></span><span class="lno">23</span><span class="dtext">  res.json({ data: user });</span></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="callouts">
+                <div class="co"><b class="n">1</b><b>機制</b>：Rust 以 <code class="doc">git diff</code> 結構化解析出 hunks，選取的 hunk/行在 Rust 端重組成 patch，經 <code class="doc">git apply --cached</code>（unstage 為 <code class="doc">-R --cached</code>）寫入 index——JetBrains/VS Code 同款底層。</div>
+                <div class="co"><b class="n">2</b><b>行級選取</b>：行 checkbox 只在所屬 hunk 展開時可用；Rust 端負責 patch 行數重算（hunk header 修正），避免前端手搓 patch。</div>
+                <div class="co"><b class="n">3</b><b>Revert hunk</b> 是破壞性操作 → 沿用打字確認 <code class="doc">DISCARD</code> guardrail（單 hunk 給輕量 inline 確認，整檔才上 modal）。</div>
+                <div class="co"><b class="n">4</b><b>訊息歷史</b>：<code class="doc">git log --format=%s -20 --author=&lt;me&gt;</code> 的下拉重用 <code class="doc">.menu</code> 元件；Amend 勾選自動帶入 HEAD 訊息。</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         S3 — DIFF VIEWER
+         ============================================================ -->
+    <section class="surface" id="s3">
+        <h2>③ Diff Viewer — Side-by-side 與 Word-level 高亮</h2>
+        <p class="sub">以 <code class="doc">.segmented</code> 切換 Unified / Side-by-side。Word-level 差異用 <code class="doc">&lt;mark&gt;</code> 疊加在行底色上。<strong>（mockup 可互動：點 segmented 切換）</strong></p>
+
+        <div class="yz" style="max-width:880px">
+            <div class="mockbar"><span class="traffic"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="mt">Diff — src/routes/users.ts</span></div>
+            <div class="scene-head" style="height:36px">
+                <svg viewBox="0 0 24 24" fill="none" stroke="var(--yuzu)" stroke-width="2"><path d="M9 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M12 1v22"/></svg>
+                <span class="mono" style="font-size:12px">src/routes/users.ts</span>
+                <span class="badge2">Unstaged</span>
+                <div style="flex:1"></div>
+                <div class="segmented" id="diffmode">
+                    <button data-m="unified">Unified</button>
+                    <button data-m="sbs" class="on">Side-by-side</button>
+                </div>
+            </div>
+            <div id="diff-sbs">
+                <div class="sbs">
+                    <div class="sbscol"><div class="colhead">HEAD（index）</div></div>
+                    <div class="sbscol"><div class="colhead">Working Tree</div></div>
+                </div>
+                <div class="sbs">
+                    <div class="sbscol">
+                        <div class="dline ctx"><span class="lno">4</span><span class="dtext">router.get("/users", async (req, res) =&gt; {</span></div>
+                        <div class="dline del"><span class="lno">5</span><span class="dtext">-  const rows = await db.query(<mark>"SELECT * FROM users"</mark>);</span></div>
+                        <div class="dline fill"><span class="lno"></span><span class="dtext"> </span></div>
+                        <div class="dline ctx"><span class="lno">6</span><span class="dtext">  res.json({ data: rows });</span></div>
+                    </div>
+                    <div class="sbscol">
+                        <div class="dline ctx"><span class="lno">4</span><span class="dtext">router.get("/users", async (req, res) =&gt; {</span></div>
+                        <div class="dline add"><span class="lno">5</span><span class="dtext">+  const rows = await db.query(<mark>USERS_PAGE_SQL, [PAGE_SIZE, offset]</mark>);</span></div>
+                        <div class="dline add"><span class="lno">6</span><span class="dtext">+  const page = Number(req.query.page ?? 1);</span></div>
+                        <div class="dline ctx"><span class="lno">7</span><span class="dtext">  res.json({ data: rows });</span></div>
+                    </div>
+                </div>
+            </div>
+            <div id="diff-unified" style="display:none">
+                <div class="diffwrap">
+                    <div class="hunkbar">@@ -4,4 +4,5 @@ <span style="color:var(--txt-faint)">router.get("/users")</span></div>
+                    <div class="dline ctx"><span class="lno">4</span><span class="dtext">router.get("/users", async (req, res) =&gt; {</span></div>
+                    <div class="dline del"><span class="lno">5</span><span class="dtext">-  const rows = await db.query(<mark>"SELECT * FROM users"</mark>);</span></div>
+                    <div class="dline add"><span class="lno">5</span><span class="dtext">+  const rows = await db.query(<mark>USERS_PAGE_SQL, [PAGE_SIZE, offset]</mark>);</span></div>
+                    <div class="dline add"><span class="lno">6</span><span class="dtext">+  const page = Number(req.query.page ?? 1);</span></div>
+                    <div class="dline ctx"><span class="lno">7</span><span class="dtext">  res.json({ data: rows });</span></div>
+                </div>
+            </div>
+        </div>
+        <div class="spec-grid">
+            <div class="spec-card"><h4>資料模型升級</h4><ul>
+                <li><code class="doc">git_diff_file</code> 從 raw string 升級為結構化 <code class="doc">GitDiffHunks { hunks: [{ header, old_start, new_start, lines: [{ kind, old_no, new_no, text }] }] }</code>，side-by-side 對齊與行號由前端零成本渲染。</li>
+                <li>Word-level：Rust 端對 del/add 配對行跑 LCS（字元 token 化、上限 400 字元/行），輸出 <code class="doc">ranges</code>;超限自動退回整行高亮。</li>
+            </ul></div>
+            <div class="spec-card"><h4>Bounded 策略（沿用架構紀律）</h4><ul>
+                <li>每檔 hunk 上限 200、總行 8,000，超限回 <code class="doc">truncated: true</code> + 提示列。</li>
+                <li>編輯器 gutter 變更標記（add/mod 色條，ide.css 已有 <code class="doc">.gutter .ln.add/.mod</code> 樣式）由同一份 hunk 資料驅動，hover 顯示 hunk 浮層（revert/stage/copy）。</li>
+            </ul></div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         S4 — CONFLICT
+         ============================================================ -->
+    <section class="surface" id="s4">
+        <h2>④ Merge Conflict — 三向解決</h2>
+        <p class="sub">偵測到 conflict（現有 has_conflicts 已會擋 commit）時，衝突檔在編輯區開啟三欄解決器：Ours（HEAD）、Result（可編輯）、Theirs（MERGE_HEAD）。逐一 Accept 後 Mark Resolved 自動 <code class="doc">git add</code>。</p>
+
+        <div class="yz" style="max-width:920px">
+            <div class="mockbar"><span class="traffic"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="mt">Resolve Conflicts — src/lib/logger.ts</span></div>
+            <div class="scene-head" style="height:36px">
+                <svg viewBox="0 0 24 24" fill="none" stroke="#e2b341" stroke-width="2"><path d="M12 3 2 21h20L12 3z"/><path d="M12 10v4m0 3v.5"/></svg>
+                <span class="st">Resolve Conflicts</span>
+                <span class="badge2" style="color:#e2b341;border-color:color-mix(in srgb,#e2b341 40%,transparent)">2 of 3 remaining</span>
+                <div style="flex:1"></div>
+                <button class="btn sm">Accept All Ours</button>
+                <button class="btn sm">Accept All Theirs</button>
+                <button class="btn sm primary">Mark Resolved</button>
+            </div>
+            <div class="conflict3">
+                <div class="ccol">
+                    <div class="colhead" style="padding:4px 12px;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#6cb6ff;background:var(--chrome-2);border-bottom:1px solid var(--line)">Ours — HEAD (main)</div>
+                    <div class="diffwrap">
+                        <div class="dline ctx"><span class="lno">7</span><span class="dtext">export function log(level, msg) {</span></div>
+                        <div class="cblock ours">
+                            <div class="dline"><span class="lno">8</span><span class="dtext" style="color:#6cb6ff">  emit({ level, msg, ts: Date.now() });</span></div>
+                            <div class="cacts"><button>Accept Ours →</button></div>
+                        </div>
+                        <div class="dline ctx"><span class="lno">9</span><span class="dtext">}</span></div>
+                    </div>
+                </div>
+                <div class="ccol">
+                    <div class="colhead" style="padding:4px 12px;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--yuzu);background:var(--chrome-2);border-bottom:1px solid var(--line)">Result（可編輯）</div>
+                    <div class="diffwrap">
+                        <div class="dline ctx"><span class="lno">7</span><span class="dtext">export function log(level, msg) {</span></div>
+                        <div class="cblock result">
+                            <div class="dline"><span class="lno">8</span><span class="dtext" style="color:var(--yuzu)">  emit({ level, msg, ts: Date.now(), host });</span></div>
+                            <div class="cacts"><button>↺ Reset Block</button><button style="color:var(--yuzu);border-color:var(--yuzu-edge)">✓ Resolve Block</button></div>
+                        </div>
+                        <div class="dline ctx"><span class="lno">9</span><span class="dtext">}</span></div>
+                    </div>
+                </div>
+                <div class="ccol">
+                    <div class="colhead" style="padding:4px 12px;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--c-key);background:var(--chrome-2);border-bottom:1px solid var(--line)">Theirs — feat/editor</div>
+                    <div class="diffwrap">
+                        <div class="dline ctx"><span class="lno">7</span><span class="dtext">export function log(level, msg) {</span></div>
+                        <div class="cblock theirs">
+                            <div class="dline"><span class="lno">8</span><span class="dtext" style="color:var(--c-key)">  emit({ level, msg, host });</span></div>
+                            <div class="cacts"><button>← Accept Theirs</button></div>
+                        </div>
+                        <div class="dline ctx"><span class="lno">9</span><span class="dtext">}</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <p class="note">後端：<code class="doc">git_conflict_file</code> 以 <code class="doc">git show :1/:2/:3 -- path</code> 取 base/ours/theirs 三版本（bounded 512 KB/版本），衝突區塊由 Rust 解析 <code class="doc">&lt;&lt;&lt;&lt;&lt;&lt;&lt;</code> 標記產生；Result 緩衝沿用 Monaco 編輯路徑（懶載入不變）。Mark Resolved → <code class="doc">git_mark_resolved</code>（add 該檔）；全部解完且 MERGE_HEAD 存在時 commit 區自動帶入 merge 訊息。Accept All Ours/Theirs 為批次破壞性 → 打字確認 <code class="doc">ACCEPT OURS</code>。</p>
+    </section>
+
+    <!-- ============================================================
+         S5 — BRANCH POPUP + STASH
+         ============================================================ -->
+    <section class="surface" id="s5">
+        <h2>⑤ Branch Popup 與 Stash 管理</h2>
+        <p class="sub">取代現有的 <code class="doc">&lt;select&gt;</code> 下拉。Status bar 的 branch 區塊（ide.css <code class="doc">.sb.accent</code>）點擊開啟 JetBrains 式 branch popup；Stash 補齊 list / apply / pop / drop / branch-from-stash。</p>
+
+        <div class="callout-row">
+            <div class="mockwrap">
+                <div class="yz" style="max-width:640px">
+                    <div class="mockbar"><span class="traffic"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="mt">Branch popup ＋ Stashes</span></div>
+                    <div style="display:flex;gap:14px;padding:14px;background:var(--editor);flex-wrap:wrap">
+                        <div class="menu" style="position:static;min-width:268px">
+                            <div style="padding:4px 4px 8px"><input class="input2 mono" style="width:100%" placeholder="Search branches…"></div>
+                            <div class="mlabel">Local · 4</div>
+                            <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="var(--yuzu)" stroke-width="2"><path d="M6 3v12M6 15a3 3 0 1 0 3 3M18 9a3 3 0 1 0-3-3M18 9c0 6-9 3-9 9"/></svg><b style="color:var(--yuzu)">main</b><span class="sc">current · ↑2</span></div>
+                            <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="#e2b341" stroke-width="2"><path d="m12 2 2.9 6.26L21 9.27l-5 4.6L17.18 21 12 17.5 6.82 21 8 13.87l-5-4.6 6.1-1.01L12 2z"/></svg>feat/editor<span class="sc">★ · ↑3 ↓1</span></div>
+                            <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v12M6 15a3 3 0 1 0 3 3M18 9a3 3 0 1 0-3-3M18 9c0 6-9 3-9 9"/></svg>fix/pool-reconnect</div>
+                            <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v12M6 15a3 3 0 1 0 3 3M18 9a3 3 0 1 0-3-3M18 9c0 6-9 3-9 9"/></svg>chore/deps-june</div>
+                            <div class="mlabel">Remote · origin</div>
+                            <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.6 3 14.4 0 18M12 3c-3 3.6-3 14.4 0 18"/></svg>origin/main</div>
+                            <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.6 3 14.4 0 18M12 3c-3 3.6-3 14.4 0 18"/></svg>origin/feat/editor</div>
+                            <div class="msep"></div>
+                            <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14m-7-7h14"/></svg>New Branch…<span class="sc">⌘⇧B</span></div>
+                        </div>
+                        <div class="menu" style="position:static;min-width:236px;align-self:flex-start">
+                            <div class="mlabel">feat/editor — actions</div>
+                            <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11.5 12 9l3 2.5M12 9v8M5 4h14"/></svg>Checkout<span class="sc">type CHECKOUT</span></div>
+                            <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 21V9a4 4 0 0 1 4-4h6m0 0-4-4m4 4-4 4"/></svg>Merge into main…</div>
+                            <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20c8 0 4-16 12-16"/></svg>Rebase main onto This…</div>
+                            <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h11M4 12h7m-7 5h11M19 7v10"/></svg>Compare with main</div>
+                            <div class="msep"></div>
+                            <div class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>Rename…</div>
+                            <div class="mi danger"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>Delete…<span class="sc">type DELETE</span></div>
+                        </div>
+                    </div>
+                    <div style="border-top:1px solid var(--line)">
+                        <div class="section-label" style="padding-top:8px"><span>Stashes · 2</span><button class="btn sm ghost" style="height:20px;font-size:11px">Stash All…</button></div>
+                        <div class="stashrow">
+                            <span class="si">stash@{0}</span><span class="sm2">WIP: cursor pagination spike</span><span class="sw">2h · 3 files</span>
+                            <span class="sacts"><button class="btn sm">Apply</button><button class="btn sm">Pop</button><button class="btn sm">Branch…</button><button class="btn sm danger">Drop…</button></span>
+                        </div>
+                        <div class="stashrow" style="border-bottom:none">
+                            <span class="si">stash@{1}</span><span class="sm2">before rebase onto main</span><span class="sw">1d · 7 files</span>
+                            <span class="sacts"><button class="btn sm">Apply</button><button class="btn sm">Pop</button><button class="btn sm">Branch…</button><button class="btn sm danger">Drop…</button></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="callouts">
+                <div class="co"><b class="n">1</b><b>Branch popup</b> 完全重用 <code class="doc">.menu</code>/<code class="doc">.mi</code>/<code class="doc">.mlabel</code> 元件：搜尋框、Local/Remote 分組、favorite 星號（持久化於 workspace 設定）、每列 ahead/behind 摘要（<code class="doc">for-each-ref --format</code> 一次取得）。</div>
+                <div class="co"><b class="n">2</b><b>第二層選單</b>：hover/→ 鍵展開 per-branch 動作。Merge/Rebase 屬可中斷操作：執行前自動檢查 worktree 乾淨，髒則建議 Stash All（一鍵）。</div>
+                <div class="co"><b class="n">3</b><b>Stash 補全</b>：<code class="doc">git_stash_list</code>（含 stat 摘要）、apply / pop / drop（打字確認 <code class="doc">DROP stash@{0}</code>）、branch-from-stash。點 stash 列可預覽其 diff（重用 ③ 的結構化 diff 視圖）。</div>
+                <div class="co"><b class="n">4</b><b>入口</b>：status bar branch 區塊（<code class="doc">.sb.accent</code>）與 Source Control 面板 branch 列共用同一 popup;command palette 加 <code class="doc">Git: Branches…</code>。</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         S6 — BLAME / FILE HISTORY
+         ============================================================ -->
+    <section class="surface" id="s6">
+        <h2>⑥ Blame 與 File History</h2>
+        <p class="sub">編輯器 gutter 右側掛 annotate 欄（per 行的 commit 歸屬），hover 高亮同 commit 的所有行；點擊跳到 Git Log 並選中該 commit。File History 是單檔的 log 視圖（重用 ① 的表格，無 graph 欄）。</p>
+
+        <div class="yz" style="max-width:760px">
+            <div class="mockbar"><span class="traffic"><i class="r"></i><i class="y"></i><i class="g"></i></span><span class="mt">Annotate — src/routes/users.ts（hover：a3f9c21）</span></div>
+            <div class="scene-head" style="height:34px">
+                <span class="mono" style="font-size:12px;color:var(--txt-dim)">src/routes/users.ts</span>
+                <span class="badge2 green">Annotate on</span>
+                <div style="flex:1"></div>
+                <button class="btn sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>File History</button>
+            </div>
+            <div class="blame">
+                <div class="bcol">
+                    <div class="brow"><span class="bh">d4b0e55</span><span class="ba">theo</span><span>4d</span></div>
+                    <div class="brow"><span class="bh">d4b0e55</span><span class="ba">theo</span><span>4d</span></div>
+                    <div class="brow hl"><span class="bh">a3f9c21</span><span class="ba">mina</span><span>2h</span></div>
+                    <div class="brow hl"><span class="bh">a3f9c21</span><span class="ba">mina</span><span>2h</span></div>
+                    <div class="brow"><span class="bh">7b18e04</span><span class="ba">theo</span><span>5h</span></div>
+                    <div class="brow"><span class="bh">d4b0e55</span><span class="ba">theo</span><span>4d</span></div>
+                </div>
+                <div class="bcode">
+                    <div class="bline"><span class="tok-key">import</span> { db } <span class="tok-key">from</span> <span class="tok-str">"../db/pool"</span>;</div>
+                    <div class="bline">router.<span class="tok-fn">get</span>(<span class="tok-str">"/users"</span>, <span class="tok-key">async</span> (req, res) =&gt; {</div>
+                    <div class="bline hl">  <span class="tok-key">const</span> page = <span class="tok-fn">Number</span>(req.query.page ?? <span class="tok-num">1</span>);</div>
+                    <div class="bline hl">  <span class="tok-key">const</span> rows = <span class="tok-key">await</span> db.<span class="tok-fn">query</span>(USERS_PAGE_SQL, [PAGE_SIZE, offset]);</div>
+                    <div class="bline">  <span class="tok-com">// reconnects handled by pool (ECONNRESET)</span></div>
+                    <div class="bline">  res.<span class="tok-fn">json</span>({ data: rows });</div>
+                </div>
+            </div>
+        </div>
+        <div class="spec-grid">
+            <div class="spec-card"><h4>Blame 後端</h4><ul>
+                <li><code class="doc">git_blame_file</code>：<code class="doc">git blame --porcelain</code> 解析為 <code class="doc">[{ hash, author, when, line_start, line_count }]</code> 區段（同 commit 連續行合併），單檔上限 20,000 行，超限回 truncated。</li>
+                <li>annotate 欄是 Monaco 旁的獨立 DOM 欄（同步捲動），不進 Monaco model — 維持懶載與 state 紀律。</li>
+            </ul></div>
+            <div class="spec-card"><h4>File History 後端</h4><ul>
+                <li><code class="doc">git_file_history</code>：<code class="doc">git log --follow --name-status -- path</code>（分頁同 ①），列出該檔每次變更;點列開「該 commit 中此檔」的 diff（<code class="doc">git_commit_file_diff</code>）。</li>
+                <li>--follow 能跨 rename 追蹤，呼應 status 已有的 original_path 欄位。</li>
+            </ul></div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         S7 — TECH SPEC
+         ============================================================ -->
+    <section class="surface" id="s7">
+        <h2>⑦ 技術規格 — 新增命令、lane 演算法、roadmap 排程</h2>
+        <p class="sub">延續既有原則：Rust 擁有全部 git 邏輯（CLI 封裝 + 解析）、payload 一律 bounded、破壞性操作打字確認、React 只持有目前渲染窗口的資料。</p>
+
+        <h3 style="font-size:1rem;margin:1rem 0 0.5rem">新增 / 升級 Tauri 命令（17 個）</h3>
+        <table class="spec">
+            <thead><tr><th>命令</th><th>底層 git</th><th>Bound</th><th>Guardrail</th><th>Surface</th></tr></thead>
+            <tbody>
+                <tr><td><code class="doc">git_log_page</code> <span class="pill upg">升級</span></td><td><code class="doc">log --topo-order --pretty=%H%x00%P%x00%an%x00%at%x00%D%x00%s</code> + 過濾參數</td><td>200 筆/頁，cursor 錨點</td><td>—</td><td>①</td></tr>
+                <tr><td><code class="doc">git_commit_detail</code> <span class="pill new">新</span></td><td><code class="doc">show --name-status --numstat --format</code></td><td>檔案 500/commit</td><td>—</td><td>①</td></tr>
+                <tr><td><code class="doc">git_commit_file_diff</code> <span class="pill new">新</span></td><td><code class="doc">show &lt;hash&gt; -- path</code></td><td>240 KB（沿用）</td><td>—</td><td>① ⑥</td></tr>
+                <tr><td><code class="doc">git_export_commit</code> <span class="pill new">新</span></td><td>changed: <code class="doc">diff-tree --name-status -r</code> + <code class="doc">show &lt;hash&gt;:&lt;path&gt;</code>；snapshot: <code class="doc">archive --format=zip</code></td><td>2,000 檔 / 200 MB</td><td>同名檔需 Overwrite 確認；路徑限定目的資料夾內</td><td>①+</td></tr>
+                <tr><td><code class="doc">git_cherry_pick</code> <span class="pill new">新</span></td><td><code class="doc">cherry-pick &lt;hash&gt;</code></td><td>—</td><td>衝突時中止並回報</td><td>①</td></tr>
+                <tr><td><code class="doc">git_revert_commit</code> <span class="pill new">新</span></td><td><code class="doc">revert --no-edit &lt;hash&gt;</code></td><td>—</td><td>確認 <code class="doc">REVERT &lt;short&gt;</code></td><td>①</td></tr>
+                <tr><td><code class="doc">git_reset_to</code> <span class="pill upg">升級</span></td><td><code class="doc">reset --soft|--mixed|--hard &lt;hash&gt;</code></td><td>—</td><td>hard 需 <code class="doc">RESET HARD &lt;short&gt;</code></td><td>①</td></tr>
+                <tr><td><code class="doc">git_diff_hunks</code> <span class="pill upg">升級</span></td><td><code class="doc">diff [--cached] -- path</code> 結構化解析</td><td>200 hunks / 8,000 行</td><td>—</td><td>② ③</td></tr>
+                <tr><td><code class="doc">git_stage_hunks</code> / <code class="doc">git_unstage_hunks</code> <span class="pill new">新</span></td><td>Rust 組 patch → <code class="doc">apply --cached [-R]</code></td><td>patch 1 MB</td><td>—</td><td>②</td></tr>
+                <tr><td><code class="doc">git_revert_hunk</code> <span class="pill new">新</span></td><td><code class="doc">apply -R</code>（worktree）</td><td>patch 1 MB</td><td>確認 <code class="doc">DISCARD</code></td><td>②</td></tr>
+                <tr><td><code class="doc">git_conflict_file</code> / <code class="doc">git_mark_resolved</code> <span class="pill new">新</span></td><td><code class="doc">show :1 :2 :3</code> / <code class="doc">add</code></td><td>512 KB×3</td><td>批次 accept 需確認</td><td>④</td></tr>
+                <tr><td><code class="doc">git_branches_full</code> <span class="pill upg">升級</span></td><td><code class="doc">for-each-ref --format</code>（ahead/behind/favorite）</td><td>500 refs</td><td>—</td><td>⑤</td></tr>
+                <tr><td><code class="doc">git_merge_branch</code> / <code class="doc">git_branch_delete</code> / <code class="doc">git_branch_rename</code> <span class="pill new">新</span></td><td><code class="doc">merge</code> / <code class="doc">branch -D</code> / <code class="doc">branch -m</code></td><td>—</td><td>delete 需 <code class="doc">DELETE &lt;name&gt;</code></td><td>⑤</td></tr>
+                <tr><td><code class="doc">git_stash_list/apply/pop/drop/branch</code> <span class="pill new">新</span></td><td><code class="doc">stash list --stat</code> 等</td><td>50 stashes</td><td>drop 需 <code class="doc">DROP stash@{n}</code></td><td>⑤</td></tr>
+                <tr><td><code class="doc">git_blame_file</code> <span class="pill new">新</span></td><td><code class="doc">blame --porcelain</code></td><td>20,000 行</td><td>—</td><td>⑥</td></tr>
+                <tr><td><code class="doc">git_file_history</code> <span class="pill new">新</span></td><td><code class="doc">log --follow --name-status -- path</code></td><td>200 筆/頁</td><td>—</td><td>⑥</td></tr>
+            </tbody>
+        </table>
+
+        <div class="spec-grid">
+            <div class="spec-card">
+                <h4>Lane 分配演算法（取代 ASCII 解析）</h4>
+                <ul>
+                    <li>輸入：topo-order 的 <code class="doc">{ hash, parents[] }</code> 串流（新→舊）。</li>
+                    <li>維護 <code class="doc">active: Vec&lt;Option&lt;Hash&gt;&gt;</code>（各 lane 正在等待的 parent）。每筆 commit：在 active 中找自己 → 該位即本列 lane（找不到則佔第一個空位）。</li>
+                    <li>第一 parent 接替原 lane；其餘 parent 各佔新 lane（合併邊）；多個 lane 同時等同一 parent 時收斂（分支點），釋出右側 lane。</li>
+                    <li>輸出 per-row：<code class="doc">{ lane, dot_color, edges: [{from_lane, to_lane, kind}] }</code>，前端每列一個 36px SVG，按 edges 畫貫穿線/曲線（本設計稿 mockup 即此渲染）。</li>
+                    <li>lane 上限 12（超出折疊進最右 lane 並淡化）——對個人 repo 足夠且維持 bounded。在 Rust 端計算並隨分頁回傳，前端零圖演算法。</li>
+                </ul>
+            </div>
+            <div class="spec-card">
+                <h4>Roadmap 排程建議</h4>
+                <ul>
+                    <li>建議立為獨立節點「<b>Node 4.5: Git Deep Dive</b>」排在 Node 10（Remote）之後、Node 11（Debugging）之前——依賴面最小，且 Node 7 agent 工作流可立即受益（cherry-pick/blame 作為 agent context）。</li>
+                    <li>任務切分（各自可 TDD）：T1 結構化 diff/hunks ＋ stage/unstage hunk → T2 log 拓撲 ＋ lane 演算法 ＋ 分頁 → T3 commit 詳情 ＋ log 操作（cherry-pick/revert/reset/export）→ T4 branch popup ＋ stash 全套 → T5 conflict 三向 → T6 blame ＋ file history → T7 驗證與量測。</li>
+                    <li>Lane 演算法是純函式 — RED 測試直接用合成 DAG（線性、單分支、八爪 merge、criss-cross）斷言 lane/edges。</li>
+                    <li>量測目標：1,000-commit repo 的 log 首頁 &lt; 150 ms；10,000 行檔 blame &lt; 400 ms;全部 payload 有 truncated 旗標。</li>
+                </ul>
+            </div>
+        </div>
+        <p class="note">不做（維持 JetBrains 對齊但尊重 roadmap non-goals）：PR/code review 整合（roadmap 未列）、submodule UI、GPG 簽章 UI、reflog 瀏覽器——若日後需要，全部可沿用 ① 的 log 表格與 ⑤ 的 menu 模式。</p>
+    </section>
+</div>
+
+<script>
+/* ---------- S1: Git Log interactive mockup ---------- */
+const YUZU = "#a8e23f", BLUE = "#82aaff";
+/* lanes-per-row 模型：threads = 該列要畫的貫穿 lane；joins/forks = 曲線邊 */
+const LOG = [
+  { hash:"a3f9c21", short:"a3f9c21", subject:"feat: refine git log filters", author:"mina", when:"2h",
+    refs:[{t:"HEAD → main",k:"head"},{t:"origin/main",k:"br"}], lane:0, threads:[0], top:false,
+    files:[["M","src/features/git/git-model.ts",18,4],["M","src/features/git/GitLogView.tsx",42,11],["A","src/features/git/log-filters.ts",66,0]] },
+  { hash:"7b18e04", short:"7b18e04", subject:"fix: pool reconnect on ECONNRESET", author:"theo", when:"5h",
+    refs:[], lane:0, threads:[0],
+    files:[["M","src/db/pool.ts",12,3],["M","src/lib/logger.ts",4,1]] },
+  { hash:"c290a17", short:"c290a17", subject:"Merge branch 'feat/editor'", author:"mina", when:"1d",
+    refs:[], lane:0, threads:[0], fork:1, merge:true,
+    files:[["M","src/app/AppShell.tsx",31,9],["M","src/features/editor/EditorTab.tsx",55,17]] },
+  { hash:"f01dd9b", short:"f01dd9b", subject:"wip: split editor groups", author:"priya", when:"1d",
+    refs:[{t:"feat/editor",k:"br"}], lane:1, threads:[0,1],
+    files:[["M","src/features/editor/EditorTab.tsx",23,6]] },
+  { hash:"8d2c44a", short:"8d2c44a", subject:"feat: editor group model", author:"priya", when:"2d",
+    refs:[], lane:1, threads:[0,1],
+    files:[["A","src/features/editor/editor-groups.ts",88,0],["M","src/app/workspace-view-state.ts",9,2]] },
+  { hash:"5ce7720", short:"5ce7720", subject:"chore: bump deps", author:"theo", when:"2d",
+    refs:[], lane:0, threads:[0], join:1,
+    files:[["M","package.json",14,14],["M","bun.lock",420,397]] },
+  { hash:"9aa4c18", short:"9aa4c18", subject:"feat: sftp browser", author:"mina", when:"3d",
+    refs:[{t:"v0.4.1",k:"tag"}], lane:0, threads:[0],
+    files:[["A","src/features/remote/SftpPanel.tsx",132,0],["M","src-tauri/src/commands.rs",58,3]] },
+  { hash:"d4b0e55", short:"d4b0e55", subject:"init schema + migrations", author:"theo", when:"4d",
+    refs:[], lane:0, threads:[0], last:true,
+    files:[["A","src/db/schema.sql",61,0],["A","src/db/migrate.ts",40,0]] },
+];
+const X = l => 14 + l * 20;
+function rowSvg(c) {
+  let s = `<svg width="92" height="36" style="display:block">`;
+  for (const t of c.threads) {
+    const col = t === 0 ? YUZU : BLUE;
+    const isDotLane = t === c.lane;
+    const y1 = (c.top === false && LOG.indexOf(c) === 0 && isDotLane) ? 18 : -4;
+    const y2 = (c.last && isDotLane) ? 18 : 40;
+    s += `<line x1="${X(t)}" y1="${y1}" x2="${X(t)}" y2="${y2}" stroke="${col}" stroke-width="2"/>`;
+  }
+  if (c.fork !== undefined)
+    s += `<path d="M${X(0)} 18 C ${X(0)} 30, ${X(c.fork)} 26, ${X(c.fork)} 40" fill="none" stroke="${BLUE}" stroke-width="2"/>`;
+  if (c.join !== undefined)
+    s += `<path d="M${X(c.join)} -4 C ${X(c.join)} 10, ${X(0)} 6, ${X(0)} 18" fill="none" stroke="${BLUE}" stroke-width="2"/>`;
+  const col = c.lane === 0 ? YUZU : BLUE;
+  s += `<circle cx="${X(c.lane)}" cy="18" r="5" fill="var(--editor)" stroke="${col}" stroke-width="2.5"/>`;
+  if (c.merge) s += `<circle cx="${X(c.lane)}" cy="18" r="2" fill="${col}"/>`;
+  return s + `</svg>`;
+}
+function refBadge(r) {
+  const styles = {
+    head: 'border-color:var(--yuzu-edge);color:var(--yuzu);background:var(--yuzu-wash)',
+    tag:  'border-color:color-mix(in srgb,#f78c6c 40%,transparent);color:#f78c6c',
+    br:   ''
+  };
+  return `<span class="badge2" style="${styles[r.k]}">${r.t}</span>`;
+}
+const logbody = document.getElementById("logbody");
+logbody.innerHTML = LOG.map((c, i) => `
+  <tr data-i="${i}" class="${i === 0 ? "sel" : ""}">
+    <td>${rowSvg(c)}</td>
+    <td><span style="display:flex;align-items:center;gap:8px">${c.refs.map(refBadge).join("")}<span style="overflow:hidden;text-overflow:ellipsis">${c.subject}</span></span></td>
+    <td style="color:var(--txt-dim)">${c.author}</td>
+    <td class="mono" style="color:var(--txt-faint)">${c.when}</td>
+    <td class="mono" style="color:var(--c-num)">${c.short}</td>
+  </tr>`).join("");
+function showDetail(i) {
+  const c = LOG[i];
+  const tok = { M: "git-M", A: "git-A", D: "git-D" };
+  document.getElementById("cdetail").innerHTML = `
+    <div class="cd-head">
+      <div class="cd-subject">${c.subject}</div>
+      <div class="cd-meta">
+        <span class="cdm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>${c.author} · ${c.when} ago</span>
+        <span class="cdm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><span class="mono">${c.hash}</span>${c.merge ? ' · <span style="color:#82aaff">merge</span>' : ""}</span>
+        ${c.refs.length ? `<span class="cdm" style="flex-wrap:wrap;gap:5px">${c.refs.map(refBadge).join("")}</span>` : ""}
+      </div>
+    </div>
+    <div class="section-label"><span>Changed Files · ${c.files.length}</span>
+      <button class="btn sm ghost" style="height:20px;font-size:11px">Compare…</button></div>
+    ${c.files.map(f => `
+      <div class="row" title="開啟此 commit 的單檔 diff">
+        <span class="gtoken ${tok[f[0]]}">${f[0]}</span><span class="nm mono" style="font-size:11.5px">${f[1]}</span>
+        <span class="meta"><span class="stat-add">+${f[2]}</span> <span class="stat-del">−${f[3]}</span></span>
+      </div>`).join("")}
+    <div style="padding:10px 12px;display:flex;gap:6px;flex-wrap:wrap">
+      <button class="btn sm">Cherry-pick</button><button class="btn sm">Revert…</button>
+      <button class="btn sm" style="color:var(--yuzu);border-color:var(--yuzu-edge)" title="下載此 commit 的內容（含資料夾）">⬇ Export…</button>
+      <button class="btn sm danger">Reset…</button>
+    </div>`;
+}
+showDetail(0);
+logbody.addEventListener("click", e => {
+  const tr = e.target.closest("tr[data-i]");
+  if (!tr) return;
+  logbody.querySelectorAll("tr").forEach(r => r.classList.remove("sel"));
+  tr.classList.add("sel");
+  showDetail(Number(tr.dataset.i));
+});
+
+/* ---------- S3: diff mode segmented ---------- */
+document.getElementById("diffmode").addEventListener("click", e => {
+  const b = e.target.closest("button[data-m]");
+  if (!b) return;
+  document.querySelectorAll("#diffmode button").forEach(x => x.classList.remove("on"));
+  b.classList.add("on");
+  document.getElementById("diff-sbs").style.display = b.dataset.m === "sbs" ? "" : "none";
+  document.getElementById("diff-unified").style.display = b.dataset.m === "unified" ? "" : "none";
+});
+
+/* ---------- TOC active state ---------- */
+const tocLinks = [...document.querySelectorAll("nav.toc a")];
+const sections = tocLinks.map(a => document.querySelector(a.getAttribute("href")));
+addEventListener("scroll", () => {
+  let cur = 0;
+  sections.forEach((s, i) => { if (s.getBoundingClientRect().top < 120) cur = i; });
+  tocLinks.forEach((a, i) => a.classList.toggle("on", i === cur));
+}, { passive: true });
+</script>
+</body>
+</html>

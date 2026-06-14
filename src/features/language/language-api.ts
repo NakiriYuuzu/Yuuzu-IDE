@@ -36,6 +36,14 @@ export function getWorkspaceDiagnostics(args: {
   return call("lsp_workspace_diagnostics", args);
 }
 
+export function getDocumentDiagnostics(args: {
+  workspaceId: string;
+  workspaceRoot: string;
+  path: string;
+}): Promise<LspDiagnostic[]> {
+  return call("lsp_document_diagnostics", args);
+}
+
 export function requestLanguageHover(args: {
   workspaceId: string;
   workspaceRoot: string;
@@ -100,7 +108,7 @@ export function requestLanguageRename(args: {
 export function restartLanguageServer(args: {
   workspaceId: string;
   workspaceRoot: string;
-  path: string;
+  language: string;
 }): Promise<LanguageServerStatus> {
   return call("lsp_restart_server", args);
 }

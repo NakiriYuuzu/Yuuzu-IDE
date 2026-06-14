@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useWorkspaceStore } from "../../app/workspace-store";
+import { useWorkspaceStore } from "./workspace-store";
 import {
   createRevealState,
   fileIconClassFromName,

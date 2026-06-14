@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
-import { ensureTestDom } from "../../app/test-dom";
+import { ensureTestDom } from "../../test/test-dom";
 import {
   createDatabaseState,
   type DatabaseProfile,

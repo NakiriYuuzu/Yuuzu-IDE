@@ -190,54 +190,6 @@ button {
   border-bottom: 1px solid var(--line);
 }
 
-.traffic {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding-right: 6px;
-}
-
-.traffic i {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  display: block;
-}
-
-.traffic .r {
-  background: #ff5f57;
-}
-
-.traffic .y {
-  background: #febc2e;
-}
-
-.traffic .g {
-  background: #28c840;
-}
-
-.workspace-switcher {
-  position: relative;
-}
-
-.proj {
-  height: 28px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 9px 0 6px;
-  color: var(--txt);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  cursor: pointer;
-}
-
-.proj:hover {
-  background: var(--hover);
-  border-color: var(--line);
-}
-
 .glyph {
   width: 19px;
   height: 19px;

@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Change Report: Yuuzu IDE v2 Workbench</title>
+<style>
+:root {
+    --font-sans: system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+    --color-bg: #faf9f7;
+    --color-surface: #ffffff;
+    --color-text: #1a1a1a;
+    --color-text-secondary: #6b7280;
+    --color-border: #e5e5e5;
+    --color-accent: #5e8c14;
+    --color-accent-light: #edf5db;
+    --color-success: #22c55e;
+    --color-warning: #f59e0b;
+    --color-error: #ef4444;
+    --color-info: #3b82f6;
+    --color-diff-add-bg: #dcfce7;
+    --color-diff-add-line: #bbf7d0;
+    --color-diff-del-bg: #fee2e2;
+    --color-diff-del-line: #fecaca;
+    --radius-md: 10px;
+    --radius-lg: 16px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--font-sans); background: var(--color-bg); color: var(--color-text); line-height: 1.6; }
+
+.layout { display: grid; grid-template-columns: 260px 1fr; min-height: 100vh; }
+@media (max-width: 768px) { .layout { grid-template-columns: 1fr; } .sidebar { display: none; } }
+
+.sidebar { background: var(--color-surface); border-right: 1px solid var(--color-border); padding: 1.5rem; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+.sidebar h3 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-secondary); margin: 1rem 0 0.75rem; }
+.sidebar h3:first-child { margin-top: 0; }
+.file-list { list-style: none; }
+.file-list li { margin-bottom: 0.25rem; }
+.file-list a { color: var(--color-text); text-decoration: none; font-size: 0.8rem; font-family: var(--font-mono); padding: 0.35rem 0.5rem; display: flex; align-items: center; gap: 0.5rem; border-radius: 6px; transition: background 0.15s; }
+.file-list a:hover { background: var(--color-bg); }
+.file-list .indicator { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.file-list .indicator.added { background: var(--color-success); }
+.file-list .indicator.modified { background: var(--color-warning); }
+
+.main { padding: 2rem; max-width: 1020px; }
+header { margin-bottom: 2rem; }
+header .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-accent); font-weight: 600; }
+header h1 { font-size: 1.75rem; margin: 0.25rem 0; }
+header .meta { color: var(--color-text-secondary); font-size: 0.9rem; }
+
+.stats { display: flex; gap: 1rem; margin: 1.5rem 0; flex-wrap: wrap; }
+.stat { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 1rem 1.25rem; min-width: 120px; }
+.stat .value { font-size: 1.5rem; font-weight: 700; }
+.stat .label { font-size: 0.8rem; color: var(--color-text-secondary); }
+
+.summary { background: var(--color-surface); border-radius: var(--radius-lg); padding: 1.5rem; margin-bottom: 2rem; border: 1px solid var(--color-border); }
+.summary h2 { font-size: 1.1rem; margin-bottom: 0.75rem; }
+.summary ul { padding-left: 1.25rem; }
+.summary li { margin-bottom: 0.5rem; font-size: 0.95rem; }
+
+table.changes { width: 100%; border-collapse: collapse; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; font-size: 0.85rem; margin-bottom: 2rem; }
+table.changes th { text-align: left; padding: 0.6rem 0.9rem; background: var(--color-accent-light); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: #3d5c0d; }
+table.changes td { padding: 0.55rem 0.9rem; border-top: 1px solid var(--color-border); vertical-align: top; }
+table.changes td.file { font-family: var(--font-mono); font-size: 0.78rem; white-space: nowrap; }
+table.changes td.tool { white-space: nowrap; }
+.pill { display: inline-block; font-size: 0.68rem; font-weight: 700; padding: 0.1rem 0.5rem; border-radius: 999px; text-transform: uppercase; }
+.pill.add { background: #dcfce7; color: #166534; }
+.pill.mod { background: #fef3c7; color: #92400e; }
+
+.section-title { font-size: 1.2rem; margin: 2.5rem 0 1rem; }
+
+.diagram-container { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 1.25rem; overflow-x: auto; margin-bottom: 2rem; }
+.diagram-caption { font-size: 0.85rem; color: var(--color-text-secondary); margin-top: 0.75rem; }
+
+details.file-section { margin-bottom: 1rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; }
+details.file-section summary { cursor: pointer; padding: 0.75rem 1rem; font-family: var(--font-mono); font-size: 0.85rem; display: flex; align-items: center; gap: 0.75rem; background: var(--color-surface); }
+details.file-section summary:hover { background: var(--color-bg); }
+details.file-section summary .indicator { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+details.file-section summary .indicator.added { background: var(--color-success); }
+details.file-section summary .indicator.modified { background: var(--color-warning); }
+details.file-section summary .lines { margin-left: auto; color: var(--color-text-secondary); font-size: 0.75rem; }
+details.file-section .body { padding: 0.75rem 1rem 1rem; border-top: 1px solid var(--color-border); font-size: 0.9rem; }
+
+.diff { border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.7; margin: 0.75rem 0; }
+.diff-line { display: flex; }
+.diff-line .line-num { width: 46px; text-align: right; padding: 0 0.6rem; color: var(--color-text-secondary); user-select: none; flex-shrink: 0; }
+.diff-line .line-content { flex: 1; padding: 0 1rem; white-space: pre-wrap; word-break: break-all; }
+.diff-line.add { background: var(--color-diff-add-bg); }
+.diff-line.add .line-num { background: var(--color-diff-add-line); }
+.diff-line.del { background: var(--color-diff-del-bg); }
+.diff-line.del .line-num { background: var(--color-diff-del-line); }
+.diff-line.context { background: var(--color-surface); }
+
+.annotation { margin: 0.75rem 0; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 0.75rem 1rem; font-family: var(--font-sans); font-size: 0.85rem; display: flex; gap: 0.75rem; align-items: flex-start; }
+.annotation .severity { font-size: 0.7rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 999px; text-transform: uppercase; flex-shrink: 0; }
+.annotation .severity.info { background: #e0e7ff; color: #3730a3; }
+.annotation .severity.note { background: #fef3c7; color: #92400e; }
+.annotation .severity.done { background: #dcfce7; color: #166534; }
+
+.verify { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 1.5rem; margin-bottom: 2rem; }
+.verify h2 { font-size: 1.1rem; margin-bottom: 0.75rem; }
+.verify ul { padding-left: 1.25rem; }
+.verify li { margin-bottom: 0.4rem; font-size: 0.9rem; }
+
+.shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+.shot { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; }
+.shot img { width: 100%; display: block; }
+.shot .cap { padding: 0.5rem 0.75rem; font-size: 0.8rem; color: var(--color-text-secondary); }
+
+@media print { .sidebar { display: none; } .layout { grid-template-columns: 1fr; } details.file-section { page-break-inside: avoid; } details[open] summary { border-bottom: 1px solid var(--color-border); } }
+</style>
+</head>
+<body>
+<div class="layout">
+    <nav class="sidebar">
+        <h3>新增檔案 (src/v2/)</h3>
+        <ul class="file-list">
+            <li><a href="#f-yuzu"><span class="indicator added"></span>yuzu.css</a></li>
+            <li><a href="#f-model"><span class="indicator added"></span>v2-model.ts</a></li>
+            <li><a href="#f-store"><span class="indicator added"></span>v2-store.ts</a></li>
+            <li><a href="#f-workbench"><span class="indicator added"></span>Workbench.tsx</a></li>
+            <li><a href="#f-rail"><span class="indicator added"></span>ProjectRail.tsx</a></li>
+            <li><a href="#f-side"><span class="indicator added"></span>SidePanel.tsx</a></li>
+            <li><a href="#f-tabs"><span class="indicator added"></span>TabStrip.tsx</a></li>
+            <li><a href="#f-views"><span class="indicator added"></span>ContentViews.tsx</a></li>
+            <li><a href="#f-git"><span class="indicator added"></span>GitGraphView.tsx</a></li>
+            <li><a href="#f-db"><span class="indicator added"></span>DbTableView.tsx</a></li>
+            <li><a href="#f-sftp"><span class="indicator added"></span>SftpView.tsx</a></li>
+            <li><a href="#f-az"><span class="indicator added"></span>AgentZone.tsx</a></li>
+            <li><a href="#f-overlays"><span class="indicator added"></span>Overlays.tsx</a></li>
+            <li><a href="#f-tests"><span class="indicator added"></span>v2-*.test.ts ×2</a></li>
+        </ul>
+        <h3>修改 / 資產</h3>
+        <ul class="file-list">
+            <li><a href="#f-app"><span class="indicator modified"></span>src/App.tsx</a></li>
+            <li><a href="#f-fonts"><span class="indicator added"></span>public/fonts/ ×6</a></li>
+        </ul>
+        <h3>章節</h3>
+        <ul class="file-list">
+            <li><a href="#arch">架構圖</a></li>
+            <li><a href="#verify">驗證結果</a></li>
+            <li><a href="#followup">後續建議</a></li>
+        </ul>
+    </nav>
+
+    <main class="main">
+        <header>
+            <div class="label">Change Report · Co-Learning</div>
+            <h1>Yuuzu IDE v2 Workbench — Yuzu 重設計實作</h1>
+            <p class="meta">yuuzu-ide · main · 2026-06-13 · 來源：Claude Design 交付包「Yuuzu IDE v2.dc.html」</p>
+        </header>
+
+        <div class="stats">
+            <div class="stat"><div class="value" style="color:var(--color-success)">+5,487</div><div class="label">新增行數</div></div>
+            <div class="stat"><div class="value">16</div><div class="label">新檔案</div></div>
+            <div class="stat"><div class="value">1</div><div class="label">修改檔案</div></div>
+            <div class="stat"><div class="value" style="color:var(--color-accent)">40</div><div class="label">新測試（全綠）</div></div>
+            <div class="stat"><div class="value">516</div><div class="label">全套測試通過</div></div>
+        </div>
+
+        <div class="summary">
+            <h2>What &amp; Why（變更摘要）</h2>
+            <p>依照 claude.ai/design 的交付包，把「Yuuzu IDE v2」原型完整實作成 React 元件，成為 app 的<strong>預設 shell</strong>。設計意圖（出自聊天紀錄）：原本的 IDE「太像 VSCode、功能性不達標」，v2 改為<strong>左側專案 rail（多專案、各自保留狀態）＋功能列表（Files / Git / Database / SSH·SFTP / AgentZone）＋型別化 tabs＋AgentZone terminal 集群</strong>的全新架構，配 Yuzu 配色（dark/light）。</p>
+            <h3 style="font-size:0.9rem;margin-top:1rem;">關鍵設計決策</h3>
+            <ul>
+                <li><strong>v2 為獨立模組（src/v2/）、v1 完整保留</strong>：原 AppShell（9,900 行、接好 180+ Tauri commands 的真實 IDE）一行未動，透過 <code>?shell=v1</code> 可隨時回去。零迴歸風險。</li>
+                <li><strong>v2 目前使用設計稿自帶的 demo 資料引擎</strong>：每個畫面與互動都能在純瀏覽器展示（這正是設計原型的契約）；真實後端（fs / git / pty）的接線是下一階段，逐域把 v1 的 api 層接進 v2。</li>
+                <li><strong>CSS token 與設計稿 1:1 對應</strong>：變數名沿用 <code>--yz-&lt;dark-hex&gt;</code>，light theme 用設計稿 helmet 的覆寫值，日後設計回流可以直接 diff。</li>
+                <li><strong>JetBrains Mono 字型隨設計系統帶入</strong>（public/fonts/，OFL 授權，6 個字重）。</li>
+            </ul>
+        </div>
+
+        <h2 class="section-title" id="arch">Architecture（實際結構）</h2>
+        <div class="diagram-container">
+            <svg viewBox="0 0 940 560" xmlns="http://www.w3.org/2000/svg" style="min-width:760px">
+                <defs>
+                    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                        <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"/>
+                    </marker>
+                </defs>
+                <!-- entry -->
+                <rect x="20" y="20" width="200" height="64" rx="10" fill="#fff" stroke="#e5e5e5"/>
+                <text x="120" y="46" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">src/App.tsx</text>
+                <text x="120" y="66" text-anchor="middle" font-size="11" fill="#6b7280">?shell=v1 切換</text>
+
+                <!-- v1 -->
+                <rect x="20" y="130" width="200" height="74" rx="10" fill="#fff" stroke="#f59e0b" stroke-dasharray="4 3"/>
+                <text x="120" y="158" text-anchor="middle" font-size="12" font-weight="700" fill="#92400e">app/AppShell.tsx（v1）</text>
+                <text x="120" y="176" text-anchor="middle" font-size="10.5" fill="#6b7280">真實 Tauri 接線 · 未修改</text>
+                <text x="120" y="191" text-anchor="middle" font-size="10.5" fill="#6b7280">?shell=v1 保留</text>
+
+                <!-- v2 root -->
+                <rect x="300" y="120" width="220" height="92" rx="10" fill="#edf5db" stroke="#5e8c14"/>
+                <text x="410" y="146" text-anchor="middle" font-size="13" font-weight="700" fill="#3d5c0d">v2/Workbench.tsx</text>
+                <text x="410" y="164" text-anchor="middle" font-size="10.5" fill="#52606d">TitleBar · StatusBar</text>
+                <text x="410" y="179" text-anchor="middle" font-size="10.5" fill="#52606d">useGlobalKeys（⌘K ⌃` ⌘⇧B Esc</text>
+                <text x="410" y="194" text-anchor="middle" font-size="10.5" fill="#52606d">cmd 打字 · sftp ⌘C/⌘V）</text>
+
+                <!-- store -->
+                <rect x="610" y="20" width="300" height="96" rx="10" fill="#fff" stroke="#5e8c14" stroke-width="1.5"/>
+                <text x="760" y="44" text-anchor="middle" font-size="13" font-weight="700" fill="#3d5c0d">v2-store.ts（zustand）</text>
+                <text x="760" y="62" text-anchor="middle" font-size="10.5" fill="#52606d">ui: Record&lt;projectId, ProjectUI&gt; ← 每專案狀態</text>
+                <text x="760" y="77" text-anchor="middle" font-size="10.5" fill="#52606d">tabs/fn/sftp/wins/git/treeData 各自獨立</text>
+                <text x="760" y="92" text-anchor="middle" font-size="10.5" fill="#52606d">theme（localStorage）· toast · ctx · palette</text>
+
+                <!-- model -->
+                <rect x="610" y="150" width="300" height="80" rx="10" fill="#fff" stroke="#e5e5e5"/>
+                <text x="760" y="174" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">v2-model.ts（純函式）</text>
+                <text x="760" y="192" text-anchor="middle" font-size="10.5" fill="#6b7280">hlLine · termSegs · estTokens · azCols</text>
+                <text x="760" y="207" text-anchor="middle" font-size="10.5" fill="#6b7280">demo 資料（tree/git/db/hosts/sftp/code）</text>
+
+                <!-- regions row -->
+                <rect x="30" y="290" width="170" height="70" rx="10" fill="#fff" stroke="#e5e5e5"/>
+                <text x="115" y="316" text-anchor="middle" font-size="12" font-weight="700">ProjectRail</text>
+                <text x="115" y="334" text-anchor="middle" font-size="10.5" fill="#6b7280">AP/WB/ED · badge · ＋ · ⚙</text>
+
+                <rect x="220" y="290" width="190" height="70" rx="10" fill="#fff" stroke="#e5e5e5"/>
+                <text x="315" y="310" text-anchor="middle" font-size="12" font-weight="700">SidePanel</text>
+                <text x="315" y="327" text-anchor="middle" font-size="10.5" fill="#6b7280">功能列表＋5 種 panel body</text>
+                <text x="315" y="342" text-anchor="middle" font-size="10.5" fill="#6b7280">Explorer/Git/DB/SSH/Agent</text>
+
+                <rect x="430" y="290" width="160" height="70" rx="10" fill="#fff" stroke="#e5e5e5"/>
+                <text x="510" y="310" text-anchor="middle" font-size="12" font-weight="700">TabStrip</text>
+                <text x="510" y="327" text-anchor="middle" font-size="10.5" fill="#6b7280">型別化 tabs · ＋選單</text>
+                <text x="510" y="342" text-anchor="middle" font-size="10.5" fill="#6b7280">◫ split 切換</text>
+
+                <rect x="610" y="290" width="300" height="70" rx="10" fill="#edf5db" stroke="#5e8c14"/>
+                <text x="760" y="310" text-anchor="middle" font-size="12" font-weight="700" fill="#3d5c0d">AgentZone（fn === 'agent' 時整個內容區）</text>
+                <text x="760" y="327" text-anchor="middle" font-size="10.5" fill="#52606d">等分宮格 1/2/3/4 欄（ResizeObserver）</text>
+                <text x="760" y="342" text-anchor="middle" font-size="10.5" fill="#52606d">— 收合 · ⤢ 放大 · × 關閉 · 鍵入即 shell</text>
+
+                <!-- content views -->
+                <rect x="30" y="410" width="560" height="64" rx="10" fill="#fff" stroke="#e5e5e5"/>
+                <text x="310" y="434" text-anchor="middle" font-size="12" font-weight="700">Content Views（依 tab.type 分派）＋ SplitPane</text>
+                <text x="310" y="452" text-anchor="middle" font-size="10.5" fill="#6b7280">Editor（Σ tokens）· Terminal · Browser · GitGraph（DAG SVG＋詳情）· DbTable（Data/Structure/SQL）· Sftp（雙欄）</text>
+
+                <!-- overlays -->
+                <rect x="610" y="410" width="300" height="64" rx="10" fill="#fff" stroke="#e5e5e5"/>
+                <text x="760" y="434" text-anchor="middle" font-size="12" font-weight="700">Overlays</text>
+                <text x="760" y="452" text-anchor="middle" font-size="10.5" fill="#6b7280">ContextMenu（14 種）· ⌘K Palette · Settings · Toast</text>
+
+                <!-- css -->
+                <rect x="30" y="505" width="880" height="40" rx="10" fill="#fff" stroke="#e5e5e5"/>
+                <text x="470" y="530" text-anchor="middle" font-size="11.5" fill="#6b7280"><tspan font-weight="700" fill="#3d5c0d">yuzu.css</tspan> — Yuzu tokens（--yz-*，dark 預設 / light 覆寫）· JetBrains Mono @font-face · yzIn/yzFade/yzblink 動畫 · 全元件樣式</text>
+
+                <!-- edges -->
+                <line x1="120" y1="84" x2="120" y2="130" stroke="#6b7280" marker-end="url(#arr)"/>
+                <line x1="220" y1="52" x2="345" y2="120" stroke="#6b7280" marker-end="url(#arr)"/>
+                <line x1="520" y1="150" x2="610" y2="80" stroke="#6b7280" marker-end="url(#arr)"/>
+                <line x1="610" y1="180" x2="520" y2="180" stroke="#6b7280" marker-end="url(#arr)"/>
+                <line x1="360" y1="212" x2="130" y2="290" stroke="#6b7280" marker-end="url(#arr)"/>
+                <line x1="395" y1="212" x2="318" y2="290" stroke="#6b7280" marker-end="url(#arr)"/>
+                <line x1="440" y1="212" x2="505" y2="290" stroke="#6b7280" marker-end="url(#arr)"/>
+                <line x1="500" y1="200" x2="640" y2="290" stroke="#6b7280" marker-end="url(#arr)"/>
+                <line x1="310" y1="360" x2="310" y2="410" stroke="#6b7280" marker-end="url(#arr)"/>
+                <line x1="760" y1="230" x2="760" y2="290" stroke="#6b7280" stroke-dasharray="3 3"/>
+                <line x1="470" y1="212" x2="700" y2="410" stroke="#6b7280" marker-end="url(#arr)"/>
+            </svg>
+            <p class="diagram-caption">資料流：Workbench 掛載全域鍵盤 → 所有區塊讀寫 v2-store（ui 以 projectId 為 key，切換專案即切換 slice，其餘 slice 原封不動 = 狀態保留）；純邏輯（highlighter、token 估算、欄數斷點、demo 資料）集中在 v2-model 供元件與測試共用。v1 AppShell 完整保留於虛線框。</p>
+        </div>
+
+        <h2 class="section-title">What Changed（檔案變更表）</h2>
+        <table class="changes">
+            <thead><tr><th>檔案</th><th>類型</th><th>變更內容</th><th>工具</th><th>原因</th></tr></thead>
+            <tbody>
+                <tr><td class="file">src/v2/yuzu.css</td><td><span class="pill add">new</span></td><td>Yuzu 設計 tokens（dark 預設＋light 覆寫，1:1 對應設計稿）、JetBrains Mono @font-face、動畫 keyframes、全部 yz2-* 元件樣式（1,552 行）</td><td class="tool">Write</td><td>設計系統落地；hover 用 :hover 取代原型的 style-hover</td></tr>
+                <tr><td class="file">src/v2/v2-model.ts</td><td><span class="pill add">new</span></td><td>型別（Tab/ProjectUI/CtxTarget…）、demo 資料（樹/git/db/hosts/sftp/程式碼）、純函式（hlLine 語法上色、termSegs、estTokens/ctxPct、azColsForWidth、execOut、palette 過濾）</td><td class="tool">Write</td><td>邏輯與 UI 分離、可單元測試；demo 內容沿用設計稿資料集</td></tr>
+                <tr><td class="file">src/v2/v2-store.ts</td><td><span class="pill add">new</span></td><td>zustand store：ui 以 projectId 為 key 的每專案狀態、約 50 個 actions（tabs/git/sftp/az/settings/theme/toast/ctx/palette）</td><td class="tool">Write</td><td>實作設計核心需求「切換資料夾即時切換、其他專案狀態同步保留」</td></tr>
+                <tr><td class="file">src/v2/Workbench.tsx</td><td><span class="pill add">new</span></td><td>根組件：TitleBar（⌘K pill、dev badge、◐ 主題、▦ 面板）、StatusBar、內容分派、useGlobalKeys 全域鍵盤模型</td><td class="tool">Write</td><td>設計稿的 chrome 與鍵盤行為（⌃`、⌘⇧B、⌘K、Esc 分層、cmd/sftp 鍵入）</td></tr>
+                <tr><td class="file">src/v2/ProjectRail.tsx</td><td><span class="pill add">new</span></td><td>58px 專案 rail：色塊＋session badge＋active bar、＋ 新增資料夾、底部 ⚙</td><td class="tool">Write</td><td>「切換資料夾移到最左側」的設計主軸</td></tr>
+                <tr><td class="file">src/v2/SidePanel.tsx</td><td><span class="pill add">new</span></td><td>功能列表（5 項＋badge）＋ Explorer 樹 / Git（commit 輸入框＋recent）/ DB 樹 / SSH hosts / Agent sessions 五種 panel body</td><td class="tool">Write</td><td>設計的「資料夾內功能列表」結構</td></tr>
+                <tr><td class="file">src/v2/TabStrip.tsx</td><td><span class="pill add">new</span></td><td>型別化 tabs（6 種 glyph）、dirty 點、＋ fixed 定位下拉（terminal/browser/SQL）、◫ split</td><td class="tool">Write</td><td>「上方 tabs 能新增 CMD 和瀏覽器」+ 修正過的 fixed 選單定位</td></tr>
+                <tr><td class="file">src/v2/ContentViews.tsx</td><td><span class="pill add">new</span></td><td>Empty / Editor（breadcrumbs＋Σ token chip＋行號＋上色）/ Terminal（blink 游標）/ Browser（api JSON、web hero、blank）/ SplitPane</td><td class="tool">Write</td><td>主內容視圖；token 量計算是 teammate comment 需求</td></tr>
+                <tr><td class="file">src/v2/GitGraphView.tsx</td><td><span class="pill add">new</span></td><td>DAG SVG（lane 顏色、貝茲合流線）、commit 列（refs chips、作者過濾 All/yuuzu/claude）、詳情面板（CHANGED FILES＋DIFF＋Checkout/Cherry-pick/Revert）</td><td class="tool">Write</td><td>「git graph 達到 JetBrains 等級」comment</td></tr>
+                <tr><td class="file">src/v2/DbTableView.tsx</td><td><span class="pill add">new</span></td><td>Data / Structure（PK·UQ·IX 徽章）/ SQL 三視圖、Run/Export、分頁 footer（8 shown · 1,243 total · 14 ms）</td><td class="tool">Write</td><td>「db 達到 JetBrains 等級」comment</td></tr>
+                <tr><td class="file">src/v2/SftpView.tsx</td><td><span class="pill add">new</span></td><td>LOCAL/REMOTE 雙欄、focus 高亮、選取、HTML5 拖曳傳輸、clip 提示 chip、✓ sent 標記</td><td class="tool">Write</td><td>「SSH&amp;SFTP 能 Ctrl C/V 傳檔」＋「支援 draggable」</td></tr>
+                <tr><td class="file">src/v2/AgentZone.tsx</td><td><span class="pill add">new</span></td><td>等分宮格（ResizeObserver 量寬 → 1/2/3/4 欄）、視窗 header（— 收合 / ⤢ 放大其他變暗 / ×）、雙擊放大、點窗即 active、空狀態</td><td class="tool">Write</td><td>AgentZone = terminal 集群＋「1080 二格 / 1440 三格 / 2160 四格」響應式規格</td></tr>
+                <tr><td class="file">src/v2/Overlays.tsx</td><td><span class="pill add">new</span></td><td>ContextMenu（file/dir/root/tab/project/editor/term/browser/dbconn/dbtable/host/sftp/commit/session 共 14 種目標）、⌘K Palette（FILES＋COMMANDS）、Settings（六區）、Toast</td><td class="tool">Write</td><td>「整體都需要支援 context-menu」comment＋設計的overlay 規格</td></tr>
+                <tr><td class="file">src/v2/v2-model.test.ts<br>src/v2/v2-store.test.ts</td><td><span class="pill add">new</span></td><td>40 個測試：token 估算、欄數斷點、highlighter、palette 過濾、專案狀態保留、tab 去重/遞補、commit 置頂與 main ref 轉移、sftp 複製貼上、az 收合/放大互斥、樹的新增刪除連動</td><td class="tool">Write</td><td>關鍵互動行為的回歸防護（bun test 慣例）</td></tr>
+                <tr><td class="file">src/App.tsx</td><td><span class="pill mod">mod</span></td><td>預設渲染 WorkbenchV2；<code>?shell=v1</code> 渲染原 AppShell</td><td class="tool">Edit</td><td>v2 成為產品方向的同時保留完整可用的 v1</td></tr>
+                <tr><td class="file">public/fonts/JetBrainsMono-*.woff2</td><td><span class="pill add">new</span></td><td>Light/Regular/Italic/Medium/SemiBold/Bold 六個字重（OFL 授權，來自設計系統包）</td><td class="tool">Bash cp</td><td>設計系統指定字型，self-host 避免 CDN</td></tr>
+            </tbody>
+        </table>
+
+        <h2 class="section-title">關鍵程式碼摘錄</h2>
+
+        <details class="file-section" id="f-app" open>
+            <summary><span class="indicator modified"></span>src/App.tsx<span class="lines">+5 −1</span></summary>
+            <div class="body">
+                <div class="diff">
+                    <div class="diff-line context"><span class="line-num">1</span><span class="line-content">import { AppShell } from "./app/AppShell";</span></div>
+                    <div class="diff-line add"><span class="line-num">2</span><span class="line-content">import { WorkbenchV2 } from "./v2/Workbench";</span></div>
+                    <div class="diff-line context"><span class="line-num">3</span><span class="line-content"></span></div>
+                    <div class="diff-line del"><span class="line-num">4</span><span class="line-content">export default function App() {</span></div>
+                    <div class="diff-line del"><span class="line-num">5</span><span class="line-content">  return &lt;AppShell /&gt;;</span></div>
+                    <div class="diff-line add"><span class="line-num">4</span><span class="line-content">export default function App() {</span></div>
+                    <div class="diff-line add"><span class="line-num">5</span><span class="line-content">  const shell = new URLSearchParams(window.location.search).get("shell");</span></div>
+                    <div class="diff-line add"><span class="line-num">6</span><span class="line-content">  return shell === "v1" ? &lt;AppShell /&gt; : &lt;WorkbenchV2 /&gt;;</span></div>
+                    <div class="diff-line context"><span class="line-num">7</span><span class="line-content">}</span></div>
+                </div>
+                <div class="annotation"><span class="severity info">Info</span><div>唯一動到既有程式的地方。v1 的 9,900 行 AppShell 與全部 Tauri 接線原封不動。</div></div>
+            </div>
+        </details>
+
+        <details class="file-section" id="f-store">
+            <summary><span class="indicator added"></span>src/v2/v2-store.ts<span class="lines">835 行</span></summary>
+            <div class="body">
+                <p>核心：<code>ui: Record&lt;projectId, ProjectUI&gt;</code>。所有 mutation 走 <code>upd()</code> 只複寫 active 專案的 slice：</p>
+                <div class="diff">
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">const upd = (mut: (p: ProjectUI) =&gt; void) =&gt; {</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">    set((s) =&gt; {</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">        const p: ProjectUI = { ...s.ui[s.active] }</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">        mut(p)</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">        return { ui: { ...s.ui, [s.active]: p } }</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">    })</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">}</span></div>
+                </div>
+                <div class="annotation"><span class="severity done">Verified</span><div>實測：AP 切到 WB 再切回，AgentZone 模式、收合中的視窗、tabs 全部保留（Playwright 步驟 5）。</div></div>
+                <p><code>ensureTab</code> 確保同路徑檔案 / git graph / sftp 不重複開分頁；<code>doCommit</code> 把新 commit 置頂、main ref 轉移、parent 索引 +1、ahead+1 — 與設計稿邏輯一致。</p>
+            </div>
+        </details>
+
+        <details class="file-section" id="f-az">
+            <summary><span class="indicator added"></span>src/v2/AgentZone.tsx<span class="lines">147 行</span></summary>
+            <div class="body">
+                <p>欄數由畫布實寬決定（扣掉 rail 與 panel），斷點沿用設計定稿：</p>
+                <div class="diff">
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">export function azColsForWidth(width: number): number {</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">    if (!width) return 2</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">    if (width &gt;= 3200) return 4   // 2160 級</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">    if (width &gt;= 2000) return 3   // 1440 級</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">    if (width &gt;= 760) return 2    // 1080 級</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">    return 1</span></div>
+                    <div class="diff-line add"><span class="line-num"></span><span class="line-content">}</span></div>
+                </div>
+                <div class="annotation"><span class="severity note">Note</span><div>依聊天定稿採「純宮格」：等分畫布、無浮動視窗與自由縮放（設計過程中曾有，最後一輪被移除）。保留 header 的 — 收合 / ⤢ 放大 / × 關閉與雙擊放大。</div></div>
+            </div>
+        </details>
+
+        <details class="file-section" id="f-workbench">
+            <summary><span class="indicator added"></span>src/v2/Workbench.tsx<span class="lines">285 行</span></summary>
+            <div class="body">
+                <p>全域鍵盤模型照設計稿實作：INPUT/TEXTAREA 跳過 → ⌃` / ⌘⇧B / ⌘K → palette 攔截輸入（過濾＋Enter 執行第一項）→ Esc 分層（ctx → ＋選單 → 設定 → AgentZone 放大）→ agent 模式鍵入 active session → cmd tab 鍵入 → sftp ⌘C/⌘V。</p>
+                <div class="annotation"><span class="severity done">Verified</span><div>實測 12+3 步驟全過：palette 過濾「pool」→ Enter 開檔；⌃` 開 zsh · 2；Esc 退出放大。</div></div>
+            </div>
+        </details>
+
+        <details class="file-section" id="f-yuzu">
+            <summary><span class="indicator added"></span>src/v2/yuzu.css<span class="lines">1,552 行</span></summary>
+            <div class="body">
+                <p>Token 命名沿用設計稿（<code>--yz-0a0e15</code> 等 47 個變數），dark 值掛在 <code>:root</code>、light 掛在 <code>[data-yz-theme="light"]</code>。原型唯一的 hardcode 色 <code>#15240b</code>（sql/sh chip 底色）補成變數 <code>--yz-15240b</code> 並給 light 值，修掉原型在 light 模式不翻色的小瑕疵。</p>
+                <div class="annotation"><span class="severity info">Info</span><div>樣式全部 class 化（yz2-* 前綴避免與 v1 的 index.css 衝突）；原型的 style-hover 轉為 :hover 偽類。</div></div>
+            </div>
+        </details>
+
+        <details class="file-section" id="f-model">
+            <summary><span class="indicator added"></span>src/v2/v2-model.ts + Overlays / SidePanel / TabStrip / ContentViews / GitGraphView / DbTableView / SftpView / ProjectRail<span class="lines">合計 ~2,300 行</span></summary>
+            <div class="body" id="f-side">
+                <p id="f-tabs">各檔案對應設計稿的一個區塊（見上方變更表）。重點轉譯規則：</p>
+                <ul style="padding-left:1.25rem" id="f-views">
+                    <li id="f-git">原型的 <code>sc-for</code>/<code>sc-if</code> 模板 → React map/條件渲染；renderVals() 的衍生值 → 元件內 selector + 純函式</li>
+                    <li id="f-db">動態色（專案色組、chip、lane、refs）→ inline style；其餘 → class</li>
+                    <li id="f-sftp">DAG SVG 的 lane 座標公式（lx=12+lane*17, ry=19+i*38）、貝茲控制點 ±22 照搬，視覺一致</li>
+                    <li id="f-overlays">Context menu 14 種目標的項目與危險項（紅字）逐條對應原型 switch</li>
+                </ul>
+            </div>
+        </details>
+
+        <details class="file-section" id="f-tests">
+            <summary><span class="indicator added"></span>src/v2/v2-model.test.ts · v2-store.test.ts<span class="lines">40 tests</span></summary>
+            <div class="body">
+                <p>覆蓋設計的行為契約：狀態保留、tab 去重與關閉遞補、commit 圖更新、sftp 三種傳輸路徑、AgentZone 視窗狀態機（min/max 互斥、單一 max）、樹新增刪除連動分頁、theme 連動。<code>bun test</code>：516 pass / 0 fail（含既有 476）。</p>
+            </div>
+        </details>
+
+        <details class="file-section" id="f-fonts">
+            <summary><span class="indicator added"></span>public/fonts/JetBrainsMono-*.woff2<span class="lines">6 檔</span></summary>
+            <div class="body"><p>自設計系統包複製（OFL 授權）。yuzu.css 以 <code>/fonts/...</code> 引用，Vite public 目錄直出，無 CDN 依賴。</p></div>
+        </details>
+
+        <h2 class="section-title" id="verify">驗證結果（真實瀏覽器，Playwright 驅動）</h2>
+        <div class="verify">
+            <ul>
+                <li>✅ 初始渲染逐區對照設計稿（rail/功能列/explorer/tabs/編輯器 token chip/狀態列）</li>
+                <li>✅ AgentZone：2 欄等分宮格、鍵入 <code>git status</code> 執行、收合/放大（其他變暗）/Esc 退出、右鍵選單</li>
+                <li>✅ 專案切換狀態保留：AP（AgentZone＋收合視窗）↔ WB（files＋自己的 tabs）完整往返</li>
+                <li>✅ Git：DAG 8 點 8 線、commit 輸入 Enter → 置頂＋main ref 轉移＋toast</li>
+                <li>✅ DB：Data/Structure（PK·UQ·IX）/SQL 三視圖切換、分頁 footer</li>
+                <li>✅ SFTP：選取 → ⌘C（chip 提示）→ 點對側 → ⌘V → ✓ sent＋toast</li>
+                <li>✅ ⌘K palette 過濾＋Enter 開檔；右鍵檔案 → Count tokens toast；設定六區＋toggle＋theme choice</li>
+                <li>✅ Light theme 全面翻色並跨重載持久化（localStorage）；◐ 切回 dark</li>
+                <li>🔍 連按＋三次 → 正確 toast「All demo folders are already open」；🔍 <code>?shell=v1</code> v1 完整渲染</li>
+            </ul>
+            <p style="margin-top:0.75rem;font-size:0.85rem;color:var(--color-text-secondary)">截圖：docs/code-review/v2-screens/（initial · agentzone-final · light · v1-escape-hatch）</p>
+        </div>
+
+        <h2 class="section-title" id="followup">後續建議（v2 真實後端接線順序）</h2>
+        <div class="summary">
+            <ul>
+                <li><strong>1. Workspace bridge</strong>：專案 rail ← v1 的 workspace registry（list/add/switch）；explorer ← scan_workspace；編輯器 ← read_file（Tauri 環境偵測，瀏覽器 fallback demo）</li>
+                <li><strong>2. Terminal/AgentZone</strong>：cmd tab 與 az 視窗掛 xterm + 既有 terminal-api（v1 的 replay buffer 可重用）</li>
+                <li><strong>3. Git</strong>：graph ← 既有 git log topology 後端（fd46195 已有 DAG lane 演算法）；commit/checkout/cherry-pick 接真指令</li>
+                <li><strong>4. DB / SSH·SFTP</strong>：接 v1 database-api 與 remote-api；之後再淘汰 demo 資料</li>
+                <li>小項：補 favicon（消 404）；light 模式下 traffic lights 維持原色屬設計預期</li>
+            </ul>
+        </div>
+    </main>
+</div>
+</body>
+</html>

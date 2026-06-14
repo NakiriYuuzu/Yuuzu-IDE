@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Report: Yuuzu-IDE Goal 對齊審查</title>
+<style>
+:root {
+    --font-sans: system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+    --color-bg: #faf9f7;
+    --color-surface: #ffffff;
+    --color-text: #1a1a1a;
+    --color-text-secondary: #6b7280;
+    --color-border: #e5e5e5;
+    --color-accent: #c45d3e;
+    --color-accent-light: #f5ebe7;
+    --color-success: #22c55e;
+    --color-warning: #f59e0b;
+    --color-error: #ef4444;
+    --radius-md: 10px;
+    --radius-lg: 16px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--font-sans); background: var(--color-bg); color: var(--color-text); line-height: 1.6; padding: 2rem; }
+.container { max-width: 900px; margin: 0 auto; }
+header { margin-bottom: 2rem; }
+header .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-accent); font-weight: 600; }
+header h1 { font-size: 2rem; margin: 0.25rem 0; }
+header .meta { color: var(--color-text-secondary); font-size: 0.9rem; }
+
+.tldr { background: var(--color-accent-light); border-left: 4px solid var(--color-accent); border-radius: var(--radius-md); padding: 1.25rem; margin-bottom: 2rem; }
+.tldr h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-accent); margin-bottom: 0.5rem; }
+
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+.metric-card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 1.25rem; }
+.metric-card .value { font-size: 2rem; font-weight: 700; }
+.metric-card .label { font-size: 0.8rem; color: var(--color-text-secondary); margin-top: 0.25rem; }
+.metric-card .trend { font-size: 0.8rem; font-weight: 600; margin-top: 0.25rem; }
+.trend.up { color: var(--color-success); }
+.trend.down { color: var(--color-error); }
+.trend.warn { color: var(--color-warning); }
+
+.tabs { display: flex; gap: 0; border-bottom: 2px solid var(--color-border); margin-bottom: 1.5rem; flex-wrap: wrap; }
+.tab { padding: 0.75rem 1.25rem; border: none; background: none; cursor: pointer; font-size: 0.9rem; font-weight: 600; color: var(--color-text-secondary); border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.2s; }
+.tab.active { color: var(--color-accent); border-bottom-color: var(--color-accent); }
+.tab:hover { color: var(--color-text); }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+section { margin-bottom: 2rem; }
+section h2 { font-size: 1.25rem; margin-bottom: 1rem; }
+
+.chart-container { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 1.5rem; margin-bottom: 1.5rem; }
+.chart-container h3 { font-size: 0.9rem; margin-bottom: 1rem; color: var(--color-text-secondary); }
+
+.timeline { position: relative; padding-left: 2rem; }
+.timeline::before { content: ''; position: absolute; left: 7px; top: 0; bottom: 0; width: 2px; background: var(--color-border); }
+.timeline-item { position: relative; margin-bottom: 1.5rem; }
+.timeline-item::before { content: ''; position: absolute; left: -2rem; top: 0.5rem; width: 12px; height: 12px; border-radius: 50%; background: var(--color-accent); border: 2px solid var(--color-bg); }
+.timeline-item .date { font-size: 0.8rem; color: var(--color-text-secondary); font-weight: 600; }
+.timeline-item .content { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 1rem; margin-top: 0.5rem; }
+
+details { margin-bottom: 1rem; }
+details summary { cursor: pointer; font-weight: 600; padding: 0.75rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
+details[open] summary { border-radius: var(--radius-md) var(--radius-md) 0 0; }
+details .details-body { padding: 1rem; border: 1px solid var(--color-border); border-top: none; border-radius: 0 0 var(--radius-md) var(--radius-md); background: var(--color-surface); }
+details .details-body p { margin-bottom: 0.5rem; }
+details .details-body ul { padding-left: 1.25rem; margin-bottom: 0.5rem; }
+details .details-body code { font-family: var(--font-mono); font-size: 0.85em; background: var(--color-bg); padding: 0.1em 0.35em; border-radius: 4px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+th { text-align: left; padding: 0.75rem; border-bottom: 2px solid var(--color-border); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-secondary); }
+td { padding: 0.75rem; border-bottom: 1px solid var(--color-border); }
+td code { font-family: var(--font-mono); font-size: 0.85em; background: var(--color-bg); padding: 0.1em 0.35em; border-radius: 4px; }
+
+.badge { display: inline-block; padding: 0.1rem 0.6rem; border-radius: 999px; font-size: 0.75rem; font-weight: 700; }
+.badge.pass { background: #e8f9ef; color: #15803d; }
+.badge.warn { background: #fef3c7; color: #b45309; }
+.badge.info { background: #e0ecff; color: #1d4ed8; }
+
+.actions { display: flex; gap: 1rem; margin-top: 2rem; }
+.btn { padding: 0.6rem 1.25rem; border-radius: var(--radius-md); border: 2px solid var(--color-border); background: var(--color-surface); cursor: pointer; font-size: 0.9rem; font-weight: 600; }
+.btn:hover { border-color: var(--color-accent); }
+
+@media print { .tabs, .actions { display: none; } .tab-content { display: block !important; } }
+@media (max-width: 768px) { body { padding: 1rem; } .metrics { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<div class="container">
+    <header>
+        <div class="label">Audit Report</div>
+        <h1>Yuuzu-IDE Goal 對齊審查</h1>
+        <p class="meta">依據 docs/goal.md 審查 &middot; 2026-06-11 &middot; 涵蓋 Node 0 至 Node 9（commit 622f8e8）</p>
+    </header>
+
+    <div class="tldr">
+        <h3>TL;DR — 沒有歪</h3>
+        <p>Repo 嚴格按照 goal.md 規定的「plan → subagent 實作 → TDD → 雙 review → 驗證 → 文件化」迴圈執行，Node 0–9 依序完成，沒有跳序或範圍外工作。本次實測三組驗證命令（bun test、cargo test、bun run build），結果與 progress.md 聲稱的數字<strong>逐字一致</strong>，文件可信度高。發現 5 項文件層級的小偏差（roadmap 缺 3 個 Status 註記、Windows 驗證缺口未記錄、commit 慣例不符全域規則等），均不影響方向與品質。</p>
+    </div>
+
+    <div class="metrics">
+        <div class="metric-card"><div class="value">10/14</div><div class="label">Roadmap nodes 完成（0–9）</div><div class="trend up">嚴格依序，下一個 Node 10</div></div>
+        <div class="metric-card"><div class="value">269</div><div class="label">bun test 通過（0 失敗）</div><div class="trend up">與文件聲稱完全一致</div></div>
+        <div class="metric-card"><div class="value">227</div><div class="label">cargo test 通過（0 失敗）</div><div class="trend up">與文件聲稱完全一致</div></div>
+        <div class="metric-card"><div class="value">5</div><div class="label">文件層級偏差</div><div class="trend warn">無方向性偏離</div></div>
+    </div>
+
+    <div class="tabs">
+        <button class="tab active" onclick="showTab('overview')">總覽</button>
+        <button class="tab" onclick="showTab('deviations')">偏差詳情</button>
+        <button class="tab" onclick="showTab('evidence')">驗證證據</button>
+        <button class="tab" onclick="showTab('timeline')">Node 時間線</button>
+    </div>
+
+    <div id="overview" class="tab-content active">
+        <div class="chart-container">
+            <h3>Roadmap 進度（Node 0–13）</h3>
+            <svg viewBox="0 0 700 110" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Node 0 到 9 完成，10 到 13 未開始">
+                <g font-size="11" fill="#6b7280">
+                    <rect x="10"  y="20" width="42" height="28" rx="6" fill="#e8f9ef" stroke="#22c55e"/><text x="31"  y="38" text-anchor="middle" fill="#15803d" font-weight="700">N0</text>
+                    <rect x="58"  y="20" width="42" height="28" rx="6" fill="#e8f9ef" stroke="#22c55e"/><text x="79"  y="38" text-anchor="middle" fill="#15803d" font-weight="700">N1</text>
+                    <rect x="106" y="20" width="42" height="28" rx="6" fill="#e8f9ef" stroke="#22c55e"/><text x="127" y="38" text-anchor="middle" fill="#15803d" font-weight="700">N2</text>
+                    <rect x="154" y="20" width="42" height="28" rx="6" fill="#e8f9ef" stroke="#22c55e"/><text x="175" y="38" text-anchor="middle" fill="#15803d" font-weight="700">N3</text>
+                    <rect x="202" y="20" width="42" height="28" rx="6" fill="#e8f9ef" stroke="#f59e0b" stroke-dasharray="4 2"/><text x="223" y="38" text-anchor="middle" fill="#15803d" font-weight="700">N4</text>
+                    <rect x="250" y="20" width="42" height="28" rx="6" fill="#e8f9ef" stroke="#22c55e"/><text x="271" y="38" text-anchor="middle" fill="#15803d" font-weight="700">N5</text>
+                    <rect x="298" y="20" width="42" height="28" rx="6" fill="#e8f9ef" stroke="#f59e0b" stroke-dasharray="4 2"/><text x="319" y="38" text-anchor="middle" fill="#15803d" font-weight="700">N6</text>
+                    <rect x="346" y="20" width="42" height="28" rx="6" fill="#e8f9ef" stroke="#f59e0b" stroke-dasharray="4 2"/><text x="367" y="38" text-anchor="middle" fill="#15803d" font-weight="700">N7</text>
+                    <rect x="394" y="20" width="42" height="28" rx="6" fill="#e8f9ef" stroke="#22c55e"/><text x="415" y="38" text-anchor="middle" fill="#15803d" font-weight="700">N8</text>
+                    <rect x="442" y="20" width="42" height="28" rx="6" fill="#e8f9ef" stroke="#22c55e"/><text x="463" y="38" text-anchor="middle" fill="#15803d" font-weight="700">N9</text>
+                    <rect x="490" y="20" width="42" height="28" rx="6" fill="#ffffff" stroke="#e5e5e5"/><text x="511" y="38" text-anchor="middle">N10</text>
+                    <rect x="538" y="20" width="42" height="28" rx="6" fill="#ffffff" stroke="#e5e5e5"/><text x="559" y="38" text-anchor="middle">N11</text>
+                    <rect x="586" y="20" width="42" height="28" rx="6" fill="#ffffff" stroke="#e5e5e5"/><text x="607" y="38" text-anchor="middle">N12</text>
+                    <rect x="634" y="20" width="42" height="28" rx="6" fill="#ffffff" stroke="#e5e5e5"/><text x="655" y="38" text-anchor="middle">N13</text>
+                </g>
+                <g font-size="10" fill="#6b7280">
+                    <rect x="10" y="70" width="12" height="12" rx="3" fill="#e8f9ef" stroke="#22c55e"/><text x="28" y="80">完成且 roadmap 有 Status 註記</text>
+                    <rect x="240" y="70" width="12" height="12" rx="3" fill="#e8f9ef" stroke="#f59e0b" stroke-dasharray="4 2"/><text x="258" y="80">完成但 roadmap 區塊缺 Status 行</text>
+                    <rect x="490" y="70" width="12" height="12" rx="3" fill="#ffffff" stroke="#e5e5e5"/><text x="508" y="80">未開始</text>
+                </g>
+            </svg>
+        </div>
+        <section>
+            <h2>主要結論：流程紀律確實被遵守</h2>
+            <details open><summary><span class="badge pass">符合</span> 驗證證據可獨立重現 — 文件沒有「灌水」</summary><div class="details-body">
+                <p>本次審查實際重跑了三組驗證命令，結果與 progress.md 中 Node 9 的聲稱<strong>逐字一致</strong>：</p>
+                <ul>
+                    <li><code>bun test</code>：269 pass / 0 fail / 758 expect / 34 files（聲稱相同）</li>
+                    <li><code>cargo test</code>：227 passed / 0 failed / 1 ignored（聲稱相同）</li>
+                    <li><code>bun run build</code>：通過，僅 chunk-size 警告（聲稱相同，且各 node 均誠實記錄此警告而非隱藏）</li>
+                </ul>
+                <p>這是判斷「有沒有歪」最關鍵的訊號：文件聲稱與可重現的實際狀態完全吻合。</p>
+            </div></details>
+            <details><summary><span class="badge pass">符合</span> Roadmap 順序、計畫、文件三件套齊全</summary><div class="details-body">
+                <ul>
+                    <li>git 歷史（190 commits）呈線性節奏：每個 node 以 <code>docs: add node N plan</code> 開始、<code>docs: record node N results</code> 結束，無跳序、無範圍外工作。</li>
+                    <li><code>docs/superpowers/plans/</code> 有 Node 0–9 共 10 份計畫，符合「先有 plan 才能實作」的約束。</li>
+                    <li><code>docs/architecture/</code> 有 node-0 到 node-9 共 10 份 results 文件，progress.md（962 行）記錄每個 node 的任務、檔案、commit 里程碑、驗證證據、殘餘風險與下一步決策。</li>
+                </ul>
+            </div></details>
+            <details><summary><span class="badge pass">符合</span> 架構約束全數落實（Rust-first、懶載入、單一 WebView、state 紀律）</summary><div class="details-body">
+                <ul>
+                    <li><strong>Rust-first：</strong>database、git、lsp、pty、search、settings、workspace、agent、file watcher、secrets（keyring）全部位於 <code>src-tauri/src/</code> Rust 模組。</li>
+                    <li><strong>懶載入：</strong><code>load-monaco.ts</code> 與 <code>load-xterm.ts</code> 均使用動態 <code>import()</code>，Node 0 即量測過（Monaco +57 MB、xterm +20 MB 都不進初始 shell）。</li>
+                    <li><strong>單一主 WebView：</strong>Node 0/1 量測 WebContent process 數 = 1；Node 8 browser preview 採單一 child webview 的 attach/detach 模式（<code>browser-webview.ts</code> 維護 <code>currentWebview</code> 並於切換時關閉），不是 per-workspace webview。</li>
+                    <li><strong>React state 紀律：</strong>database 結果以 <code>MAX_DATABASE_ROWS</code> 截斷後才進前端 state；zustand store 僅存 workspace 視圖狀態，未存放完整檔案內容或大型結果集。</li>
+                </ul>
+            </div></details>
+            <details><summary><span class="badge pass">符合</span> TDD 與雙 review gate 有可追溯記錄，且發現錯誤會自我修正</summary><div class="details-body">
+                <p>Node 9 results 逐 task 記錄 RED/GREEN 命令，並保存 implementer、spec-compliance reviewer、code-quality reviewer 的 session ID 與 CHANGES_REQUIRED → APPROVED 軌跡。</p>
+                <p>最近一筆 commit <code>622f8e8</code>（docs: correct node 9 review evidence）把先前誤記為「approved」的兩輪 CHANGES_REQUIRED 軌跡修正為真實狀況——流程具備誠實的自我修正能力，而非美化記錄。</p>
+            </div></details>
+            <details><summary><span class="badge pass">符合</span> 保護性約束未被破壞</summary><div class="details-body">
+                <ul>
+                    <li><code>docs/ui-design/**</code> 設計參考檔案完整保留。</li>
+                    <li>.gitignore 涵蓋 <code>dist/</code>、<code>target/</code>、<code>.DS_Store</code> 等，git 未追蹤任何建置產物或垃圾檔。</li>
+                    <li>工作樹乾淨（git status clean），無未交代的散落變更。</li>
+                </ul>
+            </div></details>
+        </section>
+    </div>
+
+    <div id="deviations" class="tab-content">
+        <section>
+            <h2>偏差詳情（5 項，皆為文件/慣例層級）</h2>
+            <details open><summary><span class="badge warn">中</span> 1. Windows 驗證缺口從未被記錄</summary><div class="details-body">
+                <p>產品定位是「Windows-capable」，tech-stack.md 也有 WebView2 發佈政策，但 Node 0–9 的所有驗證（DMG、.app、量測）都在 macOS 上完成，<strong>progress.md 全文沒有任何「Windows」字眼</strong>——沒有把「Windows 驗證不可行」列為 blocker 或 residual risk。</p>
+                <p><strong>goal.md 要求：</strong>「If blocked by … unavailable Windows verification … stop and report the exact blocker」。實務上在 macOS 主機連續推進是合理選擇，但至少應在各 node 的 residual risks 記錄此限制。</p>
+                <p><strong>建議：</strong>在 progress.md 補一段「Windows verification deferred」的全域 residual risk，並在 Node 13（packaging）前安排 Windows 驗證管道。</p>
+            </div></details>
+            <details open><summary><span class="badge warn">低</span> 2. roadmap.md 的 Node 4、6、7 區塊缺 Status 行</summary><div class="details-body">
+                <p>Node 0/1/2/3/5/8/9 的區塊都有「<code>**Status:** completed and passed; … results are recorded in …</code>」，但 Node 4（roadmap.md:371）、Node 6（:428）、Node 7（:458）沒有。雖然「Current Priority」段與 progress.md 都記錄了完成，且三份 results 文件（node-4-git-results.md 等）都存在，但 goal.md 的 Done When 要求「roadmap.md reflects completed nodes accurately」——文件內部不一致。</p>
+                <p><strong>建議：</strong>補上三行 Status 註記即可，5 分鐘工作量。</p>
+            </div></details>
+            <details><summary><span class="badge warn">低</span> 3. commit 訊息不符使用者全域 git 慣例</summary><div class="details-body">
+                <p>190 筆 commits 全部為 <code>type: subject</code> 簡式格式，沒有 scope、沒有 emoji、<strong>沒有 <code>Co-Authored-By: Yuuzu &lt;yuuzu@yuuzu.net&gt;</code> trailer</strong>（全域 ~/.claude/rules/git/commit.md 要求每筆 commit 以此結尾）。</p>
+                <p>另外 goal.md 規定「未經明確授權不得 commit」——repo 有 190 筆 commits，前提是 Goal run 取得了 commit 授權；此點無法從 repo 內部驗證，僅你本人能確認當初是否授權。</p>
+                <p><strong>建議：</strong>若後續 node 繼續執行，在 Goal run 指令中明確帶入 commit 格式要求。</p>
+            </div></details>
+            <details><summary><span class="badge warn">低</span> 4. TDD 的 RED 階段缺失敗輸出原文</summary><div class="details-body">
+                <p>各 node results 記錄了 RED/GREEN 命令與週期描述（例如 Node 4 逐 task 描述 RED/GREEN cycles、Node 9 逐 task 列出命令），但<strong>未保存 RED 階段觀察到的失敗輸出原文</strong>。goal.md 要求「the failure must be observed for the expected reason」——目前的記錄只能間接推斷，無法事後稽核失敗原因是否符合預期。</p>
+                <p><strong>建議：</strong>後續 node 在 results 中為每個 task 保留一段 RED 失敗訊息摘錄（一兩行即可）。</p>
+            </div></details>
+            <details><summary><span class="badge info">資訊</span> 5. goal.md 引用的 AGENTS.md 不存在</summary><div class="details-body">
+                <p>goal.md 寫「Existing conventions: follow AGENTS.md and local project docs」，但 repo 根目錄沒有 AGENTS.md（也沒有 CLAUDE.md）。因為條文寫的是「existing」，檔案不存在即無約束力，不算違規；但 goal.md 引用了一個不存在的檔案，建議建立 AGENTS.md 或從 goal.md 移除該引用。</p>
+            </div></details>
+        </section>
+    </div>
+
+    <div id="evidence" class="tab-content">
+        <section>
+            <h2>驗證證據對照（文件聲稱 vs 本次實測）</h2>
+            <table>
+                <thead><tr><th>命令</th><th>progress.md 聲稱（Node 9 後）</th><th>2026-06-11 實測</th><th>結果</th></tr></thead>
+                <tbody>
+                    <tr><td><code>bun test</code></td><td>269 pass / 0 fail / 758 expect / 34 files</td><td>269 pass / 0 fail / 758 expect / 34 files</td><td><span class="badge pass">一致</span></td></tr>
+                    <tr><td><code>cargo test</code></td><td>227 passed / 0 failed / 1 ignored</td><td>227 passed / 0 failed / 1 ignored（40.5s）</td><td><span class="badge pass">一致</span></td></tr>
+                    <tr><td><code>bun run build</code></td><td>PASS，僅 chunk-size 警告</td><td>PASS（4.27s），僅 chunk-size 警告</td><td><span class="badge pass">一致</span></td></tr>
+                </tbody>
+            </table>
+        </section>
+        <section>
+            <h2>結構檢查</h2>
+            <table>
+                <thead><tr><th>goal.md 要求</th><th>檢查方式</th><th>結果</th></tr></thead>
+                <tbody>
+                    <tr><td>每個 node 先有 plan</td><td>docs/superpowers/plans/ 共 10 份（Node 0–9）</td><td><span class="badge pass">符合</span></td></tr>
+                    <tr><td>node 完成後更新 progress.md 與 roadmap.md</td><td>progress.md 962 行逐 node 記錄；roadmap.md Current Priority 正確，但 N4/6/7 區塊缺 Status 行</td><td><span class="badge warn">部分</span></td></tr>
+                    <tr><td>雙 review gate（spec → quality）</td><td>Node 9 results 保存 reviewer session ID 與 CHANGES_REQUIRED→APPROVED 軌跡</td><td><span class="badge pass">符合</span></td></tr>
+                    <tr><td>重邏輯放 Rust</td><td>src-tauri/src/ 含 database/git/lsp/pty/search/agent/secrets 等 21 個模組</td><td><span class="badge pass">符合</span></td></tr>
+                    <tr><td>Monaco / xterm 懶載入</td><td>load-monaco.ts、load-xterm.ts 動態 import；Node 0 有量測</td><td><span class="badge pass">符合</span></td></tr>
+                    <tr><td>單一主 WebView</td><td>Node 0/1 量測 WebContent = 1；preview 為單一 attach/detach child webview</td><td><span class="badge pass">符合</span></td></tr>
+                    <tr><td>React 不存大型資料</td><td>MAX_DATABASE_ROWS 截斷；zustand 僅存視圖狀態</td><td><span class="badge pass">符合</span></td></tr>
+                    <tr><td>保留 docs/ui-design/**</td><td>檔案完整存在</td><td><span class="badge pass">符合</span></td></tr>
+                    <tr><td>Bun 工具鏈</td><td>bun.lock、bun test、bun run build 全程使用</td><td><span class="badge pass">符合</span></td></tr>
+                    <tr><td>Windows 驗證或 blocker 報告</td><td>全程 macOS 驗證，progress.md 無 Windows 記錄</td><td><span class="badge warn">缺口</span></td></tr>
+                </tbody>
+            </table>
+        </section>
+    </div>
+
+    <div id="timeline" class="tab-content">
+        <section>
+            <h2>Node 推進時間線（依 plan 檔案時間與 git 歷史）</h2>
+            <div class="timeline">
+                <div class="timeline-item"><div class="date">2026-06-08</div><div class="content"><strong>Node 0：架構 spike</strong><p>Tauri 2 + React 路線量測通過（launch 391 ms、shell RSS 125 MB、WebContent = 1），Rust-native fallback 確定擱置。</p></div></div>
+                <div class="timeline-item"><div class="date">2026-06-09 凌晨</div><div class="content"><strong>Node 1–2：App shell、多 workspace、檔案/搜尋/編輯器</strong><p>Rust workspace registry + 持久化、explorer、Monaco 編輯、全文搜尋、watcher、大檔 guardrails。</p></div></div>
+                <div class="timeline-item"><div class="date">2026-06-09 白天</div><div class="content"><strong>Node 3–5：終端機/任務、Git 工作流、Docs context</strong><p>PTY in Rust + 懶載 xterm；Git 日常迴圈含破壞性操作確認；docs 索引、Markdown 預覽、context packs。</p></div></div>
+                <div class="timeline-item"><div class="date">2026-06-09 晚間</div><div class="content"><strong>Node 6–7：LSP、Agent workbench</strong><p>真實 rust-analyzer / tsserver / pylsp stdio smoke 通過；agent session 持久化、approval gates、prompt export。</p></div></div>
+                <div class="timeline-item"><div class="date">2026-06-10</div><div class="content"><strong>Node 8–9：Browser preview、Database tools</strong><p>單一 child webview 預覽 + 截圖；SQLite/PostgreSQL/MS SQL、keyring 秘密儲存、SQL 安全分類、變更需確認文字。Review 證據於 622f8e8 修正為真實軌跡。</p></div></div>
+                <div class="timeline-item"><div class="date">下一步</div><div class="content"><strong>Node 10：Remote SSH 與 SFTP</strong><p>roadmap.md Current Priority 已正確指向 Node 10；建議同時補上本報告列出的 5 項文件修正。</p></div></div>
+            </div>
+        </section>
+    </div>
+
+    <div class="actions">
+        <button class="btn" onclick="window.print()">Print / PDF</button>
+        <button class="btn" onclick="copyFixPrompt(event)">Copy 修正清單 as Prompt</button>
+    </div>
+</div>
+
+<script>
+function showTab(id) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    event.target.classList.add('active');
+}
+function copyFixPrompt(e) {
+    const prompt = [
+        '請修正 yuuzu-ide repo 的以下文件層級偏差（goal 對齊審查 2026-06-11 發現）：',
+        '1. roadmap.md 的 Node 4、Node 6、Node 7 區塊補上 **Status:** completed and passed 行（含 results 文件連結），與其他已完成 node 格式一致。',
+        '2. docs/architecture/progress.md 補記全域 residual risk：Node 0-9 驗證均於 macOS 完成，Windows 驗證 deferred，需於 Node 13 packaging 前安排。',
+        '3. 後續 node 的 results 文件中，為每個 task 保留 RED 階段失敗輸出摘錄（一兩行），滿足 goal.md 的 failure-observed 要求。',
+        '4. 確認 Goal run 的 commit 授權與格式：後續 commits 應符合全域 commit 慣例（type(scope): emoji subject + Co-Authored-By: Yuuzu <yuuzu@yuuzu.net>）。',
+        '5. 建立 AGENTS.md 或從 docs/goal.md 移除對不存在 AGENTS.md 的引用。'
+    ].join('\n');
+    navigator.clipboard.writeText(prompt);
+    e.target.textContent = 'Copied!';
+    setTimeout(() => e.target.textContent = 'Copy 修正清單 as Prompt', 1500);
+}
+</script>
+</body>
+</html>

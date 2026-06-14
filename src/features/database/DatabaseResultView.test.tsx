@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { ensureTestDom } from "../../app/test-dom";
+import { ensureTestDom } from "../../test/test-dom";
 import { DatabaseResultView } from "./DatabaseResultView";
 import type { DatabaseQueryResult } from "./database-model";
 

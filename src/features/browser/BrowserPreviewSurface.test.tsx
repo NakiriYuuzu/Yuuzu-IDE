@@ -9,7 +9,7 @@ import {
   hardReloadUrl,
   type BrowserPaneGeometry,
 } from "./browser-webview";
-import { ensureTestDom } from "../../app/test-dom";
+import { ensureTestDom } from "../../test/test-dom";
 
 ensureTestDom();
 

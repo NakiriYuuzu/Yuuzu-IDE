@@ -827,6 +827,39 @@ pub fn commit_file_diff(
     Ok(parsed)
 }
 
+pub fn commit_file_worktree_diff(
+    workspace_root: &Path,
+    hash: &str,
+    path: &str,
+) -> Result<git::GitDiffHunks, String> {
+    let hash = validate_hash(hash)?;
+    let normalized = git::normalize_repo_relative_paths(Path::new(""), &[path.to_string()])?;
+    let output = git::run_git_in(
+        workspace_root,
+        &[
+            "diff".into(),
+            "--no-ext-diff".into(),
+            "--no-color".into(),
+            hash,
+            "--".into(),
+            normalized[0].to_string_lossy().into_owned(),
+        ],
+    )?;
+    let truncated_bytes = output.len() > git::GIT_DIFF_LIMIT_BYTES;
+    let visible = if truncated_bytes {
+        &output[..git::GIT_DIFF_LIMIT_BYTES]
+    } else {
+        &output[..]
+    };
+    let raw = String::from_utf8_lossy(visible);
+    let mut parsed = git::parse_unified_diff(&raw, git::MAX_DIFF_HUNKS, git::MAX_DIFF_TOTAL_LINES)?;
+    parsed.path = normalized[0].to_string_lossy().into_owned();
+    parsed.staged = false;
+    parsed.truncated = parsed.truncated || truncated_bytes;
+    git::attach_word_ranges(&mut parsed);
+    Ok(parsed)
+}
+
 pub fn file_history(workspace_root: &Path, path: &str, limit: usize) -> Result<GitLogPage, String> {
     let normalized = git::normalize_repo_relative_paths(Path::new(""), &[path.to_string()])?;
     let limit = limit.clamp(1, MAX_LOG_ROWS);
@@ -1085,7 +1118,6 @@ mod tests {
         assert!(page.rows.iter().all(|r| r.lane == 0));
         assert!(!page.has_more);
     }
-
 
     #[test]
     #[ignore = "manual measurement against the host repository"]

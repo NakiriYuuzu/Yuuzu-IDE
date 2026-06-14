@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Report: Yuuzu-IDE Git 功能細節 vs JetBrains IDE</title>
+<style>
+:root {
+    --font-sans: system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+    --color-bg: #faf9f7;
+    --color-surface: #ffffff;
+    --color-text: #1a1a1a;
+    --color-text-secondary: #6b7280;
+    --color-border: #e5e5e5;
+    --color-accent: #c45d3e;
+    --color-accent-light: #f5ebe7;
+    --color-success: #22c55e;
+    --color-warning: #f59e0b;
+    --color-error: #ef4444;
+    --radius-md: 10px;
+    --radius-lg: 16px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--font-sans); background: var(--color-bg); color: var(--color-text); line-height: 1.6; padding: 2rem; }
+.container { max-width: 960px; margin: 0 auto; }
+header { margin-bottom: 2rem; }
+header .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-accent); font-weight: 600; }
+header h1 { font-size: 1.8rem; margin: 0.25rem 0; }
+header .meta { color: var(--color-text-secondary); font-size: 0.9rem; }
+
+.tldr { background: var(--color-accent-light); border-left: 4px solid var(--color-accent); border-radius: var(--radius-md); padding: 1.25rem; margin-bottom: 2rem; }
+.tldr h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-accent); margin-bottom: 0.5rem; }
+
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+.metric-card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 1.25rem; }
+.metric-card .value { font-size: 2rem; font-weight: 700; }
+.metric-card .label { font-size: 0.8rem; color: var(--color-text-secondary); margin-top: 0.25rem; }
+.metric-card .trend { font-size: 0.8rem; font-weight: 600; margin-top: 0.25rem; }
+.trend.up { color: var(--color-success); }
+.trend.warn { color: var(--color-warning); }
+
+.tabs { display: flex; gap: 0; border-bottom: 2px solid var(--color-border); margin-bottom: 1.5rem; flex-wrap: wrap; }
+.tab { padding: 0.75rem 1.25rem; border: none; background: none; cursor: pointer; font-size: 0.9rem; font-weight: 600; color: var(--color-text-secondary); border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.2s; }
+.tab.active { color: var(--color-accent); border-bottom-color: var(--color-accent); }
+.tab:hover { color: var(--color-text); }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+section { margin-bottom: 2rem; }
+section h2 { font-size: 1.25rem; margin-bottom: 1rem; }
+section h3 { font-size: 1rem; margin: 1rem 0 0.5rem; }
+
+.chart-container { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 1.5rem; margin-bottom: 1.5rem; }
+.chart-container h3 { font-size: 0.9rem; margin: 0 0 1rem; color: var(--color-text-secondary); }
+
+details { margin-bottom: 1rem; }
+details summary { cursor: pointer; font-weight: 600; padding: 0.75rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
+details[open] summary { border-radius: var(--radius-md) var(--radius-md) 0 0; }
+details .details-body { padding: 1rem; border: 1px solid var(--color-border); border-top: none; border-radius: 0 0 var(--radius-md) var(--radius-md); background: var(--color-surface); }
+details .details-body p { margin-bottom: 0.5rem; }
+details .details-body ul { padding-left: 1.25rem; margin-bottom: 0.5rem; }
+code { font-family: var(--font-mono); font-size: 0.85em; background: #f0efed; padding: 0.1em 0.35em; border-radius: 4px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+th { text-align: left; padding: 0.6rem 0.75rem; border-bottom: 2px solid var(--color-border); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-secondary); }
+td { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--color-border); vertical-align: top; }
+
+.badge { display: inline-block; padding: 0.1rem 0.6rem; border-radius: 999px; font-size: 0.75rem; font-weight: 700; white-space: nowrap; }
+.badge.yes { background: #e8f9ef; color: #15803d; }
+.badge.no { background: #fee2e2; color: #b91c1c; }
+.badge.partial { background: #fef3c7; color: #b45309; }
+.badge.info { background: #e0ecff; color: #1d4ed8; }
+
+.actions { display: flex; gap: 1rem; margin-top: 2rem; }
+.btn { padding: 0.6rem 1.25rem; border-radius: var(--radius-md); border: 2px solid var(--color-border); background: var(--color-surface); cursor: pointer; font-size: 0.9rem; font-weight: 600; }
+.btn:hover { border-color: var(--color-accent); }
+
+@media print { .tabs, .actions { display: none; } .tab-content { display: block !important; } }
+@media (max-width: 768px) { body { padding: 1rem; } .metrics { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<div class="container">
+    <header>
+        <div class="label">Feature Audit</div>
+        <h1>Yuuzu-IDE Git 功能細節 vs JetBrains IDE</h1>
+        <p class="meta">逐檔人工審閱（無 subagents）&middot; 2026-06-11 &middot; 範圍：src-tauri/src/git.rs、src/features/git/**、AppShell git 串接</p>
+    </header>
+
+    <div class="tldr">
+        <h3>TL;DR — 形似、神不似</h3>
+        <p>Yuuzu-IDE 的 git 功能覆蓋了「日常 edit → stage → commit → push 迴圈」，<strong>概念佈局與 JetBrains 類似</strong>（Source Control 面板、commit graph 視圖、diff 視圖、branch 操作、destructive guardrails），但<strong>深度差距很大</strong>。Commit 面板比較接近 VS Code 的原生 staging 模型而非 JetBrains 的 changelist 模型；所謂「Commit Graph」實際上是 <code>git log --graph</code> 文字解析出來的<strong>靜態表格 + 裝飾性 lane 圓點</strong>（上限 120 筆、lane 壓到 3 軌、無 parent 拓撲連線、無法點擊 commit 做任何操作），與 JetBrains 真正的互動式 DAG 視覺化是不同等級的東西。Diff 只有唯讀 unified 文字著色，無 side-by-side、無 hunk staging。這個範圍與 roadmap Node 4 自訂的 acceptance／non-goals 一致——是刻意的階段性精簡，不是走歪。</p>
+    </div>
+
+    <div class="metrics">
+        <div class="metric-card"><div class="value">16</div><div class="label">Tauri git IPC 命令</div><div class="trend up">全部 shell out 到 git CLI</div></div>
+        <div class="metric-card"><div class="value">929</div><div class="label">git.rs 行數（含 9 個測試）</div><div class="trend up">Rust 擁有全部 git 邏輯</div></div>
+        <div class="metric-card"><div class="value">120</div><div class="label">Commit graph 上限（筆）</div><div class="trend warn">JetBrains：無限滾動全歷史</div></div>
+        <div class="metric-card"><div class="value">240 KB</div><div class="label">單檔 diff payload 上限</div><div class="trend up">超過即截斷標記</div></div>
+    </div>
+
+    <div class="tabs">
+        <button class="tab active" onclick="showTab('details')">功能細節盤點</button>
+        <button class="tab" onclick="showTab('compare')">JetBrains 對照表</button>
+        <button class="tab" onclick="showTab('graph')">Graph 實作剖析</button>
+        <button class="tab" onclick="showTab('evidence')">證據與檔案索引</button>
+    </div>
+
+    <div id="details" class="tab-content active">
+        <section>
+            <h2>後端：src-tauri/src/git.rs（929 行）</h2>
+            <details open><summary>實作方式：薄封裝 git CLI，不是 libgit2/gitoxide</summary><div class="details-body">
+                <p>每個操作都是 <code>Command::new("git").arg("-C").arg(repo_root)...</code> 子行程呼叫，解析 stdout。與 JetBrains（內建 git4idea 引擎 + 深度快取）和 VS Code（git CLI + 大量快取層）相比，這是最薄的封裝，但搭配了嚴格的輸入消毒與 payload 上限：</p>
+                <ul>
+                    <li><strong>路徑安全</strong>：<code>normalize_repo_relative_paths()</code> 拒絕絕對路徑與 <code>../</code> 跳脫（git.rs:403）；所有檔案操作設 <code>GIT_LITERAL_PATHSPECS=1</code>，連 <code>*.txt</code> 這種字面檔名都有測試覆蓋。</li>
+                    <li><strong>Payload 上限</strong>：diff 240 KB 截斷 + 標記（git.rs:8）、graph 120 筆（git.rs:290）——對應「不把大資料灌進 React state」的架構約束。</li>
+                    <li><strong>破壞性操作確認</strong>：<code>require_confirmation()</code> 要求精確文字 —— <code>DISCARD</code>、<code>CHECKOUT {branch}</code>、<code>RESET HARD</code>、<code>REBASE {target}</code>（git.rs:500）。</li>
+                </ul>
+            </div></details>
+            <details open><summary>16 個操作完整清單</summary><div class="details-body">
+                <ul>
+                    <li><strong>狀態</strong>：<code>git_status</code> — porcelain v1 <code>-z -b</code> 解析：branch、upstream、ahead/behind、rename 原路徑、7 種 change kind（含 conflict 偵測表 DD/AU/UD/UA/DU/AA/UU）。</li>
+                    <li><strong>Diff</strong>：<code>git_diff_file</code> — 單檔、staged/unstaged 二態、<code>--no-ext-diff --no-color</code>、binary 偵測、240 KB 截斷。</li>
+                    <li><strong>Staging</strong>：<code>git_stage_paths</code>（add）、<code>git_unstage_paths</code>（restore --staged）、<code>git_discard_paths</code>（restore，需確認）。</li>
+                    <li><strong>Commit</strong>：<code>git_commit</code> — <code>-m</code> 單訊息、amend 旗標、push_after 旗標（Commit &amp; Push 一鍵）。</li>
+                    <li><strong>Stash</strong>：<code>git_stash</code> — 只有 <code>stash push</code>（含 -u 選項）。<strong>沒有 stash list / apply / pop / drop</strong> — 存進去就只能用終端機撈回來。</li>
+                    <li><strong>Branch</strong>：<code>git_list_branches</code>（含 upstream、current、remote 標記）、<code>git_create_branch</code>、<code>git_checkout_branch</code>（需確認文字）。</li>
+                    <li><strong>遠端</strong>：<code>git_fetch</code>（--prune）、<code>git_pull</code>（<strong>--ff-only</strong>，拒絕產生 merge commit）、<code>git_push</code>（無 force、無 upstream 設定）。</li>
+                    <li><strong>Graph</strong>：<code>git_commit_graph</code> — 見「Graph 實作剖析」分頁。</li>
+                    <li><strong>危險操作</strong>：<code>git_reset_hard</code>、<code>git_rebase_onto</code>（非互動式 rebase）。</li>
+                </ul>
+            </div></details>
+        </section>
+        <section>
+            <h2>前端：src/features/git/（約 1,500 行）+ AppShell 串接</h2>
+            <details open><summary>GitPanel（405 行）— Source Control 面板</summary><div class="details-body">
+                <ul>
+                    <li>分組顯示 <strong>Staged Changes / Changes</strong> 兩段（git-model.ts <code>groupGitChanges()</code> 另外追蹤 conflicts 組），每列：A/M/D/U token + 檔名（點擊開 diff）+ 列操作（stage / unstage / discard）。</li>
+                    <li>Commit 區：訊息 textarea、<strong>Commit</strong>、<strong>Commit &amp; Push</strong>（主按鈕，帶 branch + ahead/behind 標籤）、<strong>Amend</strong>、<strong>Stash</strong>。</li>
+                    <li>動作 gating 是純函式：<code>canCommit()</code>（須有訊息 + 有 staged + 無 conflict）、<code>canAmend()</code>、<code>canStash()</code> — 有衝突時整個 commit 路徑被擋下。</li>
+                    <li>Branch 區：下拉選單 checkout（觸發確認對話框）、新 branch 輸入框、Fetch / Pull / Push 按鈕。</li>
+                </ul>
+            </div></details>
+            <details><summary>GitDiffView（107 行）— 唯讀 unified diff</summary><div class="details-body">
+                <ul>
+                    <li>逐行著色：<code>+</code> 綠、<code>-</code> 紅、<code>@@</code> hunk 標頭、其餘 context — 純文字 <code>&lt;pre&gt;</code> 渲染。</li>
+                    <li>Staged/Unstaged badge、binary 檔提示、截斷提示。</li>
+                    <li><strong>沒有</strong>：side-by-side、行號欄、word-level 高亮、hunk 折疊、從 diff 做 partial staging、編輯能力。Diff 結果快取在 <code>diffByKey</code>（per path+staged）。</li>
+                </ul>
+            </div></details>
+            <details><summary>工作台整合 — 這部分比想像中完整</summary><div class="details-body">
+                <ul>
+                    <li><strong>Explorer 與分頁裝飾</strong>：<code>decorationMapFromStatus()</code> 把 status 轉成 path → A/M/D/U map，檔案樹列與編輯器分頁都會顯示 git token（AppShell.tsx:5577）。</li>
+                    <li><strong>Activity rail badge</strong>：<code>changeBadgeCount()</code> 在 Git 圖示上顯示變更數。</li>
+                    <li><strong>Status bar</strong>：branch 名 + ahead/behind（<code>statusBranchLabel()</code>）。</li>
+                    <li><strong>自動刷新</strong>：file watcher 事件觸發 git refresh（但忽略 <code>.git/</code> 內部變更避免迴圈，git-model.ts:303）；task 跑完（exitCode 非 null）也觸發 refresh — 這對應 JetBrains 的自動 VFS refresh 行為。</li>
+                    <li><strong>確認對話框</strong>：modal 要求<strong>打字輸入</strong>精確確認文字（AppShell.tsx:6126）— 比 JetBrains 的按鈕式確認更嚴格的防呆設計。</li>
+                    <li><strong>Command palette</strong>：<code>git-reset-hard</code> 與 <code>git-rebase-main</code> 兩個命令 — 注意 rebase 目標<strong>硬編碼為 main</strong>（AppShell.tsx:5277），無法 rebase 到任意分支。</li>
+                </ul>
+            </div></details>
+        </section>
+    </div>
+
+    <div id="compare" class="tab-content">
+        <section>
+            <h2>與 JetBrains IDE（IntelliJ 家族 git 整合）逐項對照</h2>
+            <h3>Commit 工作流</h3>
+            <table>
+                <thead><tr><th>能力</th><th>JetBrains</th><th>Yuuzu-IDE</th><th>評估</th></tr></thead>
+                <tbody>
+                    <tr><td>變更清單 + commit 訊息 + commit</td><td>Commit tool window</td><td>GitPanel staged/unstaged 兩段</td><td><span class="badge yes">類似</span></td></tr>
+                    <tr><td>Staging 模型</td><td>Changelist 為主（staging area 為選用）</td><td>git 原生 staging area（接近 VS Code）</td><td><span class="badge info">取向不同</span></td></tr>
+                    <tr><td>Partial commit（per-hunk / per-line）</td><td>有（diff 內 checkbox）</td><td>無 — 只能整檔 stage</td><td><span class="badge no">缺</span></td></tr>
+                    <tr><td>Amend / Commit &amp; Push</td><td>有</td><td>有（amend 沿用輸入的訊息）</td><td><span class="badge yes">類似</span></td></tr>
+                    <tr><td>Commit 訊息歷史 / 模板 / 提交前檢查</td><td>有（inspections、formatting）</td><td>無</td><td><span class="badge no">缺</span></td></tr>
+                    <tr><td>Stash</td><td>stash + shelve 雙系統，含管理 UI</td><td>只有 stash push — 無 list/apply/pop</td><td><span class="badge partial">半套</span></td></tr>
+                </tbody>
+            </table>
+            <h3>Log / Graph</h3>
+            <table>
+                <thead><tr><th>能力</th><th>JetBrains</th><th>Yuuzu-IDE</th><th>評估</th></tr></thead>
+                <tbody>
+                    <tr><td>Commit DAG 視覺化</td><td>真實 parent 拓撲連線、無限 lane、分支著色</td><td>裝飾性 lane 圓點（clamp 至 3 軌）、固定垂直線、無拓撲連線</td><td><span class="badge no">差距大</span></td></tr>
+                    <tr><td>歷史深度</td><td>無限滾動全歷史</td><td>120 筆硬上限</td><td><span class="badge partial">受限</span></td></tr>
+                    <tr><td>Ref 標籤（branch/tag/HEAD）</td><td>有，含分組</td><td>有 badge（tag 判斷是 <code>ref.startsWith("v")</code> 啟發式）</td><td><span class="badge partial">近似</span></td></tr>
+                    <tr><td>過濾（branch / author / path / 文字搜尋）</td><td>全部支援</td><td>無任何過濾</td><td><span class="badge no">缺</span></td></tr>
+                    <tr><td>點擊 commit 看詳情（變更檔案 + diff）</td><td>有</td><td>無 — 列是純顯示</td><td><span class="badge no">缺</span></td></tr>
+                    <tr><td>Graph 上右鍵操作（checkout / cherry-pick / revert / reset / squash / interactive rebase）</td><td>有，是核心工作流</td><td>無</td><td><span class="badge no">缺</span></td></tr>
+                </tbody>
+            </table>
+            <h3>Diff / 衝突</h3>
+            <table>
+                <thead><tr><th>能力</th><th>JetBrains</th><th>Yuuzu-IDE</th><th>評估</th></tr></thead>
+                <tbody>
+                    <tr><td>Unified diff 著色</td><td>有</td><td>有（add/del/hunk 行級著色）</td><td><span class="badge yes">類似</span></td></tr>
+                    <tr><td>Side-by-side、word-level、可編輯 diff</td><td>有</td><td>無</td><td><span class="badge no">缺</span></td></tr>
+                    <tr><td>編輯器 gutter 變更標記 + hunk revert</td><td>有</td><td>無（裝飾只到分頁/檔案樹 token 層級）</td><td><span class="badge no">缺</span></td></tr>
+                    <tr><td>Merge conflict 三向解決工具</td><td>有（magic resolve）</td><td>偵測 conflict、擋 commit、顯示 U token — 但無解決 UI</td><td><span class="badge partial">僅偵測</span></td></tr>
+                </tbody>
+            </table>
+            <h3>Branch / 遠端 / 安全</h3>
+            <table>
+                <thead><tr><th>能力</th><th>JetBrains</th><th>Yuuzu-IDE</th><th>評估</th></tr></thead>
+                <tbody>
+                    <tr><td>Branch 切換 / 建立</td><td>Branch popup（分組、favorite、tracking 管理）</td><td>下拉選單 + 文字輸入建立</td><td><span class="badge partial">基本款</span></td></tr>
+                    <tr><td>Fetch / Pull / Push</td><td>有（push 預覽、force-push 保護、pull 策略選擇）</td><td>fetch --prune / pull <strong>--ff-only</strong> / push（無 force）</td><td><span class="badge partial">保守子集</span></td></tr>
+                    <tr><td>Rebase</td><td>互動式 rebase 編輯器</td><td>非互動 <code>rebase {target}</code>，palette 入口且目標硬編碼 main</td><td><span class="badge partial">最小版</span></td></tr>
+                    <tr><td>破壞性操作防護</td><td>確認對話框 + Local History 兜底</td><td><strong>打字輸入精確確認文字</strong>（DISCARD / RESET HARD…）</td><td><span class="badge yes">更嚴格</span></td></tr>
+                    <tr><td>Blame / File History / Cherry-pick / Revert / Tag 管理 / Worktree / Submodule / PR 整合</td><td>全部有</td><td>全部沒有</td><td><span class="badge no">缺</span></td></tr>
+                </tbody>
+            </table>
+        </section>
+    </div>
+
+    <div id="graph" class="tab-content">
+        <section>
+            <h2>「Commit Graph」實作剖析 — 為什麼說它不是 JetBrains 那種 graph</h2>
+            <div class="chart-container">
+                <h3>渲染對比示意</h3>
+                <svg viewBox="0 0 720 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="yuuzu lane 圓點與 JetBrains DAG 對比">
+                    <text x="10" y="20" font-size="13" font-weight="700" fill="#1a1a1a">Yuuzu-IDE：固定 lane 圓點（裝飾）</text>
+                    <line x1="30" y1="35" x2="30" y2="230" stroke="#c45d3e" stroke-width="2"/>
+                    <line x1="60" y1="35" x2="60" y2="230" stroke="#82aaff" stroke-width="1.5" stroke-dasharray="3 3"/>
+                    <circle cx="30" cy="50" r="6" fill="#fff" stroke="#c45d3e" stroke-width="2"/>
+                    <circle cx="30" cy="90" r="6" fill="#fff" stroke="#c45d3e" stroke-width="2"/>
+                    <path d="M30 122 q 0 -14 30 -16" fill="none" stroke="#82aaff" stroke-width="1.5" stroke-dasharray="3 3"/>
+                    <circle cx="60" cy="130" r="6" fill="#fff" stroke="#82aaff" stroke-width="2"/>
+                    <circle cx="30" cy="170" r="6" fill="#fff" stroke="#c45d3e" stroke-width="2"/>
+                    <circle cx="30" cy="210" r="6" fill="#fff" stroke="#c45d3e" stroke-width="2"/>
+                    <text x="80" y="54" font-size="11" fill="#6b7280">lane 0：主線（垂直線不反映真實 parent）</text>
+                    <text x="80" y="134" font-size="11" fill="#6b7280">lane&gt;0 + merge：畫一條固定曲線（裝飾）</text>
+                    <text x="80" y="214" font-size="11" fill="#6b7280">列與列之間沒有連線資料</text>
+
+                    <text x="390" y="20" font-size="13" font-weight="700" fill="#1a1a1a">JetBrains：真實 commit DAG</text>
+                    <path d="M410 50 L410 90 L410 130 L410 170 L410 210" stroke="#c45d3e" stroke-width="2" fill="none"/>
+                    <path d="M410 90 C 440 100, 440 120, 440 130 L440 170 C 440 190, 420 200, 410 210" stroke="#3b82f6" stroke-width="2" fill="none"/>
+                    <path d="M410 50 C 470 60, 470 100, 470 130 L470 170" stroke="#22c55e" stroke-width="2" fill="none"/>
+                    <circle cx="410" cy="50" r="6" fill="#fff" stroke="#c45d3e" stroke-width="2"/>
+                    <circle cx="410" cy="90" r="6" fill="#fff" stroke="#c45d3e" stroke-width="2"/>
+                    <circle cx="440" cy="130" r="6" fill="#fff" stroke="#3b82f6" stroke-width="2"/>
+                    <circle cx="470" cy="170" r="6" fill="#fff" stroke="#22c55e" stroke-width="2"/>
+                    <circle cx="410" cy="210" r="6" fill="#fff" stroke="#c45d3e" stroke-width="2"/>
+                    <text x="500" y="94" font-size="11" fill="#6b7280">每條線是真實 parent 邊</text>
+                    <text x="500" y="134" font-size="11" fill="#6b7280">分支線延伸、合併線收斂</text>
+                    <text x="500" y="174" font-size="11" fill="#6b7280">lane 數量不設限、按分支著色</text>
+                </svg>
+            </div>
+            <details open><summary>資料來源：git log --graph 的 ASCII 前綴解析</summary><div class="details-body">
+                <p>後端執行（git.rs:288–304）：</p>
+                <p><code>git log --graph --decorate=short --date=relative --pretty=format:%H%x00%h%x00%s%x00%an%x00%ar%x00%D -n 120</code></p>
+                <ul>
+                    <li><strong>lane 的真相</strong>：<code>graph_lane()</code>（git.rs:606）取 ASCII 圖形前綴（<code>* | \</code> 之類）中 <code>*</code> 字元的位置當 lane 編號。它沒有讀 parent hashes（pretty format 裡沒有 <code>%P</code>），所以前端<strong>不可能</strong>畫出 commit 之間的連線。</li>
+                    <li><strong>merge 的真相</strong>：<code>merge = subject.starts_with("Merge ")</code>（git.rs:586）——字串啟發式。squash merge、自訂訊息的 merge commit 不會被標記；反之叫 "Merge…" 的普通 commit 會被誤標。</li>
+                    <li><strong>前端 clamp</strong>：GitGraphView.tsx:122 <code>Math.min(lane, 2)</code> — 視覺上最多 3 條軌道；merge 曲線是固定形狀的裝飾路徑（GitGraphView.tsx:147），不指向真正的 parent 列。</li>
+                    <li><strong>refs 解析</strong>：<code>%D</code> 逗號分割成 badge；HEAD 高亮用 <code>ref.includes("HEAD")</code>，tag 樣式用 <code>ref.startsWith("v")</code> — 同樣是啟發式（非 <code>tag:</code> 前綴判斷）。</li>
+                </ul>
+                <p>結論：這是「<strong>帶 graph 風格裝飾的 commit 列表</strong>」。要升級成 JetBrains 等級，後端需要改用 <code>%H %P</code> 拓撲資料 + 前端 lane 分配演算法，這是另一個量級的工程。</p>
+            </div></details>
+        </section>
+    </div>
+
+    <div id="evidence" class="tab-content">
+        <section>
+            <h2>證據與檔案索引（本次逐檔人工審閱）</h2>
+            <table>
+                <thead><tr><th>檔案</th><th>行數</th><th>角色</th><th>關鍵位置</th></tr></thead>
+                <tbody>
+                    <tr><td><code>src-tauri/src/git.rs</code></td><td>929</td><td>全部 git 邏輯（CLI 封裝 + 解析 + 安全）</td><td>diff 上限 :8、graph :288、lane 解析 :606、確認 :500、路徑消毒 :403、9 個測試 :715+</td></tr>
+                    <tr><td><code>src-tauri/src/commands.rs</code></td><td>—</td><td>16 個 <code>git_*</code> Tauri 命令（:1113–1264）</td><td>trusted-workspace 包裝</td></tr>
+                    <tr><td><code>src/features/git/git-api.ts</code></td><td>115</td><td>16 個 IPC wrapper，與後端一一對應</td><td>全檔</td></tr>
+                    <tr><td><code>src/features/git/git-model.ts</code></td><td>383</td><td>純 reducer 狀態：分組、gating、確認文字、refresh 判斷、decoration map</td><td>canCommit :225、確認文字 :284、.git 事件過濾 :303、graph 120 上限 :101</td></tr>
+                    <tr><td><code>src/features/git/GitPanel.tsx</code></td><td>405</td><td>Source Control 面板</td><td>staged/unstaged 區段 :279–323、commit 區 :227</td></tr>
+                    <tr><td><code>src/features/git/GitDiffView.tsx</code></td><td>107</td><td>唯讀 unified diff 渲染</td><td>行著色 :93–107</td></tr>
+                    <tr><td><code>src/features/git/GitGraphView.tsx</code></td><td>155</td><td>commit 表格 + lane SVG</td><td>lane clamp :122、merge 裝飾曲線 :145</td></tr>
+                    <tr><td><code>src/app/AppShell.tsx</code></td><td>—</td><td>串接：確認對話框 :6126、palette 命令 :5272–5277（rebase 硬編碼 main）、分頁裝飾 :5577、自動 refresh</td><td>—</td></tr>
+                </tbody>
+            </table>
+        </section>
+        <section>
+            <h2>Node 4 自訂範圍 vs 實際交付</h2>
+            <details open><summary>結論：與 roadmap Node 4 的 acceptance 一致，缺的東西多半是「刻意 non-goal 或排在能力圖後期」</summary><div class="details-body">
+                <ul>
+                    <li>Node 4 acceptance：「日常 edit-test-commit-push 迴圈」「diff 與狀態自動更新」「破壞性操作需明確確認」——三項皆達成（node-4-git-results.md 記錄 97 Rust 測試 + 97 Bun 測試 + Playwright UI smoke）。</li>
+                    <li>Node 4 non-goals 明列：「Complex merge UI」「Pull request integration」——所以衝突解決與 PR 整合缺席是設計決定。</li>
+                    <li>但 roadmap「Full Capability Map」的 Git 段落列了 commit graph、blame、worktree awareness、merge conflict workflow——意味著 blame、真 graph、衝突解決是<strong>承諾過、尚未排程</strong>的後續工作（roadmap.md:127–138）。</li>
+                    <li>觀察到的兩個小瑕疵：(1) rebase 目標硬編碼 <code>main</code>，repo 用其他主分支名（master/trunk）時此命令無用；(2) stash 只進不出，使用者得開終端機撈回。</li>
+                </ul>
+            </div></details>
+        </section>
+    </div>
+
+    <div class="actions">
+        <button class="btn" onclick="window.print()">Print / PDF</button>
+    </div>
+</div>
+
+<script>
+function showTab(id) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    event.target.classList.add('active');
+}
+</script>
+</body>
+</html>

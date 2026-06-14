@@ -1,5 +1,5 @@
 import type { EditorFileState, FileVersion } from "../files/file-model";
-import type { Surface } from "../../app/workspace-view-state";
+import type { Surface } from "./workspace-view-state";
 import type { FileTreeEntry } from "./workspace-api";
 
 export type ExpandedPaths = Record<string, FileTreeEntry[]>;

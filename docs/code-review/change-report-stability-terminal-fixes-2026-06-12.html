@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Change Report：卡頓與 Terminal 修正規格實作</title>
+<style>
+:root {
+    --font-sans: system-ui, -apple-system, "PingFang TC", sans-serif;
+    --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+    --color-bg: #faf9f7;
+    --color-surface: #ffffff;
+    --color-text: #1a1a1a;
+    --color-text-secondary: #6b7280;
+    --color-border: #e5e5e5;
+    --color-accent: #c45d3e;
+    --color-accent-light: #f5ebe7;
+    --color-success: #22c55e;
+    --color-warning: #f59e0b;
+    --color-error: #ef4444;
+    --color-info: #3b82f6;
+    --color-diff-add-bg: #dcfce7;
+    --color-diff-add-line: #bbf7d0;
+    --color-diff-del-bg: #fee2e2;
+    --color-diff-del-line: #fecaca;
+    --radius-md: 10px;
+    --radius-lg: 16px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--font-sans); background: var(--color-bg); color: var(--color-text); line-height: 1.6; }
+
+.layout { display: grid; grid-template-columns: 250px 1fr; min-height: 100vh; }
+@media (max-width: 768px) { .layout { grid-template-columns: 1fr; } .sidebar { display: none; } }
+
+.sidebar { background: var(--color-surface); border-right: 1px solid var(--color-border); padding: 1.5rem; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+.sidebar h3 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-secondary); margin: 1rem 0 0.75rem; }
+.sidebar h3:first-child { margin-top: 0; }
+.file-list { list-style: none; }
+.file-list li { margin-bottom: 0.25rem; }
+.file-list a { color: var(--color-text); text-decoration: none; font-size: 0.78rem; font-family: var(--font-mono); padding: 0.3rem 0.5rem; display: flex; align-items: center; gap: 0.5rem; border-radius: 6px; transition: background 0.15s; }
+.file-list a:hover { background: var(--color-bg); }
+.file-list .indicator { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.file-list .indicator.added { background: var(--color-success); }
+.file-list .indicator.modified { background: var(--color-warning); }
+
+.main { padding: 2rem; max-width: 1000px; }
+header { margin-bottom: 2rem; }
+header .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-accent); font-weight: 600; }
+header h1 { font-size: 1.7rem; margin: 0.25rem 0; }
+header .meta { color: var(--color-text-secondary); font-size: 0.9rem; }
+
+.stats { display: flex; gap: 1rem; margin: 1.5rem 0; flex-wrap: wrap; }
+.stat { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 1rem 1.25rem; min-width: 120px; }
+.stat .value { font-size: 1.4rem; font-weight: 700; }
+.stat .label { font-size: 0.78rem; color: var(--color-text-secondary); }
+
+.summary { background: var(--color-surface); border-radius: var(--radius-lg); padding: 1.5rem; margin-bottom: 2rem; border: 1px solid var(--color-border); }
+.summary h2 { font-size: 1.1rem; margin-bottom: 0.75rem; }
+.summary h3 { font-size: 0.9rem; margin-top: 1rem; }
+.summary ul { padding-left: 1.25rem; }
+.summary li { margin-bottom: 0.4rem; font-size: 0.92rem; }
+.summary p { margin-bottom: 0.5rem; }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.84rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; }
+th { text-align: left; padding: 0.6rem 0.75rem; border-bottom: 2px solid var(--color-border); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-secondary); background: var(--color-surface); }
+td { padding: 0.55rem 0.75rem; border-bottom: 1px solid var(--color-border); vertical-align: top; }
+td code, li code, p code { font-family: var(--font-mono); font-size: 0.82em; background: #f3f1ee; border-radius: 4px; padding: 0.1em 0.35em; }
+.spec-tag { display: inline-block; font-size: 0.68rem; font-weight: 700; padding: 0.1rem 0.45rem; border-radius: 999px; margin-right: 0.3rem; white-space: nowrap; }
+.spec-tag.b { background: #fee2e2; color: #b91c1c; }
+.spec-tag.c { background: #ffedd5; color: #c2410c; }
+.spec-tag.d { background: #fef3c7; color: #b45309; }
+.spec-tag.a { background: #e0e7ff; color: #4338ca; }
+.spec-tag.e { background: #f3e8ff; color: #7e22ce; }
+
+section { margin-bottom: 2.5rem; }
+section > h2 { font-size: 1.25rem; margin-bottom: 1rem; }
+
+details { margin-bottom: 1rem; }
+details summary { cursor: pointer; font-weight: 600; padding: 0.7rem 1rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); font-size: 0.92rem; }
+details[open] summary { border-radius: var(--radius-md) var(--radius-md) 0 0; }
+details .details-body { padding: 1rem 1.25rem; border: 1px solid var(--color-border); border-top: none; border-radius: 0 0 var(--radius-md) var(--radius-md); background: var(--color-surface); }
+details .details-body ul { padding-left: 1.25rem; }
+details .details-body li { margin-bottom: 0.35rem; font-size: 0.9rem; }
+
+.diff { border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.7; margin: 0.75rem 0; }
+.diff-line { display: flex; }
+.diff-line .line-content { flex: 1; padding: 0 1rem; white-space: pre-wrap; word-break: break-all; }
+.diff-line.add { background: var(--color-diff-add-bg); }
+.diff-line.del { background: var(--color-diff-del-bg); }
+.diff-line.context { background: var(--color-surface); }
+
+.verify-card { background: #f0fdf4; border-left: 3px solid var(--color-success); padding: 0.7rem 1rem; border-radius: 0 var(--radius-md) var(--radius-md) 0; margin: 0.5rem 0; font-size: 0.88rem; }
+.pending-card { background: #fffbeb; border-left: 3px solid var(--color-warning); padding: 0.7rem 1rem; border-radius: 0 var(--radius-md) var(--radius-md) 0; margin: 0.5rem 0; font-size: 0.88rem; }
+
+.chart-container { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 1.5rem; margin-bottom: 1.5rem; overflow-x: auto; }
+.chart-container h3 { font-size: 0.9rem; margin-bottom: 1rem; color: var(--color-text-secondary); }
+
+@media print { .sidebar { display: none; } .layout { grid-template-columns: 1fr; } details { page-break-inside: avoid; } }
+</style>
+</head>
+<body>
+<div class="layout">
+    <nav class="sidebar">
+        <h3>Commits（依序）</h3>
+        <ul class="file-list">
+            <li><a href="#spec-b"><span class="indicator modified"></span>562e3fc Spec B+E</a></li>
+            <li><a href="#spec-c"><span class="indicator modified"></span>1e3cafe Spec C</a></li>
+            <li><a href="#spec-d"><span class="indicator modified"></span>81f381a Spec D</a></li>
+            <li><a href="#spec-a"><span class="indicator modified"></span>89983ba Spec A</a></li>
+        </ul>
+        <h3>變更檔案</h3>
+        <ul class="file-list">
+            <li><a href="#arch"><span class="indicator added"></span>terminal-replay-buffer.ts</a></li>
+            <li><a href="#arch"><span class="indicator added"></span>terminal-replay-buffer.test.ts</a></li>
+            <li><a href="#arch"><span class="indicator added"></span>TerminalTab.test.ts</a></li>
+            <li><a href="#files"><span class="indicator modified"></span>TerminalTab.tsx</a></li>
+            <li><a href="#files"><span class="indicator modified"></span>terminal-model.ts(+test)</a></li>
+            <li><a href="#files"><span class="indicator modified"></span>terminal-api.ts</a></li>
+            <li><a href="#files"><span class="indicator modified"></span>remote-model.ts(+test)</a></li>
+            <li><a href="#files"><span class="indicator modified"></span>SshTerminalSurface.tsx</a></li>
+            <li><a href="#files"><span class="indicator modified"></span>AppShell.tsx(+contract)</a></li>
+            <li><a href="#files"><span class="indicator modified"></span>workspace-view-state.ts</a></li>
+            <li><a href="#files"><span class="indicator modified"></span>src-tauri/terminal.rs</a></li>
+            <li><a href="#files"><span class="indicator modified"></span>src-tauri/commands.rs</a></li>
+            <li><a href="#files"><span class="indicator modified"></span>src-tauri/lsp.rs</a></li>
+            <li><a href="#files"><span class="indicator modified"></span>src-tauri/tasks.rs</a></li>
+            <li><a href="#files"><span class="indicator modified"></span>src-tauri/lib.rs</a></li>
+        </ul>
+    </nav>
+
+    <main class="main">
+        <header>
+            <div class="label">Change Report &middot; Co-Learning</div>
+            <h1>卡頓與 Terminal 修正規格實作</h1>
+            <p class="meta">依據 <code>docs/html/yuuzu-ide-stability-terminal-diagnosis-specs-2026-06-12.html</code> 的五個 Spec（B→C→D→A→E）&middot; 2026-06-12 &middot; 4 個 commits &middot; 全程 TDD、無 subagent</p>
+        </header>
+
+        <div class="stats">
+            <div class="stat"><div class="value" style="color:var(--color-success)">+1209</div><div class="label">新增行</div></div>
+            <div class="stat"><div class="value" style="color:var(--color-error)">-1048</div><div class="label">刪除行</div></div>
+            <div class="stat"><div class="value">19</div><div class="label">變更檔案</div></div>
+            <div class="stat"><div class="value">431</div><div class="label">bun test（0 fail）</div></div>
+            <div class="stat"><div class="value">324</div><div class="label">cargo test（0 fail）</div></div>
+            <div class="stat"><div class="value">38</div><div class="label">command 遷移 async</div></div>
+        </div>
+
+        <div class="summary">
+            <h2>Why — 為什麼改</h2>
+            <p>診斷報告證實了五個根因：<strong>(A)</strong> 95/105 個 Tauri command 是同步函式，在 macOS main thread 執行到完成，git 網路、LSP（最長 10 秒）、全 workspace 掃描都會直接凍結整個視窗；<strong>(B)</strong> terminal 輸出超過 120k 字元後，每個 4KB chunk 觸發 <code>clear()</code> + 全量重寫的 O(n²) 風暴；<strong>(C)</strong> shell 不是 login shell 且沒設 <code>TERM</code>，brew 指令全部 command not found、打包後無顏色；<strong>(D)</strong> PTY 固定 80×24 且無 resize 通道；<strong>(E)</strong> <code>convertEol: true</code> 對真 PTY 輸出是錯的。</p>
+            <h3>實作順序與對應 commit</h3>
+            <ul>
+                <li><span class="spec-tag b">Spec B/P0</span><span class="spec-tag e">Spec E/P2</span><code>562e3fc</code> — Terminal 輸出管線重構（chunk 直寫 xterm）＋移除 convertEol＋Rust 端 10ms chunk 聚合</li>
+                <li><span class="spec-tag c">Spec C/P0</span><code>1e3cafe</code> — login shell（<code>-l</code>）＋ TERM/COLORTERM/TERM_PROGRAM/LANG 環境</li>
+                <li><span class="spec-tag d">Spec D/P1</span><code>81f381a</code> — PTY resize 通道（後端 command ＋前端 fit/debounce 接線）</li>
+                <li><span class="spec-tag a">Spec A/P1</span><code>89983ba</code> — 38 個耗時同步 command 遷移 async/spawn_blocking ＋ LSP 互動 timeout 10s→2s</li>
+            </ul>
+        </div>
+
+        <section id="files">
+            <h2>What — 每個檔案改了什麼</h2>
+            <table>
+                <thead><tr><th style="width:30%">檔案</th><th style="width:8%">Spec</th><th>變更內容</th><th style="width:14%">方法</th></tr></thead>
+                <tbody>
+                    <tr><td><code>src/features/terminal/terminal-replay-buffer.ts</code>（新）</td><td><span class="spec-tag b">B</span></td><td>React 之外的 plain-module scrollback：120k 尾部截斷的 replay buffer ＋同步 chunk pub/sub（本地與 SSH terminal 共用）</td><td>TDD（RED→GREEN）</td></tr>
+                    <tr><td><code>src/features/terminal/TerminalTab.tsx</code></td><td><span class="spec-tag b">B</span><span class="spec-tag e">E</span><span class="spec-tag d">D</span></td><td>掛載時 replay 一次→訂閱 chunk 直寫 xterm；刪除 <code>startsWith</code>/<code>clear()</code> 全量重寫與 <code>output</code> prop；移除 <code>convertEol</code>；新增 <code>onResize</code>（掛載即同步 PTY 尺寸、ResizeObserver fit 後 100ms debounce）</td><td>TDD（8 個元件測試）</td></tr>
+                    <tr><td><code>src/features/terminal/terminal-model.ts</code></td><td><span class="spec-tag b">B</span></td><td>view state 移除 <code>outputBySessionId</code>/<code>pendingOutputBySessionId</code> 與 append/buffer reducer——scrollback 不再驅動 React render</td><td>TDD（形狀斷言先 RED）</td></tr>
+                    <tr><td><code>src/features/remote/remote-model.ts</code> + <code>SshTerminalSurface.tsx</code></td><td><span class="spec-tag b">B</span></td><td>SSH 側同步遷移（共用 TerminalTab 的必要連鎖）：移除 <code>sshOutputBySessionId</code> 等欄位與 reducer、surface 不再傳 output prop</td><td>TDD＋型別系統</td></tr>
+                    <tr><td><code>src/app/AppShell.tsx</code></td><td><span class="spec-tag b">B</span><span class="spec-tag d">D</span></td><td>listener 抽成可測的 <code>handleTerminalOutputEvent</code>（ignored/workspace 檢查後寫 replay buffer）；SSH listener 同改；close/restart 清 buffer；agent context 的 terminalOutput 改讀 replay buffer；接 <code>resizeTerminalPty</code></td><td>Edit＋contract 測試</td></tr>
+                    <tr><td><code>src/features/terminal/terminal-api.ts</code></td><td><span class="spec-tag d">D</span></td><td>新增 <code>resizeTerminalSession</code> API wrapper</td><td>Edit</td></tr>
+                    <tr><td><code>src-tauri/src/terminal.rs</code></td><td><span class="spec-tag b">B</span><span class="spec-tag c">C</span><span class="spec-tag d">D</span></td><td>(B) reader→mpsc→emitter 兩段式執行緒拓撲，<code>next_coalesced_chunk</code> 以 10ms 窗口/64KB 上限聚合再 emit；(C) <code>apply_terminal_session_env</code>：unix 加 <code>-l</code>、設 TERM=xterm-256color、COLORTERM、TERM_PROGRAM、LANG 缺失補 en_US.UTF-8；(D) <code>TerminalProcess</code> 保存 master PTY、<code>resize_session</code> 以 kernel ioctl 改尺寸（真 PTY round-trip 測試）</td><td>TDD（9 個新測試）</td></tr>
+                    <tr><td><code>src-tauri/src/commands.rs</code></td><td><span class="spec-tag a">A</span><span class="spec-tag d">D</span></td><td>38 個 command 改 <code>async fn</code>＋<code>run_blocking</code>（spawn_blocking 包裝）：git fetch/pull/push/status/diff/全部寫操作、14 個 lsp_*、scan/search/docs、run_workspace_task、browser_capture、read/write_text_file；信任檢查（trusted_workspace_root / lsp_workspace_identity / normalize path）保留在 await 前同步執行；新增 <code>resize_terminal_session</code>；刪除 AppState 的 14 個 lsp 委派方法</td><td>Python 批次轉換＋逐批 cargo check</td></tr>
+                    <tr><td><code>src-tauri/src/lsp.rs</code></td><td><span class="spec-tag a">A</span></td><td><code>LspState</code> 改 <code>Arc&lt;Mutex&gt;</code> 可 Clone；新增 <code>request_timeout_for_method</code>：hover/completion 用 2s（規格 1–3s 內），其餘維持 10s</td><td>TDD（timeout 函式先 RED）</td></tr>
+                    <tr><td><code>src-tauri/src/tasks.rs</code> / <code>lib.rs</code></td><td><span class="spec-tag a">A</span><span class="spec-tag d">D</span></td><td>TaskState derive Clone；註冊 resize_terminal_session</td><td>Edit</td></tr>
+                    <tr><td>測試檔（contract / model / view-state）</td><td>—</td><td>更新到新 contract：terminal listener 4 個新測試、SSH listener 斷言改 replay buffer、LSP 信任測試改測存留的 seam（identity gate / normalize / LspState 行為）、flat-signature 斷言改 <code>AsyncFn</code> bound</td><td>Edit</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section id="arch">
+            <h2>Architecture — 修正後的輸出管線與執行緒模型</h2>
+            <div class="chart-container">
+                <h3>Terminal 輸出管線（Spec B/E）：舊 O(n²) 路徑 → 新直寫路徑</h3>
+                <svg viewBox="0 0 960 420" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">
+                    <defs>
+                        <marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b7280"/></marker>
+                        <marker id="arG" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#16a34a"/></marker>
+                        <marker id="arR" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#ef4444"/></marker>
+                    </defs>
+
+                    <!-- Rust side -->
+                    <rect x="15" y="30" width="290" height="160" rx="12" fill="#fef9f3" stroke="#e7d8c9"/>
+                    <text x="30" y="55" font-size="12" font-weight="700" fill="#9a3412">Rust（terminal.rs）</text>
+                    <rect x="30" y="70" width="115" height="48" rx="8" fill="#ffffff" stroke="#9ca3af"/>
+                    <text x="87" y="90" text-anchor="middle" font-size="11" font-weight="600">PTY reader</text>
+                    <text x="87" y="105" text-anchor="middle" font-size="10" fill="#6b7280">read ≤4KB → tx</text>
+                    <rect x="175" y="70" width="115" height="48" rx="8" fill="#dcfce7" stroke="#16a34a"/>
+                    <text x="232" y="88" text-anchor="middle" font-size="11" font-weight="600" fill="#166534">emitter（新）</text>
+                    <text x="232" y="103" text-anchor="middle" font-size="9.5" fill="#166534">10ms/64KB 聚合</text>
+                    <line x1="145" y1="94" x2="175" y2="94" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ar)"/>
+                    <text x="160" y="86" text-anchor="middle" font-size="9" fill="#6b7280">mpsc</text>
+                    <rect x="30" y="135" width="260" height="40" rx="8" fill="#ffffff" stroke="#9ca3af"/>
+                    <text x="160" y="153" text-anchor="middle" font-size="10.5" font-weight="600">spawn: zsh -l + TERM=xterm-256color</text>
+                    <text x="160" y="167" text-anchor="middle" font-size="9.5" fill="#6b7280">COLORTERM / TERM_PROGRAM / LANG（Spec C）＋ master 保存（Spec D）</text>
+
+                    <!-- IPC -->
+                    <line x1="290" y1="94" x2="360" y2="94" stroke="#16a34a" stroke-width="2" marker-end="url(#arG)"/>
+                    <text x="325" y="84" text-anchor="middle" font-size="9.5" fill="#16a34a">IPC event</text>
+
+                    <!-- Frontend new path -->
+                    <rect x="360" y="30" width="580" height="200" rx="12" fill="#f0fdf4" stroke="#bbf7d0"/>
+                    <text x="375" y="55" font-size="12" font-weight="700" fill="#166534">前端（新路徑：完全脫離 React render）</text>
+                    <rect x="375" y="70" width="180" height="50" rx="8" fill="#ffffff" stroke="#16a34a"/>
+                    <text x="465" y="89" text-anchor="middle" font-size="11" font-weight="600">handleTerminalOutputEvent</text>
+                    <text x="465" y="104" text-anchor="middle" font-size="9.5" fill="#6b7280">ignored / workspace 檢查</text>
+                    <rect x="590" y="70" width="160" height="50" rx="8" fill="#ffffff" stroke="#16a34a"/>
+                    <text x="670" y="89" text-anchor="middle" font-size="11" font-weight="600">replay buffer（新）</text>
+                    <text x="670" y="104" text-anchor="middle" font-size="9.5" fill="#6b7280">plain Map・120k 截斷</text>
+                    <rect x="785" y="70" width="140" height="50" rx="8" fill="#ffffff" stroke="#16a34a"/>
+                    <text x="855" y="89" text-anchor="middle" font-size="11" font-weight="600">xterm.write(chunk)</text>
+                    <text x="855" y="104" text-anchor="middle" font-size="9.5" fill="#6b7280">無 clear・無 re-render</text>
+                    <line x1="555" y1="95" x2="590" y2="95" stroke="#16a34a" stroke-width="2" marker-end="url(#arG)"/>
+                    <line x1="750" y1="95" x2="785" y2="95" stroke="#16a34a" stroke-width="2" marker-end="url(#arG)"/>
+                    <text x="767" y="86" text-anchor="middle" font-size="9" fill="#16a34a">publish</text>
+                    <rect x="375" y="150" width="375" height="60" rx="8" fill="#ffffff" stroke="#9ca3af" stroke-dasharray="4"/>
+                    <text x="562" y="172" text-anchor="middle" font-size="10.5" font-weight="600">TerminalTab 掛載（本地與 SSH 共用）</text>
+                    <text x="562" y="188" text-anchor="middle" font-size="9.5" fill="#6b7280">同步區塊：write(replay) → subscribe → 之後僅吃增量（無重複/遺失）</text>
+                    <line x1="670" y1="150" x2="670" y2="120" stroke="#6b7280" stroke-width="1.5" marker-end="url(#ar)"/>
+                    <rect x="785" y="150" width="140" height="60" rx="8" fill="#fef3c7" stroke="#f59e0b"/>
+                    <text x="855" y="172" text-anchor="middle" font-size="10.5" font-weight="600" fill="#b45309">resize 通道（Spec D）</text>
+                    <text x="855" y="188" text-anchor="middle" font-size="9" fill="#b45309">fit→debounce 100ms→ioctl</text>
+
+                    <!-- Old path -->
+                    <rect x="360" y="250" width="580" height="80" rx="12" fill="#fef2f2" stroke="#fecaca"/>
+                    <text x="375" y="273" font-size="12" font-weight="700" fill="#b91c1c">舊路徑（已刪除）</text>
+                    <text x="650" y="295" text-anchor="middle" font-size="10.5" fill="#b91c1c">chunk → zustand store 字串累加 → AppShell 全樹 re-render → startsWith 失敗 → clear() + 120KB 全量重寫</text>
+                    <text x="650" y="313" text-anchor="middle" font-size="10" fill="#b91c1c">120k 截斷破壞前綴 ⇒ 每 chunk O(n²)，webview 主執行緒飽和</text>
+                    <line x1="650" y1="250" x2="650" y2="232" stroke="#ef4444" stroke-width="2" stroke-dasharray="5" marker-end="url(#arR)"/>
+
+                    <!-- Async commands -->
+                    <rect x="15" y="250" width="290" height="140" rx="12" fill="#eef2ff" stroke="#c7d2fe"/>
+                    <text x="30" y="273" font-size="12" font-weight="700" fill="#4338ca">Command 執行模型（Spec A）</text>
+                    <text x="160" y="295" text-anchor="middle" font-size="10" fill="#4338ca">async fn 本體（tokio worker，非 main thread）</text>
+                    <text x="160" y="311" text-anchor="middle" font-size="9.5" fill="#6b7280">trusted_workspace_root / identity / normalize（µs 級）</text>
+                    <line x1="160" y1="320" x2="160" y2="338" stroke="#4338ca" stroke-width="1.5" marker-end="url(#ar)"/>
+                    <rect x="40" y="340" width="240" height="40" rx="8" fill="#ffffff" stroke="#4338ca"/>
+                    <text x="160" y="357" text-anchor="middle" font-size="10.5" font-weight="600" fill="#4338ca">spawn_blocking pool</text>
+                    <text x="160" y="372" text-anchor="middle" font-size="9" fill="#6b7280">git CLI／LSP request（hover 2s）／scan／IO</text>
+                    <text x="160" y="404" font-size="9.5" fill="#6b7280" text-anchor="middle">main thread 僅剩輕量 list_*/settings 類同步 command</text>
+                </svg>
+            </div>
+        </section>
+
+        <section>
+            <h2>How — 怎麼做的</h2>
+            <details open>
+                <summary>流程與工具</summary>
+                <div class="details-body">
+                    <ul>
+                        <li><strong>全程 TDD</strong>（依使用者指示無 subagent，所有修改由主迴圈以 Edit/Write 完成）：每個行為變更先寫失敗測試、確認以正確原因失敗、再寫最小實作——replay buffer（7 測試）、terminal-model 形狀（1）、TerminalTab 管線＋resize（8）、AppShell listener（4）、Rust 聚合（4）、login env（3）、PTY resize（2）、LSP timeout（2）。</li>
+                        <li><strong>Spec A 的 38 個 command 遷移</strong>屬結構性轉換：以 Python 腳本做精確字串替換（每處斷言恰好 1 次出現），行為由既有 324 個 Rust 測試鎖定，逐批 <code>cargo check</code>。</li>
+                        <li><strong>每個 Spec 單獨 commit</strong>（規格自訂限制），E 依規格併入 B。</li>
+                        <li>每個 commit 前的閘門：<code>bun test</code> ＋ <code>tsc --noEmit</code> ＋ <code>cargo test</code> ＋ <code>cargo fmt --check</code> ＋ <code>cargo clippy -D warnings</code> 全綠。</li>
+                    </ul>
+                </div>
+            </details>
+            <details>
+                <summary>關鍵設計決策（含與規格字面的差異）</summary>
+                <div class="details-body">
+                    <ul>
+                        <li><strong>replay 與訂閱的競態</strong>：TerminalTab 在 xterm 載入完成後的同一個同步區塊內「write(replay) → subscribe」，而 listener 的「append buffer → publish」也是同步——JS 事件迴圈保證無交錯，所以載入期間到達的 chunk 恰好寫一次（有專屬測試）。</li>
+                        <li><strong>SSH 管線一併遷移</strong>：Spec B 變更點 3 要求刪除 TerminalTab 的 clear/重寫邏輯，而該元件被 SSH surface 共用，因此 <code>sshOutputBySessionId</code> 系列也移入共用 replay buffer（sessionId namespace 不相撞）。</li>
+                        <li><strong>Spec D 與規格字面的差異</strong>：規格寫「spawn 時改用 fitAddon.proposeDimensions()」，但 spawn 發生在 TerminalTab 掛載前、當下沒有 fitAddon 可量。等價實作：spawn 仍以 24×80 建 PTY，掛載完成的同一流程立即以 proposeDimensions 實際值呼叫 resize——驗收行為（tput cols 隨視窗、vim 滿版）相同。</li>
+                        <li><strong>Spec A 的分層</strong>：信任檢查（µs 級記憶體查詢）留在 async fn 本體、await 之前；只有重活進 spawn_blocking。<code>LspState</code>/<code>TaskState</code> 改為 Arc-clonable 讓 closure 取得 'static 擁有權（規格建議的模式）。AppState 的 14 個 lsp 委派方法因此失去生產呼叫者而刪除，其信任測試改測存留的 seam（<code>lsp_workspace_identity</code>、<code>normalize_lsp_document_path</code>、LspState 行為）。</li>
+                        <li><strong>規格的 list_* 保留同步</strong>：含 <code>git_list_branches</code>（規格明文「list_*／settings 可保留同步」）。<code>docs_preview</code>/<code>create_text_file</code> 等規格未點名者不動。</li>
+                        <li><strong>agent context 的 terminal 快照</strong>：改讀 replay buffer 後，輸出 chunk 不再觸發 context useMemo 重算（這本來就是 Spec B 的 render 隔離目標）；attach 時拿到的是最近一次 render 的快照，語意差異極小且方向一致。</li>
+                        <li><strong>LSP 互動 timeout 取 2s</strong>（規格範圍 1–3s），以 <code>request_timeout_for_method</code> 純函式實作——request 呼叫點不變、可直接單元測試。</li>
+                    </ul>
+                </div>
+            </details>
+            <details>
+                <summary>Spec C 的根因實證（模擬打包環境）</summary>
+                <div class="details-body">
+                    <div class="diff">
+                        <div class="diff-line context"><span class="line-content"># 模擬 launchd 基底環境（PATH=/usr/bin:/bin:/usr/sbin:/sbin）</span></div>
+                        <div class="diff-line del"><span class="line-content">non-login zsh → echo $PATH 含 homebrew 條目數：0（brew 指令全部 not found）</span></div>
+                        <div class="diff-line add"><span class="line-content">zsh -l      → echo $PATH 含 homebrew 條目數：2（/opt/homebrew/bin + sbin）</span></div>
+                        <div class="diff-line del"><span class="line-content">env -i zsh → TERM=[]（打包後無 TERM ⇒ 無色彩）</span></div>
+                        <div class="diff-line add"><span class="line-content">spawn env  → TERM=xterm-256color + COLORTERM=truecolor（apply_terminal_session_env）</span></div>
+                    </div>
+                    <p style="font-size:0.85rem;color:var(--color-text-secondary)">另外確認 SSH terminal 的 <code>request_pty</code> 既有實作已傳 <code>xterm-256color</code>（remote.rs:996），規格「SSH 同步比照」的 TERM 部分原本就滿足。</p>
+                </div>
+            </details>
+        </section>
+
+        <section>
+            <h2>驗證結果</h2>
+            <div class="verify-card"><strong>已實測通過：</strong><code>bun test</code> 431 pass / 0 fail（1218 expect）&middot; <code>cargo test</code> 324 passed / 0 failed / 3 ignored &middot; <code>tsc --noEmit</code> 乾淨 &middot; <code>cargo fmt --check</code> PASS &middot; <code>cargo clippy --all-targets -D warnings</code> PASS &middot; <code>bun run build</code> PASS &middot; <code>bun run tauri build --debug</code> 產出完整 <code>Yuuzu-IDE.app</code>（Mach-O arm64）。</div>
+            <div class="pending-card"><strong>DMG 步驟失敗</strong>：.app bundle 成功後 <code>bundle_dmg.sh</code> 失敗——node 13 時同指令成功，本次在受限 shell 環境執行 hdiutil 類操作受阻的可能性最高；.app 本體完整可測。如需 DMG 請在一般終端重跑 <code>bun run tauri build --debug</code>。</div>
+            <div class="pending-card"><strong>待手動驗收（需開啟 app 互動）：</strong>
+                ① Spec B：terminal 跑 <code>seq 1 2000000</code> 期間其他面板可點擊、結束後 prompt 立即可輸入、超過 120k 無 clear 閃爍；
+                ② Spec C：IDE terminal 內 <code>echo $PATH</code> 含 /opt/homebrew/bin、<code>brew --version</code> 可執行、<code>echo $TERM</code> 為 xterm-256color、<code>ls -G</code> 有色——<strong>請用 Finder 啟動打包後的 .app 重測</strong>（dev 模式通過不算數）；
+                ③ Spec D：拖拉視窗後 <code>tput cols</code> 變化、vim 滿版、輸入 &gt;80 字元不錯亂；
+                ④ Spec A：<code>kill -STOP &lt;lsp-pid&gt;</code> 後 hover/打字不凍結（最長 2s 等待）、git fetch 期間 UI 可互動；
+                ⑤ Spec E：vim/less alternate screen 進出正常。</div>
+        </section>
+    </main>
+</div>
+</body>
+</html>

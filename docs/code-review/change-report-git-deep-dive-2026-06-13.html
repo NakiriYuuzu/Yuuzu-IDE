@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Change Report: Git Deep Dive（Node 10.5）</title>
+<style>
+:root {
+    --font-sans: system-ui, -apple-system, "PingFang TC", sans-serif;
+    --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
+    --color-bg: #faf9f7;
+    --color-surface: #ffffff;
+    --color-text: #1a1a1a;
+    --color-text-secondary: #6b7280;
+    --color-border: #e5e5e5;
+    --color-accent: #c45d3e;
+    --color-accent-light: #f5ebe7;
+    --color-success: #22c55e;
+    --color-warning: #f59e0b;
+    --color-error: #ef4444;
+    --color-info: #3b82f6;
+    --color-diff-add-bg: #dcfce7;
+    --color-diff-add-line: #bbf7d0;
+    --color-diff-del-bg: #fee2e2;
+    --color-diff-del-line: #fecaca;
+    --radius-md: 10px;
+    --radius-lg: 16px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--font-sans); background: var(--color-bg); color: var(--color-text); line-height: 1.6; }
+
+.layout { display: grid; grid-template-columns: 260px 1fr; min-height: 100vh; }
+@media (max-width: 768px) { .layout { grid-template-columns: 1fr; } .sidebar { display: none; } }
+
+.sidebar { background: var(--color-surface); border-right: 1px solid var(--color-border); padding: 1.5rem; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+.sidebar h3 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-secondary); margin: 1rem 0 0.75rem; }
+.sidebar h3:first-child { margin-top: 0; }
+.file-list { list-style: none; }
+.file-list li { margin-bottom: 0.25rem; }
+.file-list a { color: var(--color-text); text-decoration: none; font-size: 0.8rem; font-family: var(--font-mono); padding: 0.3rem 0.5rem; display: flex; align-items: center; gap: 0.5rem; border-radius: 6px; transition: background 0.15s; }
+.file-list a:hover { background: var(--color-bg); }
+.file-list .indicator { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.file-list .indicator.added { background: var(--color-success); }
+.file-list .indicator.modified { background: var(--color-warning); }
+.file-list .indicator.deleted { background: var(--color-error); }
+
+.main { padding: 2rem; max-width: 1000px; }
+header { margin-bottom: 2rem; }
+header .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-accent); font-weight: 600; }
+header h1 { font-size: 1.6rem; margin: 0.25rem 0; }
+header .meta { color: var(--color-text-secondary); font-size: 0.9rem; }
+
+.stats { display: flex; gap: 1rem; margin: 1.5rem 0; flex-wrap: wrap; }
+.stat { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 0.9rem 1.2rem; min-width: 110px; }
+.stat .value { font-size: 1.4rem; font-weight: 700; }
+.stat .label { font-size: 0.78rem; color: var(--color-text-secondary); }
+
+.summary { background: var(--color-surface); border-radius: var(--radius-lg); padding: 1.5rem; margin-bottom: 2rem; border: 1px solid var(--color-border); }
+.summary h2 { font-size: 1.1rem; margin-bottom: 0.75rem; }
+.summary ul { padding-left: 1.25rem; }
+.summary li { margin-bottom: 0.45rem; font-size: 0.95rem; }
+
+table.filetable { width: 100%; border-collapse: collapse; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); overflow: hidden; font-size: 0.85rem; margin-bottom: 2rem; }
+table.filetable th { text-align: left; padding: 0.6rem 0.9rem; background: var(--color-accent-light); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-accent); }
+table.filetable td { padding: 0.55rem 0.9rem; border-top: 1px solid var(--color-border); vertical-align: top; }
+table.filetable td.mono { font-family: var(--font-mono); font-size: 0.78rem; white-space: nowrap; }
+.tool-badge { display: inline-block; font-size: 0.7rem; font-weight: 600; padding: 0.1rem 0.5rem; border-radius: 999px; background: #e0e7ff; color: #3730a3; }
+.tool-badge.tdd { background: #dcfce7; color: #166534; }
+.tool-badge.script { background: #fef3c7; color: #92400e; }
+
+.file-section { margin-bottom: 2rem; }
+.file-header { display: flex; align-items: center; gap: 0.75rem; padding: 0.7rem 1rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md) var(--radius-md) 0 0; font-family: var(--font-mono); font-size: 0.83rem; }
+.indicator { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.indicator.added { background: var(--color-success); }
+.indicator.modified { background: var(--color-warning); }
+.indicator.deleted { background: var(--color-error); }
+
+.diff { border: 1px solid var(--color-border); border-top: none; border-radius: 0 0 var(--radius-md) var(--radius-md); overflow: hidden; font-family: var(--font-mono); font-size: 0.76rem; line-height: 1.7; }
+.diff-line { display: flex; }
+.diff-line .line-num { width: 46px; text-align: right; padding: 0 0.6rem; color: var(--color-text-secondary); user-select: none; flex-shrink: 0; }
+.diff-line .line-content { flex: 1; padding: 0 1rem; white-space: pre-wrap; word-break: break-all; }
+.diff-line.add { background: var(--color-diff-add-bg); }
+.diff-line.add .line-num { background: var(--color-diff-add-line); }
+.diff-line.del { background: var(--color-diff-del-bg); }
+.diff-line.del .line-num { background: var(--color-diff-del-line); }
+.diff-line.context { background: var(--color-surface); }
+
+.annotation { margin: 0.75rem 0 0.75rem 46px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 0.7rem 1rem; font-family: var(--font-sans); font-size: 0.85rem; display: flex; gap: 0.75rem; align-items: flex-start; }
+.severity { font-size: 0.68rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 999px; text-transform: uppercase; flex-shrink: 0; }
+.severity.critical { background: #fee2e2; color: #991b1b; }
+.severity.warning { background: #fef3c7; color: #92400e; }
+.severity.suggestion { background: #e0e7ff; color: #3730a3; }
+.severity.praise { background: #dcfce7; color: #166534; }
+
+details { margin-bottom: 1rem; }
+details summary { cursor: pointer; font-weight: 600; font-size: 0.95rem; padding: 0.6rem 0.9rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
+details[open] summary { border-radius: var(--radius-md) var(--radius-md) 0 0; }
+details .details-content { border: 1px solid var(--color-border); border-top: none; border-radius: 0 0 var(--radius-md) var(--radius-md); padding: 1rem 1.2rem; background: var(--color-surface); font-size: 0.9rem; }
+
+.diagram-container { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 1.5rem; overflow-x: auto; margin-bottom: 2rem; }
+
+.findings { margin-top: 2rem; }
+.findings h2 { margin-bottom: 1rem; }
+.finding-card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 0.75rem; display: flex; gap: 0.75rem; }
+
+h2.section { font-size: 1.2rem; margin: 2rem 0 1rem; }
+
+@media print { .sidebar { display: none; } .layout { grid-template-columns: 1fr; } details { page-break-inside: avoid; } }
+</style>
+</head>
+<body>
+<div class="layout">
+    <nav class="sidebar">
+        <h3>Rust 後端</h3>
+        <ul class="file-list">
+            <li><a href="#f-gitlog"><span class="indicator added"></span>src-tauri/src/git_log.rs</a></li>
+            <li><a href="#f-git"><span class="indicator modified"></span>src-tauri/src/git.rs</a></li>
+            <li><a href="#f-commands"><span class="indicator modified"></span>src-tauri/src/commands.rs</a></li>
+            <li><a href="#f-lib"><span class="indicator modified"></span>src-tauri/src/lib.rs</a></li>
+            <li><a href="#f-cargo"><span class="indicator modified"></span>src-tauri/Cargo.toml</a></li>
+        </ul>
+        <h3>前端 git feature</h3>
+        <ul class="file-list">
+            <li><a href="#f-logmodel"><span class="indicator added"></span>git-log-model.ts(+test)</a></li>
+            <li><a href="#f-logview"><span class="indicator added"></span>GitLogView.tsx(+test)</a></li>
+            <li><a href="#f-diffmodel"><span class="indicator added"></span>git-diff-model.ts(+test)</a></li>
+            <li><a href="#f-diffview"><span class="indicator modified"></span>GitDiffView.tsx(+test)</a></li>
+            <li><a href="#f-conflict"><span class="indicator added"></span>GitConflictView.tsx(+test)</a></li>
+            <li><a href="#f-branchpopup"><span class="indicator added"></span>GitBranchPopup.tsx(+test)</a></li>
+            <li><a href="#f-blame"><span class="indicator added"></span>GitBlameGutter.tsx(+test)</a></li>
+            <li><a href="#f-gitmodel"><span class="indicator modified"></span>git-model.ts(+test)</a></li>
+            <li><a href="#f-gitapi"><span class="indicator modified"></span>git-api.ts</a></li>
+            <li><a href="#f-gitpanel"><span class="indicator modified"></span>GitPanel.tsx</a></li>
+            <li><a href="#f-graphview"><span class="indicator deleted"></span>GitGraphView.tsx</a></li>
+        </ul>
+        <h3>App shell</h3>
+        <ul class="file-list">
+            <li><a href="#f-appshell"><span class="indicator modified"></span>AppShell.tsx(+contract)</a></li>
+            <li><a href="#f-viewstate"><span class="indicator modified"></span>workspace-view-state.ts</a></li>
+            <li><a href="#f-palette"><span class="indicator modified"></span>command-palette/registry</a></li>
+            <li><a href="#f-css"><span class="indicator modified"></span>index.css</a></li>
+        </ul>
+        <h3>Docs</h3>
+        <ul class="file-list">
+            <li><a href="#f-docs"><span class="indicator added"></span>git-deep-dive-results.md</a></li>
+            <li><a href="#f-docs"><span class="indicator modified"></span>progress.md / roadmap.md</a></li>
+        </ul>
+    </nav>
+
+    <main class="main">
+        <header>
+            <div class="label">Change Report · Co-Learning</div>
+            <h1>Git Deep Dive（Node 10.5）— JetBrains 級 git 工具</h1>
+            <p class="meta">yuuzu · main · 2026-06-13 · commits <code>705d5fa…fd46195</code>（10 個 TDD task commits）</p>
+        </header>
+
+        <div class="stats">
+            <div class="stat"><div class="value" style="color:var(--color-success)">+7,970</div><div class="label">新增行</div></div>
+            <div class="stat"><div class="value" style="color:var(--color-error)">-269</div><div class="label">刪除行</div></div>
+            <div class="stat"><div class="value">36</div><div class="label">變更檔案</div></div>
+            <div class="stat"><div class="value">24</div><div class="label">新 Tauri commands</div></div>
+            <div class="stat"><div class="value">476 / 344</div><div class="label">前端 / Rust tests 全綠</div></div>
+        </div>
+
+        <div class="summary">
+            <h2>What changed — 做了什麼</h2>
+            <p>依照 <code>docs/superpowers/plans/2026-06-11-git-deep-dive.md</code> 十個 task 全數完成：git 工具從 Node 4 的基本 status/stage/commit 升級到 JetBrains 等級。Rust 端新增 24 個 async commands（DAG log、commit detail/actions、export、hunk/line staging、branches-full、stash 套件、三方 conflict、blame、file history）；前端新增 GitLogView（真實 DAG）、升級 GitDiffView（side-by-side + word marks + partial staging）、新增 GitConflictView / GitBranchPopup / GitBlameGutter，並全部接進 AppShell（含 palette 命令、status bar branch chip、typed confirmation 擴充）。</p>
+            <h3 style="font-size:0.9rem;margin-top:1rem;">驗收與量測</h3>
+            <ul>
+                <li>完整閘門全綠：bun test <strong>476 pass</strong> · cargo test <strong>344 pass</strong> · tsc / fmt / clippy 乾淨 · <code>tauri build --debug</code> 產出 .app 與 DMG。</li>
+                <li>量測達標：<code>git_log_page</code> 200 rows <strong>94ms</strong>（目標 150）· <code>git_blame_file</code> AppShell.tsx <strong>252ms</strong>（目標 400）· export <strong>136ms</strong>。</li>
+                <li>所有破壞性操作維持 typed confirmation：新增 <code>REVERT &lt;short&gt;</code>、<code>RESET [HARD] &lt;short&gt;</code>、<code>DROP stash@{n}</code>、<code>DELETE &lt;branch&gt;</code>、<code>ACCEPT OURS/THEIRS</code>。</li>
+            </ul>
+        </div>
+
+        <h2 class="section" id="how">How — 怎麼做的</h2>
+        <table class="filetable">
+            <thead><tr><th>檔案</th><th>變更</th><th>工具</th><th>原因</th></tr></thead>
+            <tbody>
+                <tr id="f-gitlog"><td class="mono">src-tauri/src/git_log.rs</td><td>新檔（~1,100 行）：lane assignment（fork/join/stop、12-lane clamp）、log 分頁、commit detail、export（folder/zip + zip-slip guard）、cherry-pick/revert/reset、file history</td><td><span class="tool-badge tdd">TDD</span> <span class="tool-badge">Write/Edit</span></td><td>log 拓撲與 export 邏輯獨立成檔，git.rs 維持 status/staging/diff 焦點（計畫指定）</td></tr>
+                <tr id="f-git"><td class="mono">src-tauri/src/git.rs</td><td>+~900 行：structured hunks + word ranges、patch 重建 staging、branches-full、stash 套件、conflict 三方、porcelain blame</td><td><span class="tool-badge tdd">TDD</span> <span class="tool-badge">Edit</span></td><td>重用既有 helpers（normalize、confirmation、bounded payload 紀律）</td></tr>
+                <tr id="f-commands"><td class="mono">src-tauri/src/commands.rs</td><td>24 個新 async command wrappers</td><td><span class="tool-badge">Edit</span></td><td>沿用昨日 Spec A 確立的 <code>spawn_blocking</code> 模式（信任檢查同步在前）——計畫原文是同步 fn，照「周圍風格」改 async</td></tr>
+                <tr id="f-lib"><td class="mono">src-tauri/src/lib.rs</td><td>註冊 git_log 模組與 24 個 commands</td><td><span class="tool-badge">Edit</span></td><td>command 註冊入口</td></tr>
+                <tr id="f-cargo"><td class="mono">src-tauri/Cargo.toml</td><td>新增 <code>zip@6.0.0</code>（deflate only）；<code>tempfile</code> 升為正式依賴</td><td><span class="tool-badge">Bash cargo add</span></td><td>snapshot 解壓與 export 暫存目錄（生產路徑需要 tempfile）</td></tr>
+                <tr id="f-logmodel"><td class="mono">git-log-model.ts (+test)</td><td>純 reducer：filters/分頁/detail cache/export dialog + <code>edgePath</code> SVG helper</td><td><span class="tool-badge tdd">TDD</span> <span class="tool-badge">Write</span></td><td>React 只持有 render 狀態，rows 帶後端算好的 lanes/edges</td></tr>
+                <tr id="f-logview"><td class="mono">GitLogView.tsx (+test)</td><td>filter bar、DAG 表格（SVG edges）、detail 側欄、context menu hook、export dialog</td><td><span class="tool-badge tdd">TDD</span> <span class="tool-badge">Write</span></td><td>取代 ASCII 解析的 GitGraphView，視覺語彙沿用設計文件 class</td></tr>
+                <tr id="f-diffmodel"><td class="mono">git-diff-model.ts (+test)</td><td>hunk 型別、side-by-side 對齊、hunk/line 選擇狀態、<code>selectionsForApi</code>、<code>hunksToUnifiedText</code></td><td><span class="tool-badge tdd">TDD</span> <span class="tool-badge">Write</span></td><td>選擇狀態序列化成 Rust <code>HunkSelection</code> 同形 payload</td></tr>
+                <tr id="f-diffview"><td class="mono">GitDiffView.tsx (+test)</td><td>重寫：unified/side-by-side segmented、word-level <code>&lt;mark&gt;</code>、hunkbar（stage/unstage/revert）、行級 checkbox</td><td><span class="tool-badge tdd">TDD</span> <span class="tool-badge">Write</span></td><td>消費 structured hunks 取代 raw 字串渲染</td></tr>
+                <tr id="f-conflict"><td class="mono">GitConflictView.tsx (+test)</td><td>三欄 resolver：per-block accept、剩餘計數、Mark Resolved 閘門</td><td><span class="tool-badge tdd">TDD</span> <span class="tool-badge">Write</span></td><td>逐 block 在前端組最終文字，寫回後 stage（whole-side 走 Rust + confirmation）</td></tr>
+                <tr id="f-branchpopup"><td class="mono">GitBranchPopup.tsx (+test)</td><td>搜尋、Local/Remote 群組、favorites、merge/rename/delete/rebase actions、stash 區</td><td><span class="tool-badge tdd">TDD</span> <span class="tool-badge">Write</span></td><td>status bar 一鍵開啟的分支總控</td></tr>
+                <tr id="f-blame"><td class="mono">GitBlameGutter.tsx (+test)</td><td>per-segment 高度列、hover/click 回呼</td><td><span class="tool-badge tdd">TDD</span> <span class="tool-badge">Write</span></td><td>annotate 欄位 click-through 到 log</td></tr>
+                <tr id="f-gitmodel"><td class="mono">git-model.ts (+test)</td><td>+185 行：branchesFull/stashes/blame/favorites/conflict reducers、<code>resolveConflictText</code>、confirmation 五種新 action</td><td><span class="tool-badge tdd">TDD</span> <span class="tool-badge">Edit</span></td><td>diffByKey 型別由 GitDiff(raw) 遷移為 GitDiffHunks</td></tr>
+                <tr id="f-gitapi"><td class="mono">git-api.ts</td><td>+26 個 typed wrappers</td><td><span class="tool-badge">Edit</span></td><td>每個 3 行 <code>call("git_…")</code>，型別對齊 Rust serde</td></tr>
+                <tr id="f-gitpanel"><td class="mono">GitPanel.tsx</td><td>按鈕 View graph → View log</td><td><span class="tool-badge">Edit</span></td><td>入口指向新 surface</td></tr>
+                <tr id="f-graphview"><td class="mono">GitGraphView.tsx</td><td><strong>刪除</strong></td><td><span class="tool-badge">Bash rm</span></td><td>被 GitLogView 取代（計畫指定；測試由 GitLogView.test 接替）</td></tr>
+                <tr id="f-appshell"><td class="mono">AppShell.tsx (+contract test)</td><td>log/conflict surfaces、context menu、branch popup、blame gutter、export browse（dialog plugin）、name dialog、palette dispatch、conflict 自動分流</td><td><span class="tool-badge script">Python 精確替換</span> <span class="tool-badge tdd">TDD</span></td><td>9,800 行大檔以「每處替換斷言出現次數」的腳本手法，行為由 87 個 contract tests 鎖定</td></tr>
+                <tr id="f-viewstate"><td class="mono">workspace-view-state.ts (+test)</td><td>surface <code>git-graph</code>→<code>git-log</code>、新增 <code>git-conflict</code>、<code>gitLog</code> slice + <code>updateGitLog</code></td><td><span class="tool-badge tdd">TDD</span> <span class="tool-badge">Edit</span></td><td>log filter / blame 開關 / favorites 全部 per-workspace</td></tr>
+                <tr id="f-palette"><td class="mono">command-registry / palette-model (+test)</td><td>Git 群組五個命令；<code>git-rebase-main</code> dispatch 移除、改 <code>git-rebase-branch</code> 走 branch popup 選 target</td><td><span class="tool-badge tdd">TDD</span> <span class="tool-badge">Edit</span></td><td>修掉 hardcoded rebase 目標（audit 指出的缺口）</td></tr>
+                <tr id="f-css"><td class="mono">index.css</td><td>+899 行：log/dag lanes 六色環、detail pane、hunkbar/sbs、conflict3、branch popup、stash、blame、export/menu/name dialogs</td><td><span class="tool-badge">Edit</span></td><td>全部用既有 design tokens（<code>--yuzu</code>、<code>--line</code>、<code>--chrome-2</code>…），對齊 <code>ide.css</code> 視覺語彙</td></tr>
+                <tr id="f-docs"><td class="mono">docs/architecture + roadmap.md</td><td>新增 git-deep-dive-results.md；progress 加 2026-06-13 區；roadmap 插入 Node 10.5 + 補 Node 4/6/7 Status 行</td><td><span class="tool-badge">Write/Edit</span></td><td>結案證據 + 修正 audit 發現的 roadmap 缺漏</td></tr>
+            </tbody>
+        </table>
+
+        <h2 class="section" id="why">Why — 關鍵設計決策</h2>
+        <details open>
+            <summary>計畫與現狀的衝突：command wrappers 全部改 async</summary>
+            <div class="details-content">計畫寫於 2026-06-11，範例是同步 <code>pub fn</code>；但 2026-06-12 的 Spec A（<code>89983ba</code>）已把所有重 IO command 遷移為 <code>async fn</code> + <code>spawn_blocking</code>。計畫同時要求「follow the exact wrapper style of the surrounding git_* commands」——周圍現在都是 async，所以 24 個新 command 全部照現行模式寫（信任檢查留在 await 前），這正是計畫的本意而非偏離。</div>
+        </details>
+        <details>
+            <summary>實證驅動的計畫修正（每一項都先用 live probe 驗證再寫碼）</summary>
+            <div class="details-content">
+                <ul style="padding-left:1.2rem">
+                    <li><strong>merge commit 的 diff-tree 輸出為空</strong>：plain <code>diff-tree</code> 對 merge 不輸出，detail/export 會拿到空清單。改用 <code>-m --first-parent -M</code>（同時啟用 rename 偵測），對普通 commit 行為不變。</li>
+                    <li><strong><code>%1f</code> vs <code>%x1f</code></strong>：<code>for-each-ref</code> 接受 <code>%1f</code> hex literal，但 <code>stash list --format</code> 走 log pretty 體系，<code>%1f</code> 會輸出字面文字——計畫此處有 bug，實作用 <code>%x1f</code>。</li>
+                    <li><strong>word range 期望值數錯</strong>：計畫斷言 <code>[[31,53]]</code>，手算（Python 驗證）正確值是 <code>[[30,51]]</code>——共同前綴 30 字元、後綴 2。標記區恰為 <code>"SELECT * FROM users"</code> ↔ <code>USERS_PAGE_SQL, [PAGE_SIZE]</code>，語意正確。</li>
+                    <li><strong>export 路徑防護</strong>：計畫的 <code>target.starts_with(dest)</code> 不解析 <code>..</code> 組件（<code>dest/../x</code> 字面上仍以 dest 開頭），改為先過 <code>normalize_repo_relative_paths</code>（拒絕逃逸）再 join，starts_with 留作第二道防線；zip 解壓走 zip crate 的 <code>enclosed_name()</code> zip-slip guard。</li>
+                    <li><strong>confirmation short hash 對齊</strong>：Rust 端用 <code>rev-parse --short</code> 取得期望文字，與前端 log 的 <code>%h</code> 一致，避免長度不一造成 confirmation 永遠不符。</li>
+                    <li><strong>remote branch 偵測</strong>：放棄計畫的名稱啟發式（自己標註的已知風險），改跑兩次 <code>for-each-ref</code>（refs/heads / refs/remotes 各一次）明確標記。</li>
+                </ul>
+            </div>
+        </details>
+        <details>
+            <summary>Task 8 範圍擴大：AppShell diff 資料流一併遷移</summary>
+            <div class="details-content">計畫把 AppShell 接線排在 Task 10，但 Task 8 改了 GitDiffView 的 props 後，每個 task 的 <code>bun run build</code> 閘門要求全 repo 可編譯。最小正確解是在 Task 8 同步把 <code>diffByKey</code> 從 GitDiff(raw) 換成 GitDiffHunks、agent context 經 <code>hunksToUnifiedText</code> 重組 raw 文字——agent 餵入內容不變，render 換成結構化資料。</div>
+        </details>
+        <details>
+            <summary>Per-block conflict 解決的落地方式</summary>
+            <div class="details-content">Rust API 只有 whole-side accept（含 confirmation）與 mark-resolved。逐 block 的 ours/theirs 選擇在前端累積（<code>conflictChoices</code>），Mark Resolved 時由純函式 <code>resolveConflictText</code> 把 working copy 的 marker 區段換成所選行，經既有 <code>write_text_file</code> 寫回再 <code>git_mark_resolved</code> stage。沒選的 block 保留 markers，閘門（剩餘計數）擋住提早 resolve。</div>
+        </details>
+        <details>
+            <summary>「new branch / rename / stash branch」的命名輸入</summary>
+            <div class="details-content">Tauri webview 沒有 <code>window.prompt</code>；新增一個輕量 name dialog（沿用 git-confirm-dialog 樣式），三個流程共用。Context menu 的 New Branch from Here、popup 的 Rename、stash 的 Branch… 都走它。</div>
+        </details>
+
+        <h2 class="section" id="arch">Architecture — 變更如何嵌入整體結構</h2>
+        <div class="diagram-container">
+        <svg viewBox="0 0 920 560" xmlns="http://www.w3.org/2000/svg" font-family="system-ui" font-size="12">
+            <defs>
+                <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"/>
+                </marker>
+            </defs>
+
+            <!-- React 層 -->
+            <rect x="20" y="20" width="880" height="200" rx="12" fill="#f5ebe7" stroke="#c45d3e" stroke-width="1.5"/>
+            <text x="36" y="44" font-weight="700" fill="#c45d3e">React（只持有 render 與選擇狀態，payload 全部有界）</text>
+
+            <rect x="36" y="60" width="150" height="64" rx="8" fill="#ffffff" stroke="#e5e5e5"/>
+            <text x="46" y="84" font-weight="600">GitLogView ★</text>
+            <text x="46" y="102" fill="#6b7280" font-size="10.5">DAG/filters/detail/export</text>
+
+            <rect x="200" y="60" width="150" height="64" rx="8" fill="#ffffff" stroke="#e5e5e5"/>
+            <text x="210" y="84" font-weight="600">GitDiffView ↻</text>
+            <text x="210" y="102" fill="#6b7280" font-size="10.5">sbs/word marks/staging</text>
+
+            <rect x="364" y="60" width="150" height="64" rx="8" fill="#ffffff" stroke="#e5e5e5"/>
+            <text x="374" y="84" font-weight="600">GitConflictView ★</text>
+            <text x="374" y="102" fill="#6b7280" font-size="10.5">三欄 per-block resolver</text>
+
+            <rect x="528" y="60" width="170" height="64" rx="8" fill="#ffffff" stroke="#e5e5e5"/>
+            <text x="538" y="84" font-weight="600">GitBranchPopup ★</text>
+            <text x="538" y="102" fill="#6b7280" font-size="10.5">branches/stash/favorites</text>
+
+            <rect x="712" y="60" width="170" height="64" rx="8" fill="#ffffff" stroke="#e5e5e5"/>
+            <text x="722" y="84" font-weight="600">GitBlameGutter ★</text>
+            <text x="722" y="102" fill="#6b7280" font-size="10.5">segments → log 導航</text>
+
+            <rect x="36" y="140" width="846" height="64" rx="8" fill="#ffffff" stroke="#e5e5e5"/>
+            <text x="46" y="164" font-weight="600">AppShell ↻ — surfaces: git-log ★ / git-diff / git-conflict ★ · palette(Git 群組 ★) · status bar chip ★ · typed confirmations(+5 ★)</text>
+            <text x="46" y="184" fill="#6b7280" font-size="10.5">純 reducer 層：git-log-model ★ · git-diff-model ★ · git-model ↻（conflictChoices/resolveConflictText/favorites/blame）· workspace-view-state ↻（gitLog slice）</text>
+
+            <!-- IPC -->
+            <line x1="460" y1="220" x2="460" y2="262" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arrow)"/>
+            <text x="475" y="246" fill="#6b7280" font-size="11">git-api.ts（26 typed wrappers ★）→ Tauri IPC</text>
+
+            <!-- Rust 層 -->
+            <rect x="20" y="270" width="880" height="270" rx="12" fill="#eef2ff" stroke="#3b82f6" stroke-width="1.5"/>
+            <text x="36" y="294" font-weight="700" fill="#3730a3">Rust（擁有全部 git CLI 呼叫、解析、bounds、confirmation 守門）</text>
+
+            <rect x="36" y="310" width="846" height="50" rx="8" fill="#ffffff" stroke="#e5e5e5"/>
+            <text x="46" y="332" font-weight="600">commands.rs ↻ — 24 個 async commands ★（trusted_workspace_root 同步檢查 → spawn_blocking，沿用 Spec A 模式）</text>
+            <text x="46" y="350" fill="#6b7280" font-size="10.5">git_log_page / git_commit_detail / git_export_commit / git_diff_hunks / git_stage_hunks / git_branches_full / git_stash_* / git_conflict_file / git_blame_file / git_file_history …</text>
+
+            <rect x="36" y="376" width="412" height="148" rx="8" fill="#ffffff" stroke="#e5e5e5"/>
+            <text x="46" y="400" font-weight="600">git_log.rs ★（新模組，~1,100 行）</text>
+            <text x="46" y="420" fill="#6b7280" font-size="10.5">• assign_lanes：streaming fork/join/stop，12-lane clamp</text>
+            <text x="46" y="438" fill="#6b7280" font-size="10.5">• log_page：%x1f 欄位、prefix-recompute 分頁 ≤2,000 rows</text>
+            <text x="46" y="456" fill="#6b7280" font-size="10.5">• commit_detail：-m --first-parent -M（merge/rename 正確）</text>
+            <text x="46" y="474" fill="#6b7280" font-size="10.5">• export_commit：folder/zip · 2,000 檔 / 200MB bounds · zip-slip guard</text>
+            <text x="46" y="492" fill="#6b7280" font-size="10.5">• cherry_pick / revert(REVERT) / reset_to(RESET [HARD]) / file_history</text>
+            <text x="46" y="510" fill="#6b7280" font-size="10.5">• 量測：log 94ms · export 136ms（目標內）</text>
+
+            <rect x="470" y="376" width="412" height="148" rx="8" fill="#ffffff" stroke="#e5e5e5"/>
+            <text x="480" y="400" font-weight="600">git.rs ↻（+~900 行，重用既有 helpers）</text>
+            <text x="480" y="420" fill="#6b7280" font-size="10.5">• parse_unified_diff + word_diff_ranges（hunks ≤200，行 ≤8,000）</text>
+            <text x="480" y="438" fill="#6b7280" font-size="10.5">• build_selection_patch → git apply [--cached] [-R]（≤1MB）</text>
+            <text x="480" y="456" fill="#6b7280" font-size="10.5">• branches_full：兩次 for-each-ref（heads/remotes 分查）</text>
+            <text x="480" y="474" fill="#6b7280" font-size="10.5">• stash 套件（%x1f）· conflict :1/:2/:3 stages（≤512KB）</text>
+            <text x="480" y="492" fill="#6b7280" font-size="10.5">• porcelain blame → 合併 segments（≤20,000 行）</text>
+            <text x="480" y="510" fill="#6b7280" font-size="10.5">• 量測：blame AppShell.tsx 252ms（目標 400ms）</text>
+
+            <text x="36" y="556" fill="#6b7280" font-size="11">★ 新增　↻ 修改　—　所有破壞性操作經 require_confirmation；所有清單 payload 帶 truncated 旗標</text>
+        </svg>
+        </div>
+
+        <h2 class="section">代表性變更（節錄）</h2>
+        <div class="file-section">
+            <div class="file-header"><span class="indicator added"></span> src-tauri/src/git_log.rs — lane assignment 的 Through/Join 修正</div>
+            <div class="diff">
+                <div class="diff-line context"><span class="line-num">115</span><span class="line-content">// every other occupied lane passes through, except the ones joining below</span></div>
+                <div class="diff-line add"><span class="line-num">117</span><span class="line-content">if i != lane &amp;&amp; slot.is_some() &amp;&amp; slot.as_deref() != Some(c.hash.as_str()) {</span></div>
+                <div class="diff-line context"><span class="line-num">118</span><span class="line-content">    edges.push(GraphEdge { from_lane: li, to_lane: li, kind: EdgeKind::Through });</span></div>
+            </div>
+            <div class="annotation">
+                <span class="severity suggestion">計畫修正</span>
+                <div>計畫原版會讓「等待同一 hash 的 lane」同時拿到 Through 直線與 Join 曲線（同一格兩條邊互相矛盾）。加上排除條件後，join 的 lane 只畫曲線——分支點視覺正確。</div>
+            </div>
+        </div>
+        <div class="file-section">
+            <div class="file-header"><span class="indicator modified"></span> src-tauri/src/git.rs — stash list 格式（probe 驗證）</div>
+            <div class="diff">
+                <div class="diff-line del"><span class="line-num">—</span><span class="line-content">"--format=%gd%1f%at%1f%gs",   // 計畫原文：輸出字面 "%1f"</span></div>
+                <div class="diff-line add"><span class="line-num">1042</span><span class="line-content">// stash list uses log pretty-format syntax: hex literals are %x1f</span></div>
+                <div class="diff-line add"><span class="line-num">1043</span><span class="line-content">"--format=%gd%x1f%at%x1f%gs",</span></div>
+            </div>
+            <div class="annotation">
+                <span class="severity warning">Probe 發現</span>
+                <div>用 /tmp 測試 repo 實測：<code>%1f</code> 在 stash list 輸出字面文字 <code>%1f</code>（log pretty 體系），在 for-each-ref 則正確輸出 0x1F。兩個 format 字串因此採不同寫法，並留註解說明原因。</div>
+            </div>
+        </div>
+        <div class="file-section">
+            <div class="file-header"><span class="indicator modified"></span> src/app/AppShell.tsx — conflict 自動分流</div>
+            <div class="diff">
+                <div class="diff-line add"><span class="line-num">5530</span><span class="line-content">const change = status?.changes.find((entry) =&gt; entry.path === path);</span></div>
+                <div class="diff-line add"><span class="line-num">5531</span><span class="line-content">if (change?.kind === "conflict") {</span></div>
+                <div class="diff-line add"><span class="line-num">5532</span><span class="line-content">  openGitConflict(path);</span></div>
+                <div class="diff-line add"><span class="line-num">5533</span><span class="line-content">  return;</span></div>
+                <div class="diff-line add"><span class="line-num">5534</span><span class="line-content">}</span></div>
+            </div>
+            <div class="annotation">
+                <span class="severity praise">整合點</span>
+                <div>GitPanel 點擊衝突檔自動進三方 resolver 而非一般 diff——由 87 個 contract tests 之一鎖定（mock 衝突 status + git_conflict_file 回應，斷言 surface 與三欄渲染）。</div>
+            </div>
+        </div>
+
+        <div class="findings">
+            <h2>結案狀態與殘留風險</h2>
+            <div class="finding-card"><span class="severity praise">完成</span><div><strong>Node-Level Acceptance Checklist 全項通過</strong> — DAG/filters/分頁/detail、commit actions、export 防覆寫與 bounds、hunk/line staging、side-by-side word marks、conflict 逐 block、branch popup + stash、blame + file history、bounded payloads、完整閘門與量測。證據：<code>docs/architecture/git-deep-dive-results.md</code>。</div></div>
+            <div class="finding-card"><span class="severity suggestion">殘留</span><div><strong>Blame gutter 不隨 Monaco 捲動同步</strong> — 目前是編輯器左側固定 gutter（19px 行高假設），長檔案捲動後 segment 對位會偏移；inline decoration 整合留待後續。</div></div>
+            <div class="finding-card"><span class="severity suggestion">殘留</span><div><strong>奇異 conflict 樣式</strong> — diff3 base 區塊、巢狀 markers 不在 per-block 解析範圍；該情境退回 whole-side accept 或手動編輯。</div></div>
+            <div class="finding-card"><span class="severity suggestion">殘留</span><div><strong>Octopus merge 的 lane clamp</strong> — 超過 12 lanes 時 clamp 至 lane 11 並標 <code>lane_overflow</code>，不加寬圖形。</div></div>
+            <div class="finding-card"><span class="severity warning">待手動驗收</span><div><strong>需開 app 互動確認</strong> — ① log 開啟與右鍵選單操作 ② 真實衝突 repo 的逐 block 解決 ③ status bar branch popup 操作 ④ blame 對位 ⑤ export 到實際資料夾。打包後的 .app 與 DMG 已就緒。</div></div>
+        </div>
+    </main>
+</div>
+</body>
+</html>

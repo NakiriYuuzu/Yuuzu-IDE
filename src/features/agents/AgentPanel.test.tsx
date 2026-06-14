@@ -12,7 +12,7 @@ import {
   type AgentTranscriptEntry,
   type AgentViewState,
 } from "./agent-model";
-import { ensureTestDom } from "../../app/test-dom";
+import { ensureTestDom } from "../../test/test-dom";
 
 ensureTestDom();
 
@@ -32,10 +32,10 @@ function session(): AgentSession {
     prompt: "Plan Node 7",
     context_items: [
       {
-        id: "file:src/app/AppShell.tsx",
+        id: "file:src/v2/Workbench.tsx",
         kind: "file",
-        label: "src/app/AppShell.tsx",
-        path: "src/app/AppShell.tsx",
+        label: "src/v2/Workbench.tsx",
+        path: "src/v2/Workbench.tsx",
         content: "shell",
         truncated: false,
       },
@@ -46,7 +46,7 @@ function session(): AgentSession {
         session_id: "agent-1",
         kind: "diff",
         title: "Generated diff",
-        content: "diff --git a/src/app/AppShell.tsx b/src/app/AppShell.tsx",
+        content: "diff --git a/src/v2/Workbench.tsx b/src/v2/Workbench.tsx",
         status: "pending",
         approval_status: null,
         metadata: {},
@@ -129,14 +129,14 @@ describe("AgentPanel", () => {
       state: {
         ...createAgentState(),
         promptDraft: "Plan Node 7",
-        selectedContextIds: { "file:src/app/AppShell.tsx": true },
+        selectedContextIds: { "file:src/v2/Workbench.tsx": true },
       },
       availableContext: [
         {
-          id: "file:src/app/AppShell.tsx",
+          id: "file:src/v2/Workbench.tsx",
           kind: "file",
-          label: "src/app/AppShell.tsx",
-          path: "src/app/AppShell.tsx",
+          label: "src/v2/Workbench.tsx",
+          path: "src/v2/Workbench.tsx",
           content: "shell",
           truncated: false,
         },
@@ -155,7 +155,7 @@ describe("AgentPanel", () => {
       },
     });
 
-    expect(screen.getByText("src/app/AppShell.tsx")).toBeTruthy();
+    expect(screen.getByText("src/v2/Workbench.tsx")).toBeTruthy();
     expect(screen.getByText("file")).toBeTruthy();
     expect(screen.getByText(/terminal/iu)).toBeTruthy();
     expect(screen.getByText(/truncated/iu)).toBeTruthy();
@@ -198,10 +198,10 @@ describe("AgentPanel", () => {
       },
       availableContext: [
         {
-          id: "file:src/app/AppShell.tsx",
+          id: "file:src/v2/Workbench.tsx",
           kind: "file",
-          label: "src/app/AppShell.tsx",
-          path: "src/app/AppShell.tsx",
+          label: "src/v2/Workbench.tsx",
+          path: "src/v2/Workbench.tsx",
           content: "shell",
           truncated: false,
         },
@@ -213,10 +213,10 @@ describe("AgentPanel", () => {
     ["plan", "edit", "verify", "review", "report"].forEach((mode) => {
       fireEvent.click(screen.getByRole("button", { name: mode }));
     });
-    fireEvent.click(screen.getByLabelText("Use src/app/AppShell.tsx context"));
+    fireEvent.click(screen.getByLabelText("Use src/v2/Workbench.tsx context"));
     expect(modes).toEqual(["plan", "edit", "verify", "review", "report"]);
     expect(toggles).toEqual([
-      { id: "file:src/app/AppShell.tsx", selected: true },
+      { id: "file:src/v2/Workbench.tsx", selected: true },
     ]);
   });
 
@@ -298,7 +298,7 @@ describe("AgentPanel", () => {
     expect(screen.getByText("Run test command")).toBeTruthy();
     expect(screen.getByText("command: bun test")).toBeTruthy();
     expect(screen.getByText("145 pass")).toBeTruthy();
-    expect(screen.getByText("diff --git a/src/app/AppShell.tsx b/src/app/AppShell.tsx")).toBeTruthy();
+    expect(screen.getByText("diff --git a/src/v2/Workbench.tsx b/src/v2/Workbench.tsx")).toBeTruthy();
     expect(screen.getByText("passed")).toBeTruthy();
     expect(screen.getByText("1 passed | 0 failed")).toBeTruthy();
     fireEvent.click(screen.getByLabelText("Approve Apply edit"));

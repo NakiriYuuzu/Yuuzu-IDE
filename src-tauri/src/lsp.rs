@@ -1,7 +1,8 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    ffi::{OsStr, OsString},
     io::{ErrorKind, Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
         mpsc::{self, RecvTimeoutError, TryRecvError},
@@ -11,11 +12,16 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const DEFAULT_LSP_REQUEST_TIMEOUT_MS: u64 = 10_000;
 const INTERACTIVE_LSP_REQUEST_TIMEOUT_MS: u64 = 2_000;
+const MAX_WORKSPACE_LANGUAGE_SCAN_FILES: usize = 20_000;
+const LANGUAGE_SCAN_SKIP_DIRS: &[&str] = &[".git", "node_modules", "target"];
+const LSP_HOME_BIN_DIRS: &[&str] = &[".cargo/bin", ".bun/bin", ".local/bin"];
+const LSP_ABSOLUTE_BIN_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin"];
 
 fn request_timeout_for_method(method: &str) -> Duration {
     match method {
@@ -52,6 +58,70 @@ pub fn detect_language(path: &str) -> Option<LanguageId> {
         "py" | "pyw" | "pyi" => Some(LanguageId::Python),
         _ => None,
     }
+}
+
+fn detect_workspace_languages(workspace_root: &str) -> Vec<LanguageId> {
+    let root = Path::new(workspace_root);
+    if !root.is_dir() {
+        return Vec::new();
+    }
+
+    let mut builder = WalkBuilder::new(root);
+    builder
+        .hidden(false)
+        .parents(true)
+        .ignore(true)
+        .git_ignore(true);
+    builder.filter_entry(|entry| !should_skip_language_scan_entry(entry.path(), entry.file_type()));
+
+    let mut languages = HashSet::new();
+    let mut scanned_files = 0usize;
+
+    for entry in builder.build() {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        if !entry
+            .file_type()
+            .is_some_and(|file_type| file_type.is_file())
+        {
+            continue;
+        }
+
+        scanned_files = scanned_files.saturating_add(1);
+        if scanned_files > MAX_WORKSPACE_LANGUAGE_SCAN_FILES {
+            break;
+        }
+
+        let path = entry
+            .path()
+            .strip_prefix(root)
+            .ok()
+            .and_then(|path| path.to_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| entry.path().to_string_lossy().into_owned());
+
+        if let Some(language) = detect_language(&path) {
+            languages.insert(language);
+            if languages.len() == 4 {
+                break;
+            }
+        }
+    }
+
+    let mut languages = languages.into_iter().collect::<Vec<_>>();
+    languages.sort();
+    languages
+}
+
+fn should_skip_language_scan_entry(path: &Path, file_type: Option<std::fs::FileType>) -> bool {
+    if !file_type.is_some_and(|file_type| file_type.is_dir()) {
+        return false;
+    }
+
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| LANGUAGE_SCAN_SKIP_DIRS.contains(&name))
 }
 
 pub fn server_profile(language: LanguageId) -> LanguageServerProfile {
@@ -356,6 +426,61 @@ fn is_missing_command_error(message: &str) -> bool {
         || message.contains("not found")
 }
 
+fn lsp_child_path_env() -> OsString {
+    let path = std::env::var_os("PATH");
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    lsp_child_path_env_for(path.as_deref(), home.as_deref())
+}
+
+fn lsp_child_path_env_for(path_env: Option<&OsStr>, home: Option<&Path>) -> OsString {
+    let mut dirs = Vec::new();
+    let mut seen = HashSet::new();
+
+    if let Some(path_env) = path_env {
+        for dir in std::env::split_paths(path_env) {
+            push_lsp_path_dir(&mut dirs, &mut seen, dir);
+        }
+    }
+
+    if let Some(home) = home {
+        for relative in LSP_HOME_BIN_DIRS {
+            push_lsp_path_dir(&mut dirs, &mut seen, home.join(relative));
+        }
+    }
+
+    for absolute in LSP_ABSOLUTE_BIN_DIRS {
+        push_lsp_path_dir(&mut dirs, &mut seen, PathBuf::from(absolute));
+    }
+
+    std::env::join_paths(&dirs)
+        .unwrap_or_else(|_| path_env.map(OsStr::to_os_string).unwrap_or_default())
+}
+
+fn push_lsp_path_dir(dirs: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, dir: PathBuf) {
+    if dir.as_os_str().is_empty() {
+        return;
+    }
+    if seen.insert(dir.clone()) {
+        dirs.push(dir);
+    }
+}
+
+fn resolve_lsp_command_path_with_path(command: &str, path_env: &OsStr) -> PathBuf {
+    let command_path = PathBuf::from(command);
+    if command.contains('/') || command.contains('\\') {
+        return command_path;
+    }
+
+    for dir in std::env::split_paths(path_env) {
+        let candidate = dir.join(command);
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+
+    command_path
+}
+
 fn parse_diagnostic_range(value: &Value) -> Option<LspRange> {
     let start = value.get("start")?;
     let end = value.get("end")?;
@@ -489,8 +614,13 @@ struct StdioTransport {
 
 impl StdioTransport {
     fn new(profile: &LanguageServerProfile) -> Result<Self, String> {
-        let mut command = Command::new(&profile.command);
+        let path_env = lsp_child_path_env();
+        let mut command = Command::new(resolve_lsp_command_path_with_path(
+            &profile.command,
+            &path_env,
+        ));
         command.args(&profile.args);
+        command.env("PATH", path_env);
         command.stdin(Stdio::piped());
         command.stdout(Stdio::piped());
 
@@ -1896,12 +2026,78 @@ impl LanguageServerManager {
         workspace_id: &str,
         workspace_root: &str,
     ) -> Vec<LanguageServerStatus> {
-        self.statuses()
+        let mut statuses = self
+            .statuses()
             .into_iter()
             .filter(|status| {
                 status.workspace_id == workspace_id && status.workspace_root == workspace_root
             })
-            .collect()
+            .collect::<Vec<_>>();
+        let existing_languages = statuses
+            .iter()
+            .map(|status| status.language)
+            .collect::<HashSet<_>>();
+        let detected_languages = detect_workspace_languages(workspace_root);
+
+        if detected_languages
+            .iter()
+            .any(|language| !existing_languages.contains(language))
+        {
+            let Ok(state) = self.state.lock() else {
+                return statuses;
+            };
+            for language in detected_languages {
+                if existing_languages.contains(&language) {
+                    continue;
+                }
+                statuses.push(Self::inactive_workspace_status(
+                    &state,
+                    workspace_id,
+                    workspace_root,
+                    language,
+                ));
+            }
+        }
+
+        statuses.sort_by(|left, right| {
+            left.workspace_id
+                .cmp(&right.workspace_id)
+                .then_with(|| left.language.cmp(&right.language))
+                .then_with(|| left.workspace_root.cmp(&right.workspace_root))
+        });
+        statuses
+    }
+
+    fn inactive_workspace_status(
+        state: &LanguageServerManagerState,
+        workspace_id: &str,
+        workspace_root: &str,
+        language: LanguageId,
+    ) -> LanguageServerStatus {
+        let profile = state
+            .test_profiles
+            .get(&language)
+            .cloned()
+            .unwrap_or(TestServerProfile {
+                language,
+                available: false,
+            });
+
+        LanguageServerStatus {
+            workspace_id: workspace_id.to_string(),
+            workspace_root: workspace_root.to_string(),
+            language,
+            display_name: server_profile(language).display_name,
+            state: if profile.available {
+                ServerState::Stopped
+            } else {
+                ServerState::MissingCommand
+            },
+            pid: None,
+            memory_bytes: None,
+            open_documents: 0,
+            last_error: None,
+        }
     }
 
     pub fn document_status(
@@ -2350,6 +2546,38 @@ mod tests {
     }
 
     #[test]
+    fn lsp_command_path_env_adds_common_user_tool_dirs_for_gui_launches() {
+        let home = tempfile::tempdir().expect("home");
+        let cargo_bin = home.path().join(".cargo/bin");
+        let bun_bin = home.path().join(".bun/bin");
+        let local_bin = home.path().join(".local/bin");
+        std::fs::create_dir_all(&cargo_bin).expect("cargo bin");
+        std::fs::create_dir_all(&bun_bin).expect("bun bin");
+        std::fs::create_dir_all(&local_bin).expect("local bin");
+        std::fs::write(cargo_bin.join("rust-analyzer"), "").expect("rust analyzer");
+        std::fs::write(bun_bin.join("typescript-language-server"), "").expect("tsserver");
+        std::fs::write(local_bin.join("pylsp"), "").expect("pylsp");
+
+        let path_env = lsp_child_path_env_for(
+            Some(std::ffi::OsStr::new("/usr/bin:/bin")),
+            Some(home.path()),
+        );
+
+        assert_eq!(
+            resolve_lsp_command_path_with_path("rust-analyzer", &path_env),
+            cargo_bin.join("rust-analyzer")
+        );
+        assert_eq!(
+            resolve_lsp_command_path_with_path("typescript-language-server", &path_env),
+            bun_bin.join("typescript-language-server")
+        );
+        assert_eq!(
+            resolve_lsp_command_path_with_path("pylsp", &path_env),
+            local_bin.join("pylsp")
+        );
+    }
+
+    #[test]
     fn encodes_and_decodes_lsp_content_length_frames() {
         let payload = serde_json::json!({
             "jsonrpc": "2.0",
@@ -2549,6 +2777,51 @@ mod tests {
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].workspace_root, "/new-root");
         assert_eq!(statuses[0].language, LanguageId::TypeScript);
+    }
+
+    #[test]
+    fn workspace_statuses_include_detected_languages_even_when_only_one_server_was_opened() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        std::fs::create_dir_all(workspace.path().join("src")).expect("src dir");
+        std::fs::create_dir_all(workspace.path().join("scripts")).expect("scripts dir");
+        std::fs::write(workspace.path().join("src/main.rs"), "fn main() {}\n").expect("rust file");
+        std::fs::write(
+            workspace.path().join("src/app.ts"),
+            "export const app = true;\n",
+        )
+        .expect("typescript file");
+        std::fs::write(workspace.path().join("scripts/tool.py"), "print('ok')\n")
+            .expect("python file");
+
+        let manager = LanguageServerManager::default_for_tests();
+        manager
+            .open_document(
+                "workspace".to_string(),
+                workspace.path().to_string_lossy().into_owned(),
+                "scripts/tool.py".to_string(),
+                "print('ok')\n".to_string(),
+            )
+            .expect("open python document");
+
+        let statuses =
+            manager.status_for_workspace("workspace", &workspace.path().to_string_lossy());
+        let languages = statuses
+            .iter()
+            .map(|status| status.language)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            languages,
+            vec![LanguageId::Rust, LanguageId::TypeScript, LanguageId::Python],
+        );
+        assert_eq!(
+            statuses
+                .iter()
+                .find(|status| status.language == LanguageId::Python)
+                .expect("python status")
+                .open_documents,
+            1,
+        );
     }
 
     #[test]

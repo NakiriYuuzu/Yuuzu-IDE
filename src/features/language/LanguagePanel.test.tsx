@@ -8,7 +8,7 @@ import {
   replaceServerStatuses,
 } from "./language-model";
 import { LanguagePanel } from "./LanguagePanel";
-import { ensureTestDom } from "../../app/test-dom";
+import { ensureTestDom } from "../../test/test-dom";
 
 ensureTestDom();
 

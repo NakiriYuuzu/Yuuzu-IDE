@@ -1,7 +1,7 @@
 /// <reference types="bun-types" />
 
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { ensureTestDom } from "../../app/test-dom";
+import { ensureTestDom } from "../../test/test-dom";
 import { createDebugState, replaceDebugLaunchConfigs } from "./debug-model";
 
 ensureTestDom();

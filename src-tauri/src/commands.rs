@@ -1925,6 +1925,18 @@ pub async fn git_commit_file_diff(
 }
 
 #[tauri::command]
+pub async fn git_commit_file_worktree_diff(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    hash: String,
+    path: String,
+) -> Result<crate::git::GitDiffHunks, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    run_blocking(move || crate::git_log::commit_file_worktree_diff(&workspace_root, &hash, &path))
+        .await
+}
+
+#[tauri::command]
 pub async fn git_cherry_pick(
     state: State<'_, AppState>,
     workspace_root: String,
@@ -2392,6 +2404,17 @@ fn current_time_ms() -> Result<u64, String> {
         .as_millis() as u64)
 }
 
+fn lsp_language_from_command_arg(language: &str) -> Result<crate::lsp::LanguageId, String> {
+    match language.trim() {
+        "Rust" | "rust" => Ok(crate::lsp::LanguageId::Rust),
+        "TypeScript" | "typescript" | "ts" => Ok(crate::lsp::LanguageId::TypeScript),
+        "JavaScript" | "javascript" | "js" => Ok(crate::lsp::LanguageId::JavaScript),
+        "Python" | "python" | "py" => Ok(crate::lsp::LanguageId::Python),
+        value if value.is_empty() => Err("unsupported language server: empty".to_string()),
+        value => Err(format!("unsupported language server: {value}")),
+    }
+}
+
 #[tauri::command]
 pub async fn lsp_server_status(
     state: State<'_, AppState>,
@@ -2602,13 +2625,11 @@ pub async fn lsp_restart_server(
     lsp_state: State<'_, crate::lsp::LspState>,
     workspace_root: String,
     workspace_id: String,
-    path: String,
+    language: String,
 ) -> Result<crate::lsp::LanguageServerStatus, String> {
     let _ = workspace_id;
     let (workspace_id, workspace_root) = state.lsp_workspace_identity(&workspace_root)?;
-    let path = normalize_lsp_document_path(&path)?;
-    let language =
-        crate::lsp::detect_language(&path).ok_or_else(|| "unsupported file type".to_string())?;
+    let language = lsp_language_from_command_arg(&language)?;
     let lsp = lsp_state.inner().clone();
     run_blocking(move || lsp.restart_server(workspace_id, workspace_root, language)).await
 }
@@ -4218,6 +4239,21 @@ mod tests {
         }
 
         assert_flat_signature(super::lsp_open_document);
+    }
+
+    #[test]
+    fn lsp_restart_language_arg_accepts_known_languages_and_rejects_empty() {
+        assert_eq!(
+            lsp_language_from_command_arg("TypeScript").expect("typescript"),
+            crate::lsp::LanguageId::TypeScript
+        );
+        assert_eq!(
+            lsp_language_from_command_arg("Rust").expect("rust"),
+            crate::lsp::LanguageId::Rust
+        );
+        assert!(lsp_language_from_command_arg("")
+            .expect_err("empty language should be rejected")
+            .contains("unsupported language server"));
     }
 
     #[test]

@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>診斷報告：Yuuzu-IDE 卡頓與 Terminal 問題</title>
+<style>
+:root {
+    --font-sans: system-ui, -apple-system, "PingFang TC", sans-serif;
+    --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+    --color-bg: #faf9f7;
+    --color-surface: #ffffff;
+    --color-text: #1a1a1a;
+    --color-text-secondary: #6b7280;
+    --color-border: #e5e5e5;
+    --color-accent: #c45d3e;
+    --color-accent-light: #f5ebe7;
+    --color-success: #22c55e;
+    --color-warning: #f59e0b;
+    --color-error: #ef4444;
+    --color-info: #3b82f6;
+    --radius-md: 10px;
+    --radius-lg: 16px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--font-sans); background: var(--color-bg); color: var(--color-text); line-height: 1.6; padding: 2rem; }
+.container { max-width: 980px; margin: 0 auto; }
+header { margin-bottom: 2rem; }
+header .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-accent); font-weight: 600; }
+header h1 { font-size: 1.8rem; margin: 0.25rem 0; }
+header .meta { color: var(--color-text-secondary); font-size: 0.9rem; }
+
+.tldr { background: var(--color-accent-light); border-left: 4px solid var(--color-accent); border-radius: var(--radius-md); padding: 1.25rem; margin-bottom: 2rem; }
+.tldr h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-accent); margin-bottom: 0.5rem; }
+.tldr p + p { margin-top: 0.5rem; }
+
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+.metric-card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 1.25rem; }
+.metric-card .value { font-size: 1.8rem; font-weight: 700; }
+.metric-card .label { font-size: 0.8rem; color: var(--color-text-secondary); margin-top: 0.25rem; }
+.metric-card .note { font-size: 0.8rem; font-weight: 600; margin-top: 0.25rem; color: var(--color-error); }
+
+.tabs { display: flex; gap: 0; border-bottom: 2px solid var(--color-border); margin-bottom: 1.5rem; flex-wrap: wrap; }
+.tab { padding: 0.75rem 1.1rem; border: none; background: none; cursor: pointer; font-size: 0.9rem; font-weight: 600; color: var(--color-text-secondary); border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.2s; font-family: var(--font-sans); }
+.tab.active { color: var(--color-accent); border-bottom-color: var(--color-accent); }
+.tab:hover { color: var(--color-text); }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+section { margin-bottom: 2rem; }
+section h2 { font-size: 1.25rem; margin-bottom: 1rem; }
+section h3 { font-size: 1.05rem; margin: 1.25rem 0 0.5rem; }
+section p { margin-bottom: 0.6rem; }
+section ul, section ol { margin: 0.4rem 0 0.8rem 1.4rem; }
+section li { margin-bottom: 0.3rem; }
+
+.chart-container { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 1.5rem; margin-bottom: 1.5rem; overflow-x: auto; }
+.chart-container h3 { font-size: 0.9rem; margin: 0 0 1rem; color: var(--color-text-secondary); }
+
+details { margin-bottom: 1rem; }
+details summary { cursor: pointer; font-weight: 600; padding: 0.75rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
+details[open] summary { border-radius: var(--radius-md) var(--radius-md) 0 0; }
+details .details-body { padding: 1rem; border: 1px solid var(--color-border); border-top: none; border-radius: 0 0 var(--radius-md) var(--radius-md); background: var(--color-surface); }
+
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+th { text-align: left; padding: 0.6rem; border-bottom: 2px solid var(--color-border); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-secondary); }
+td { padding: 0.6rem; border-bottom: 1px solid var(--color-border); vertical-align: top; }
+code { font-family: var(--font-mono); font-size: 0.82em; background: #f3f1ee; border-radius: 4px; padding: 0.1em 0.35em; }
+pre { font-family: var(--font-mono); font-size: 0.8rem; background: #1c1f26; color: #e6edf3; border-radius: var(--radius-md); padding: 1rem; overflow-x: auto; margin: 0.6rem 0 1rem; line-height: 1.5; }
+pre code { background: none; padding: 0; color: inherit; }
+
+.badge { display: inline-block; font-size: 0.7rem; font-weight: 700; padding: 0.1rem 0.5rem; border-radius: 999px; vertical-align: middle; margin-right: 0.4rem; }
+.badge.p0 { background: #fee2e2; color: #b91c1c; }
+.badge.p1 { background: #fef3c7; color: #b45309; }
+.badge.p2 { background: #e0e7ff; color: #4338ca; }
+.badge.evidence { background: #dcfce7; color: #15803d; }
+.badge.inferred { background: #fef3c7; color: #b45309; }
+
+.spec-card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 1.25rem 1.5rem; margin-bottom: 1.25rem; box-shadow: var(--shadow-sm); }
+.spec-card h3 { margin: 0 0 0.5rem; }
+.spec-card .accept { background: #f0fdf4; border-left: 3px solid var(--color-success); padding: 0.6rem 0.9rem; border-radius: 0 var(--radius-md) var(--radius-md) 0; margin-top: 0.75rem; font-size: 0.88rem; }
+.spec-card .accept strong { color: #15803d; }
+
+.callout { border-left: 3px solid var(--color-info); background: #eff6ff; padding: 0.7rem 1rem; border-radius: 0 var(--radius-md) var(--radius-md) 0; margin: 0.75rem 0; font-size: 0.9rem; }
+.callout.warn { border-color: var(--color-warning); background: #fffbeb; }
+
+.actions { display: flex; gap: 1rem; margin-top: 2rem; flex-wrap: wrap; }
+.btn { padding: 0.6rem 1.25rem; border-radius: var(--radius-md); border: 2px solid var(--color-border); background: var(--color-surface); cursor: pointer; font-size: 0.9rem; font-weight: 600; font-family: var(--font-sans); }
+.btn:hover { border-color: var(--color-accent); }
+
+@media print { .tabs, .actions { display: none; } .tab-content { display: block !important; } body { padding: 0.5rem; } }
+@media (max-width: 768px) { body { padding: 1rem; } .metrics { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<div class="container">
+    <header>
+        <div class="label">Diagnosis Report + Fix Specs</div>
+        <h1>Yuuzu-IDE 卡頓與 Terminal 問題診斷</h1>
+        <p class="meta">逐層程式碼追查（無猜測、無 subagent）&middot; 2026-06-12 &middot; 範圍：src-tauri / src / tauri 2.11.2 / wry 0.55.1 / portable-pty 0.9.0 原始碼</p>
+    </header>
+
+    <div class="tldr">
+        <h3>TL;DR</h3>
+        <p><strong>症狀 1「容易卡著、等一陣子才恢復」</strong>：105 個 Tauri command 中 95 個是同步函式，而 macOS 上同步 command 會在 <strong>main thread（UI 執行緒）</strong>執行到完成 —— git fetch/pull/push 走網路、LSP 請求最長阻塞 <strong>10 秒</strong>、全 workspace 搜尋掃描，任何一個慢就凍結整個視窗。另外 terminal 輸出超過 120k 字元後，前端每收一個 4KB chunk 就觸發 <code>clear()</code> + 全量 120KB 重寫，輸出量大時 webview 直接飽和。</p>
+        <p><strong>症狀 2「terminal 沒顏色、吃不到指令」</strong>：spawn shell 時既不是 login shell、也沒設定 <code>TERM</code>。你的 Homebrew PATH 設定在 <code>~/.zprofile</code>（只有 login shell 會載入）→ brew 安裝的指令全部 command not found；打包後由 Finder 啟動時 <code>TERM</code> 為空 → 程式判定不支援色彩。PTY 還永遠固定 80×24、沒有 resize 通道。</p>
+    </div>
+
+    <div class="metrics">
+        <div class="metric-card"><div class="value">95 / 105</div><div class="label">同步 command 比例</div><div class="note">全部在 main thread 執行</div></div>
+        <div class="metric-card"><div class="value">10 秒</div><div class="label">LSP 請求阻塞上限</div><div class="note">hover/補全都會觸發</div></div>
+        <div class="metric-card"><div class="value">120,000</div><div class="label">terminal buffer 截斷閾值</div><div class="note">超過後每 chunk 全量重寫</div></div>
+        <div class="metric-card"><div class="value">80×24</div><div class="label">PTY 固定尺寸</div><div class="note">無 resize command</div></div>
+    </div>
+
+    <div class="tabs">
+        <button class="tab active" onclick="showTab('overview')">總覽</button>
+        <button class="tab" onclick="showTab('freeze')">問題 1：卡頓</button>
+        <button class="tab" onclick="showTab('terminal')">問題 2：Terminal</button>
+        <button class="tab" onclick="showTab('specs')">修正規格（Specs）</button>
+        <button class="tab" onclick="showTab('evidence')">證據總表</button>
+    </div>
+
+    <!-- ============ TAB: 總覽 ============ -->
+    <div id="overview" class="tab-content active">
+        <div class="chart-container">
+            <h3>根因地圖：兩個症狀 → 五個根因（A–E）</h3>
+            <svg viewBox="0 0 920 430" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">
+                <!-- 症狀節點 -->
+                <rect x="20" y="60" width="200" height="70" rx="10" fill="#fee2e2" stroke="#ef4444" stroke-width="2"/>
+                <text x="120" y="90" text-anchor="middle" font-size="14" font-weight="700" fill="#b91c1c">症狀 1</text>
+                <text x="120" y="110" text-anchor="middle" font-size="12" fill="#b91c1c">容易卡著、等待後恢復</text>
+
+                <rect x="20" y="280" width="200" height="70" rx="10" fill="#fee2e2" stroke="#ef4444" stroke-width="2"/>
+                <text x="120" y="310" text-anchor="middle" font-size="14" font-weight="700" fill="#b91c1c">症狀 2</text>
+                <text x="120" y="330" text-anchor="middle" font-size="12" fill="#b91c1c">無顏色、吃不到指令</text>
+
+                <!-- 根因節點 -->
+                <rect x="330" y="20" width="270" height="62" rx="10" fill="#ffffff" stroke="#c45d3e" stroke-width="2"/>
+                <text x="465" y="45" text-anchor="middle" font-size="13" font-weight="700" fill="#c45d3e">A. 95 個同步 command</text>
+                <text x="465" y="64" text-anchor="middle" font-size="11" fill="#6b7280">在 macOS main thread 執行（git/LSP/搜尋）</text>
+
+                <rect x="330" y="100" width="270" height="62" rx="10" fill="#ffffff" stroke="#c45d3e" stroke-width="2"/>
+                <text x="465" y="125" text-anchor="middle" font-size="13" font-weight="700" fill="#c45d3e">B. Terminal 輸出 O(n²) 重寫風暴</text>
+                <text x="465" y="144" text-anchor="middle" font-size="11" fill="#6b7280">120k 截斷 → 每 chunk clear + 全量重寫</text>
+
+                <rect x="330" y="210" width="270" height="62" rx="10" fill="#ffffff" stroke="#c45d3e" stroke-width="2"/>
+                <text x="465" y="235" text-anchor="middle" font-size="13" font-weight="700" fill="#c45d3e">C. 非 login shell + 無 TERM</text>
+                <text x="465" y="254" text-anchor="middle" font-size="11" fill="#6b7280">.zprofile 不載入 → brew PATH 消失</text>
+
+                <rect x="330" y="290" width="270" height="62" rx="10" fill="#ffffff" stroke="#f59e0b" stroke-width="2"/>
+                <text x="465" y="315" text-anchor="middle" font-size="13" font-weight="700" fill="#b45309">D. PTY 固定 80×24、無 resize</text>
+                <text x="465" y="334" text-anchor="middle" font-size="11" fill="#6b7280">長指令回顯錯亂、TUI 繪製錯位</text>
+
+                <rect x="330" y="370" width="270" height="50" rx="10" fill="#ffffff" stroke="#3b82f6" stroke-width="2"/>
+                <text x="465" y="391" text-anchor="middle" font-size="13" font-weight="700" fill="#1d4ed8">E. convertEol + clear/replay 副作用</text>
+                <text x="465" y="408" text-anchor="middle" font-size="11" fill="#6b7280">PTY 已輸出 CRLF；重寫破壞 ANSI 狀態</text>
+
+                <!-- 連線 -->
+                <line x1="220" y1="80" x2="330" y2="51" stroke="#ef4444" stroke-width="2"/>
+                <line x1="220" y1="105" x2="330" y2="131" stroke="#ef4444" stroke-width="2"/>
+                <line x1="220" y1="305" x2="330" y2="241" stroke="#ef4444" stroke-width="2"/>
+                <line x1="220" y1="320" x2="330" y2="321" stroke="#f59e0b" stroke-width="2"/>
+                <line x1="220" y1="335" x2="330" y2="392" stroke="#3b82f6" stroke-width="1.5" stroke-dasharray="5"/>
+
+                <!-- 修正 spec 對應 -->
+                <rect x="700" y="20" width="195" height="62" rx="10" fill="#f0fdf4" stroke="#22c55e" stroke-width="2"/>
+                <text x="797" y="45" text-anchor="middle" font-size="12" font-weight="700" fill="#15803d">Spec A（P1）</text>
+                <text x="797" y="63" text-anchor="middle" font-size="11" fill="#15803d">耗時 command 改 async</text>
+
+                <rect x="700" y="100" width="195" height="62" rx="10" fill="#f0fdf4" stroke="#22c55e" stroke-width="2"/>
+                <text x="797" y="125" text-anchor="middle" font-size="12" font-weight="700" fill="#15803d">Spec B（P0）</text>
+                <text x="797" y="143" text-anchor="middle" font-size="11" fill="#15803d">chunk 直寫 xterm</text>
+
+                <rect x="700" y="210" width="195" height="62" rx="10" fill="#f0fdf4" stroke="#22c55e" stroke-width="2"/>
+                <text x="797" y="235" text-anchor="middle" font-size="12" font-weight="700" fill="#15803d">Spec C（P0）</text>
+                <text x="797" y="253" text-anchor="middle" font-size="11" fill="#15803d">login shell + TERM env</text>
+
+                <rect x="700" y="290" width="195" height="62" rx="10" fill="#f0fdf4" stroke="#22c55e" stroke-width="2"/>
+                <text x="797" y="315" text-anchor="middle" font-size="12" font-weight="700" fill="#15803d">Spec D（P1）</text>
+                <text x="797" y="333" text-anchor="middle" font-size="11" fill="#15803d">新增 resize 通道</text>
+
+                <rect x="700" y="370" width="195" height="50" rx="10" fill="#f0fdf4" stroke="#22c55e" stroke-width="2"/>
+                <text x="797" y="391" text-anchor="middle" font-size="12" font-weight="700" fill="#15803d">Spec E（P2）</text>
+                <text x="797" y="408" text-anchor="middle" font-size="11" fill="#15803d">移除 convertEol</text>
+
+                <line x1="600" y1="51" x2="700" y2="51" stroke="#22c55e" stroke-width="2" stroke-dasharray="4"/>
+                <line x1="600" y1="131" x2="700" y2="131" stroke="#22c55e" stroke-width="2" stroke-dasharray="4"/>
+                <line x1="600" y1="241" x2="700" y2="241" stroke="#22c55e" stroke-width="2" stroke-dasharray="4"/>
+                <line x1="600" y1="321" x2="700" y2="321" stroke="#22c55e" stroke-width="2" stroke-dasharray="4"/>
+                <line x1="600" y1="395" x2="700" y2="395" stroke="#22c55e" stroke-width="2" stroke-dasharray="4"/>
+            </svg>
+        </div>
+
+        <section>
+            <h2>關鍵發現</h2>
+            <details open>
+                <summary><span class="badge evidence">已證實</span>同步 command 在 macOS main thread 執行（五層證據鏈，每層皆無執行緒切換）</summary>
+                <div class="details-body">
+                    <ol>
+                        <li><strong>wry 0.55.1</strong> <code>wkwebview/class/wry_web_view_delegate.rs:35-61</code>：IPC 進入點是 WKWebView 的 <code>WKScriptMessageHandler.didReceiveScriptMessage</code>，WebKit 規範保證在 main thread 呼叫（delegate 以 <code>MainThreadMarker</code> 建立），handler 內<strong>直接呼叫</strong> <code>ipc_handler(r)</code>，無 dispatch。</li>
+                        <li><strong>tauri 2.11.2</strong> <code>ipc/protocol.rs:75,311</code>：直接呼叫 <code>webview.on_message(...)</code>，無 spawn。</li>
+                        <li><strong>tauri 2.11.2</strong> <code>webview/mod.rs:1742→1909</code>：<code>on_message</code> 同步呼叫 <code>manager.run_invoke_handler(invoke)</code>，無 spawn。</li>
+                        <li><strong>tauri-macros</strong> <code>command/wrapper.rs:404-436（body_blocking）</code>：同步 command 展開為 <code>let result = $path(...)</code> —— 在當前執行緒直接跑完才回應。</li>
+                        <li><strong>yuuzu-ide</strong> <code>commands.rs</code>：105 個 command，僅 10 個 <code>async fn</code>（SSH/SFTP/DB），其餘 95 個全部同步。</li>
+                    </ol>
+                    <p>結論：任何同步 command 的執行時間 = 整個視窗 UI 的凍結時間。command 結束，UI 恢復 —— 與「卡著、等待一段時間才會恢復」的描述完全一致。</p>
+                </div>
+            </details>
+            <details>
+                <summary><span class="badge evidence">已證實</span>最常觸發凍結的三類同步操作：LSP（10s）、git 網路、全域搜尋掃描</summary>
+                <div class="details-body">
+                    <ul>
+                        <li><code>lsp.rs:17</code> <code>DEFAULT_LSP_REQUEST_TIMEOUT_MS = 10_000</code>；<code>lsp.rs:617-654</code> 以 <code>recv_timeout</code> 同步阻塞等回應。hover / completion / diagnostics / definition 等 14 個 lsp_* command 全部同步 → 編輯器中移動游標、打字就可能觸發，<strong>單次最長凍結 10 秒</strong>。首次開檔的 initialize（<code>lsp.rs:990-1026</code>）同樣阻塞。</li>
+                        <li><code>git.rs:261-287</code> fetch / pull / push → <code>run_git</code> → <code>std::process::Command::output()</code>（<code>git.rs:509-532</code>）—— 網路慢時阻塞數秒到數十秒。</li>
+                        <li><code>search.rs:61-79</code> 以 <code>ignore::WalkBuilder</code> 同步走訪整個 workspace 並逐檔搜尋；<code>scan_workspace</code> / <code>docs_index</code> 同類。</li>
+                    </ul>
+                </div>
+            </details>
+            <details>
+                <summary><span class="badge evidence">已證實</span>Terminal 輸出管線在 120k 字元後進入 O(n²) 重寫風暴</summary>
+                <div class="details-body">
+                    <p>資料流：PTY reader thread 每 ≤4096 bytes emit 一個 IPC event（<code>terminal.rs:201-218</code>，無聚合）→ AppShell listener（<code>AppShell.tsx:2545</code>）→ zustand store 字串累加並於 120k 處<strong>從頭部截斷</strong>（<code>terminal-model.ts:20-25</code>）→ React 重新 render → <code>TerminalTab.tsx:103-111</code> 以 <code>output.startsWith(previous)</code> 判斷增量。</p>
+                    <p><strong>頭部一旦被截斷，startsWith 永遠為 false</strong> → 之後每個 chunk 都走 fallback：<code>terminal.clear()</code> + 重寫整段 120KB。高輸出指令（build、cat 大檔）下每秒數十至數百個 event × 120KB ANSI 重新解析 + React 全量 re-render → webview 主執行緒飽和、UI 卡死，直到輸出結束才消化完 backlog。</p>
+                </div>
+            </details>
+            <details>
+                <summary><span class="badge evidence">已證實</span>shell 環境缺失：非 login shell、無 TERM —— 與本機 ~/.zprofile 交叉驗證</summary>
+                <div class="details-body">
+                    <p><code>terminal.rs:161-162</code> 僅 <code>CommandBuilder::new(&amp;info.shell)</code> + <code>cwd</code>，無 <code>-l</code> 參數、無任何 env 設定。portable-pty 的 <code>get_base_env()</code>（<code>cmdbuilder.rs:74-101</code>）只繼承父行程環境再補 <code>SHELL</code>，<strong>不會設定 TERM</strong>。</p>
+                    <p>本機驗證：<code>~/.zprofile:7</code> 為 <code>eval "$(/opt/homebrew/bin/brew shellenv)"</code> —— macOS 的 zsh 只有 <strong>login shell</strong> 才載入 <code>~/.zprofile</code>（Terminal.app / iTerm2 / VS Code 預設都開 login shell，所以平常正常）。Yuuzu-IDE 開的是 non-login zsh → <code>/opt/homebrew/bin</code> 不進 PATH → <strong>brew 安裝的指令全部 command not found（「吃不到指令」）</strong>。</p>
+                    <p>顏色：打包後由 Finder/launchd 啟動時環境無 <code>TERM</code> → ls / git pager / ncurses 程式判定終端無色彩能力 → 全部單色。dev 模式（<code>bun tauri dev</code> 從終端啟動）會「碰巧」繼承 TERM，症狀較輕 —— 但 PATH 缺失依然存在，且依賴 brew 工具的 prompt 主題 / alias（如 starship、eza）會因 not found 而失效，同樣表現為「沒有顏色」。</p>
+                </div>
+            </details>
+            <details>
+                <summary><span class="badge evidence">已證實</span>PTY 永遠 80×24：spawn 硬編碼、後端無 resize command</summary>
+                <div class="details-body">
+                    <p><code>AppShell.tsx:3516-3517</code> spawn 固定 <code>rows: 24, cols: 80</code>；<code>lib.rs:119-123</code> 註冊的 terminal command 只有 probe / list / spawn / write / close，<strong>沒有 resize</strong>。前端 FitAddon 只調整 xterm 視圖，PTY 與 shell 認知的尺寸永遠是 80×24 → 輸入超過 80 字元時 zsh 行編輯回顯錯亂（觀感像「指令吃不到」）、vim / less / fzf 等 TUI 繪製錯位。</p>
+                </div>
+            </details>
+        </section>
+    </div>
+
+    <!-- ============ TAB: 問題 1 卡頓 ============ -->
+    <div id="freeze" class="tab-content">
+        <section>
+            <h2>問題 1：「很容易卡著，需要等待一段時間才會恢復」</h2>
+            <p>兩條獨立路徑都會造成此症狀，分別位於 Rust 後端與 React 前端。實際卡頓可能是兩者疊加。</p>
+        </section>
+
+        <div class="chart-container">
+            <h3>根因 A：同步 command 佔用 macOS main thread（IPC 五層證據鏈）</h3>
+            <svg viewBox="0 0 900 300" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">
+                <defs>
+                    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6b7280"/></marker>
+                    <marker id="arrowR" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#ef4444"/></marker>
+                </defs>
+                <!-- main thread 軌道 -->
+                <rect x="15" y="40" width="660" height="200" rx="12" fill="#fef2f2" stroke="#fecaca" stroke-width="1.5"/>
+                <text x="30" y="65" font-size="12" font-weight="700" fill="#b91c1c">macOS main thread（= NSApplication event loop = 整個視窗的繪製與輸入）</text>
+
+                <rect x="35" y="85" width="130" height="55" rx="8" fill="#ffffff" stroke="#9ca3af"/>
+                <text x="100" y="108" text-anchor="middle" font-size="11" font-weight="600">WKWebView IPC</text>
+                <text x="100" y="124" text-anchor="middle" font-size="10" fill="#6b7280">didReceiveScriptMessage</text>
+
+                <rect x="195" y="85" width="120" height="55" rx="8" fill="#ffffff" stroke="#9ca3af"/>
+                <text x="255" y="108" text-anchor="middle" font-size="11" font-weight="600">wry did_receive</text>
+                <text x="255" y="124" text-anchor="middle" font-size="10" fill="#6b7280">直接呼叫，無 spawn</text>
+
+                <rect x="345" y="85" width="130" height="55" rx="8" fill="#ffffff" stroke="#9ca3af"/>
+                <text x="410" y="108" text-anchor="middle" font-size="11" font-weight="600">tauri on_message</text>
+                <text x="410" y="124" text-anchor="middle" font-size="10" fill="#6b7280">run_invoke_handler</text>
+
+                <rect x="505" y="85" width="150" height="55" rx="8" fill="#fee2e2" stroke="#ef4444" stroke-width="2"/>
+                <text x="580" y="104" text-anchor="middle" font-size="11" font-weight="700" fill="#b91c1c">sync command 本體</text>
+                <text x="580" y="120" text-anchor="middle" font-size="10" fill="#b91c1c">body_blocking：跑完才返回</text>
+                <text x="580" y="133" text-anchor="middle" font-size="10" fill="#b91c1c">95 / 105 個 command</text>
+
+                <line x1="165" y1="112" x2="195" y2="112" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arrow)"/>
+                <line x1="315" y1="112" x2="345" y2="112" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arrow)"/>
+                <line x1="475" y1="112" x2="505" y2="112" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+                <!-- 阻塞來源 -->
+                <rect x="35" y="165" width="190" height="55" rx="8" fill="#fff7ed" stroke="#f59e0b"/>
+                <text x="130" y="186" text-anchor="middle" font-size="11" font-weight="600" fill="#b45309">lsp_*（14 個）</text>
+                <text x="130" y="202" text-anchor="middle" font-size="10" fill="#b45309">recv_timeout 最長 10 秒</text>
+
+                <rect x="245" y="165" width="190" height="55" rx="8" fill="#fff7ed" stroke="#f59e0b"/>
+                <text x="340" y="186" text-anchor="middle" font-size="11" font-weight="600" fill="#b45309">git fetch / pull / push</text>
+                <text x="340" y="202" text-anchor="middle" font-size="10" fill="#b45309">Command::output() 等網路</text>
+
+                <rect x="455" y="165" width="200" height="55" rx="8" fill="#fff7ed" stroke="#f59e0b"/>
+                <text x="555" y="186" text-anchor="middle" font-size="11" font-weight="600" fill="#b45309">search / scan / docs_index</text>
+                <text x="555" y="202" text-anchor="middle" font-size="10" fill="#b45309">WalkBuilder 同步走訪全 repo</text>
+
+                <line x1="130" y1="165" x2="540" y2="140" stroke="#ef4444" stroke-width="1.2" marker-end="url(#arrowR)"/>
+                <line x1="340" y1="165" x2="565" y2="140" stroke="#ef4444" stroke-width="1.2" marker-end="url(#arrowR)"/>
+                <line x1="555" y1="165" x2="590" y2="140" stroke="#ef4444" stroke-width="1.2" marker-end="url(#arrowR)"/>
+
+                <!-- 對比：async -->
+                <rect x="700" y="40" width="185" height="200" rx="12" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+                <text x="792" y="65" text-anchor="middle" font-size="12" font-weight="700" fill="#15803d">tokio runtime（不卡 UI）</text>
+                <rect x="715" y="85" width="155" height="60" rx="8" fill="#ffffff" stroke="#22c55e"/>
+                <text x="792" y="108" text-anchor="middle" font-size="11" font-weight="600" fill="#15803d">async command</text>
+                <text x="792" y="124" text-anchor="middle" font-size="10" fill="#15803d">僅 10 個（SSH/SFTP/DB）</text>
+                <text x="792" y="180" text-anchor="middle" font-size="11" fill="#15803d">UI 維持可互動</text>
+                <text x="792" y="198" text-anchor="middle" font-size="10" fill="#15803d">← 95 個 sync 應遷移至此</text>
+            </svg>
+        </div>
+
+        <section>
+            <h3>為什麼是「等待一段時間才會恢復」</h3>
+            <ul>
+                <li>main thread 被 sync command 佔用期間，視窗完全無法繪製與回應輸入（包含滑鼠、鍵盤、其他面板）。</li>
+                <li>command 一返回（成功、失敗或 <strong>LSP 10 秒逾時</strong>），main thread 解凍，排隊的 UI 事件瞬間消化 → 「恢復」。</li>
+                <li>「很容易」卡：LSP hover / completion 在編輯器中是高頻自動觸發，等同每次互動都在賭 language server 的回應速度。</li>
+            </ul>
+
+            <h3 id="freeze-frontend">根因 B：Terminal 輸出 O(n²) 重寫風暴（前端 webview 卡死）</h3>
+            <pre><code>// terminal-model.ts:20-25 —— 超過 120k 即從「頭部」截斷
+const MAX_OUTPUT_CHARS = 120_000;
+function appendBoundedOutput(previous, chunk) {
+  const output = `${previous}${chunk}`;
+  return output.slice(Math.max(0, output.length - MAX_OUTPUT_CHARS));
+}
+
+// TerminalTab.tsx:103-111 —— 增量判斷依賴前綴不變
+if (output.startsWith(previous)) {
+  terminal.write(output.slice(previous.length));   // 正常增量
+} else {
+  terminal.clear();                                 // 截斷後永遠走這裡：
+  terminal.write(output);                           // 每個 chunk 全量重寫 120KB
+}</code></pre>
+            <ul>
+                <li>後端 reader thread 每 ≤4096 bytes 就 emit 一個 IPC event（<code>terminal.rs:201-218</code>），無聚合節流。</li>
+                <li>每個 event：zustand store 更新（字串拷貝 O(n)）→ React re-render → <code>startsWith</code> 比較 O(n)。</li>
+                <li>累積輸出超過 120k 後，<strong>每個 chunk 額外觸發 clear + 120KB ANSI 全量解析</strong>。跑 build、<code>cat</code> 大檔等指令時 webview 主執行緒飽和 → 整個 UI（不只 terminal）卡死，輸出停止後才恢復。</li>
+            </ul>
+            <div class="callout">如何區分使用者遇到的是 A 還是 B：卡頓發生在 terminal 跑高輸出指令時 → B；發生在編輯器 hover / 開檔 / git 操作 / 全域搜尋時 → A。兩者皆為 P0/P1 等級，需都修。</div>
+        </section>
+    </div>
+
+    <!-- ============ TAB: 問題 2 Terminal ============ -->
+    <div id="terminal" class="tab-content">
+        <section>
+            <h2>問題 2：「terminals 沒有顏色且吃不到一些指令」</h2>
+            <p>「沒顏色」與「吃不到指令」是<strong>同一個根因（C）的兩個面向</strong>，再由根因 D 放大觀感問題。</p>
+
+            <h3>根因 C：spawn 的 zsh 既非 login shell、環境變數又殘缺</h3>
+            <pre><code>// terminal.rs:161-162 —— spawn 時只設了 cwd
+let mut command = CommandBuilder::new(&info.shell);  // 直接執行 /bin/zsh，無 -l
+command.cwd(&cwd);
+// 沒有 command.env("TERM", ...)、沒有 COLORTERM、沒有 login shell 旗標</code></pre>
+            <p>portable-pty 的 <code>CommandBuilder::new</code>（<code>cmdbuilder.rs:215-223</code>）呼叫 <code>get_base_env()</code>：只複製<strong>父行程（IDE 本身）</strong>的環境變數、補一個 <code>SHELL</code>，僅此而已。</p>
+
+            <h3>「吃不到指令」的完整鏈路（已用本機設定檔驗證）</h3>
+            <ol>
+                <li>macOS 的 zsh 啟動順序：login shell 才載入 <code>/etc/zprofile</code>（內含 <code>path_helper</code>）與 <code>~/.zprofile</code>；non-login interactive 只載入 <code>~/.zshrc</code>。</li>
+                <li>本機 <code>~/.zprofile:7</code> = <code>eval "$(/opt/homebrew/bin/brew shellenv)"</code> —— Homebrew 官方安裝程序就是寫到這裡。</li>
+                <li>Yuuzu-IDE spawn 的是 non-login zsh → <code>~/.zprofile</code> 不執行 → <code>/opt/homebrew/bin</code> 與 <code>/opt/homebrew/sbin</code> 不在 PATH。</li>
+                <li>結果：所有 brew 安裝的 CLI（node、rg、gh、starship、eza…）→ <strong>command not found</strong>。<code>~/.zshrc</code> 裡的 PATH 追加（bun、pyenv 等）仍有效，所以「部分指令可用、部分吃不到」—— 與回報症狀吻合。</li>
+                <li>打包成 .app 後更糟：launchd 給的基底 PATH 只有 <code>/usr/bin:/bin:/usr/sbin:/sbin</code>。</li>
+            </ol>
+
+            <h3>「沒有顏色」的兩條疊加路徑</h3>
+            <ul>
+                <li><strong>TERM 未設定</strong>：portable-pty 不補 TERM、spawn 程式碼也沒設。由 Finder 啟動的 .app 環境裡根本沒有 TERM → <code>ls</code>、git pager、ncurses 程式查 termcap 失敗 → 判定不支援色彩 → 單色輸出。（dev 模式從終端啟動會繼承 TERM，故 dev 與打包行為不一致。）</li>
+                <li><strong>PATH 連鎖效應</strong>：若 prompt 主題 / 著色工具是 brew 安裝（starship、zsh-syntax-highlighting 等），non-login shell 下 not found → prompt 退回 zsh 無色預設。</li>
+                <li>前端排除：xterm.js 主題已設定 16 色/256 色支援正常（<code>TerminalTab.tsx:51-56</code> 只自訂背景/前景，不影響 ANSI 色），<strong>顏色問題不在前端</strong> —— 是 PTY 內程式根本沒輸出 ANSI 色碼。</li>
+            </ul>
+
+            <h3>根因 D：PTY 固定 80×24、無 resize 通道（放大「吃不到指令」的觀感）</h3>
+            <ul>
+                <li><code>AppShell.tsx:3516-3517</code>：spawn 永遠傳 <code>rows: 24, cols: 80</code>。</li>
+                <li><code>lib.rs:119-123</code>：後端只註冊 probe / list / spawn / write / close —— <strong>沒有 resize command</strong>；<code>terminal.rs</code> 的 <code>TerminalProcess</code> 也沒保存 master PTY handle，目前結構根本無法 resize。</li>
+                <li>FitAddon 把 xterm 視圖撐到實際大小（如 220×50），但 shell/TUI 認知仍是 80×24 → 輸入超過 80 字元時 ZLE 回顯折行錯亂、補全選單畫錯位置 —— 操作起來「像是指令吃不進去」。</li>
+            </ul>
+
+            <h3>根因 E（次要）：<code>convertEol: true</code></h3>
+            <p><code>TerminalTab.tsx:48</code> 對真 PTY 輸出設 <code>convertEol: true</code> 是錯的 —— PTY 行尾已是 CRLF；此選項是給「非 PTY 來源」用的。搭配 clear + 全量 replay 還會破壞 alternate screen（vim/less）狀態。</p>
+        </section>
+    </div>
+
+    <!-- ============ TAB: 修正規格 ============ -->
+    <div id="specs" class="tab-content">
+        <section>
+            <h2>修正規格（僅規格，未實作）</h2>
+            <p>建議實作順序：<strong>B → C → D → A → E</strong>（B/C 投入小、立即解除最痛症狀；A 影響面最大、分批遷移）。</p>
+        </section>
+
+        <div class="spec-card">
+            <h3><span class="badge p0">P0</span>Spec B：Terminal 輸出管線重構 —— chunk 直寫 xterm，脫離 React render 路徑</h3>
+            <ul>
+                <li><strong>變更點 1</strong>（<code>TerminalTab.tsx</code>）：terminal-output event 的 chunk 直接 <code>terminal.write(chunk)</code>（透過 ref / 訂閱，不經 React state→prop）。掛載時以 store 內 scrollback replay 一次，之後僅吃增量。</li>
+                <li><strong>變更點 2</strong>（<code>terminal-model.ts</code>）：store 的 <code>outputBySessionId</code> 僅作為「重新掛載時的 replay buffer」，更新不再驅動 TerminalTab render（移出 React 訂閱範圍，或以 <code>subscribe</code> + ref 實作）。</li>
+                <li><strong>變更點 3</strong>：刪除 <code>startsWith</code> / <code>clear()</code> 全量重寫邏輯（<code>TerminalTab.tsx:103-111</code>）。</li>
+                <li><strong>變更點 4（可選優化）</strong>（<code>terminal.rs:201-218</code>）：reader thread 以 8–16ms 視窗聚合多個 4KB chunk 再 emit，降低 IPC event 頻率。</li>
+            </ul>
+            <div class="accept"><strong>驗收：</strong>在 terminal 執行 <code>seq 1 2000000</code> 或 cat 一個 &gt;10MB 檔案期間，UI 其他面板可正常點擊、terminal 可捲動；輸出結束後 prompt 立即可輸入。輸出總量超過 120k 字元後行為不變（無 clear 閃爍、無卡頓）。</div>
+        </div>
+
+        <div class="spec-card">
+            <h3><span class="badge p0">P0</span>Spec C：shell 以 login shell 啟動並補齊終端環境變數</h3>
+            <ul>
+                <li><strong>變更點</strong>（<code>terminal.rs:161-162</code> spawn_session，SSH terminal 同步比照）：
+                    <pre><code>let mut command = CommandBuilder::new(&info.shell);
+#[cfg(not(windows))]
+command.arg("-l");                          // zsh/bash/fish 皆支援 login 旗標
+command.env("TERM", "xterm-256color");      // xterm.js 完整支援
+command.env("COLORTERM", "truecolor");
+command.env("TERM_PROGRAM", "yuuzu-ide");
+// LANG 若父環境缺失則補 en_US.UTF-8（避免打包後 UTF-8 處理異常）
+command.cwd(&cwd);</code></pre>
+                </li>
+                <li>Windows 路徑（COMSPEC/powershell）不加 <code>-l</code>，維持現狀。</li>
+                <li>注意 <code>pty.rs:15 spawn_shell_probe</code> 與名稱顯示（registry 內 <code>"zsh {n}"</code>）不受影響。</li>
+            </ul>
+            <div class="accept"><strong>驗收：</strong>IDE terminal 內 <code>echo $PATH</code> 包含 <code>/opt/homebrew/bin</code>；<code>brew --version</code> 正常執行；<code>echo $TERM</code> 輸出 <code>xterm-256color</code>；<code>ls -G</code> 與 <code>git log</code> 有顏色。<strong>打包後的 .app（由 Finder 啟動）重測以上四項皆過</strong> —— dev 模式通過不算數。</div>
+        </div>
+
+        <div class="spec-card">
+            <h3><span class="badge p1">P1</span>Spec D：新增 PTY resize 通道</h3>
+            <ul>
+                <li><strong>後端</strong>（<code>terminal.rs</code>）：<code>TerminalProcess</code> 增存 <code>master: Box&lt;dyn MasterPty + Send&gt;</code>（目前 spawn 後 master 未保存，僅取出 reader/writer）。新增 command <code>resize_terminal_session(session_id, rows, cols)</code> → <code>master.resize(terminal_size(rows, cols))</code>，並於 <code>lib.rs</code> 註冊。</li>
+                <li><strong>前端</strong>：spawn 時改用 <code>fitAddon.proposeDimensions()</code> 的實際值取代硬編碼 80×24（<code>AppShell.tsx:3516</code>）；<code>TerminalTab</code> 的 ResizeObserver 在 <code>fit()</code> 後 debounce（~100ms）呼叫 resize command。</li>
+            </ul>
+            <div class="accept"><strong>驗收：</strong>拖拉視窗大小後在 terminal 執行 <code>tput cols</code> 數值隨之改變；<code>vim</code> 滿版顯示；輸入超過 80 字元的指令時回顯不錯亂。</div>
+        </div>
+
+        <div class="spec-card">
+            <h3><span class="badge p1">P1</span>Spec A：耗時同步 command 遷移至 async（分批）</h3>
+            <ul>
+                <li><strong>模式</strong>：簽名改 <code>pub async fn</code>，同步邏輯包進 <code>tauri::async_runtime::spawn_blocking(move || ...)</code>，State 內容物以 <code>Arc</code> clone 進 closure（現有 State 多為 <code>Arc&lt;Mutex&lt;_&gt;&gt;</code>，成本低）。Tauri async command 在 tokio runtime 執行，不佔 main thread。</li>
+                <li><strong>第一批（網路/最長阻塞）</strong>：<code>git_fetch</code>、<code>git_pull</code>、<code>git_push</code>、全部 14 個 <code>lsp_*</code>。</li>
+                <li><strong>第二批（IO 重）</strong>：<code>search_workspace</code>、<code>scan_workspace</code>、<code>scan_directory</code>、<code>docs_index</code>、<code>docs_search</code>、<code>git_status</code>、<code>git_commit_graph</code>、<code>git_diff_file</code>、<code>run_workspace_task</code>、<code>browser_capture_preview</code>。</li>
+                <li><strong>第三批</strong>：其餘 git 寫操作、<code>read_text_file</code> / <code>write_text_file</code>（大檔）、其餘掃描類。純記憶體讀取類（list_* / settings）可保留同步。</li>
+                <li><strong>搭配調整</strong>：LSP 互動型請求（hover/completion）timeout 由 10s 降至 1–3s（<code>lsp.rs:17</code> 拆分常數）；LSP state 為全域 <code>Mutex</code>，async 化後留意同一 server 的請求仍會串行 —— 可接受，但勿在持鎖時跨 await。</li>
+            </ul>
+            <div class="accept"><strong>驗收：</strong>以 <code>kill -STOP &lt;lsp-server-pid&gt;</code> 模擬 LSP 無回應，在編輯器中 hover / 打字 UI 不凍結；對慢速 remote 執行 git fetch 期間可正常切換面板與捲動。</div>
+        </div>
+
+        <div class="spec-card">
+            <h3><span class="badge p2">P2</span>Spec E：移除 <code>convertEol: true</code>（併入 Spec B 實作）</h3>
+            <ul>
+                <li><code>TerminalTab.tsx:47-57</code> 的 Terminal 選項移除 <code>convertEol: true</code> —— PTY 輸出已含 CRLF；保留會在邊界情況造成多餘換行。</li>
+            </ul>
+            <div class="accept"><strong>驗收：</strong>多行輸出、<code>vim</code> / <code>less</code> 進出 alternate screen、Ctrl-C 中斷後畫面皆正常。</div>
+        </div>
+
+        <section>
+            <h3>誠實標註：推論強度</h3>
+            <ul>
+                <li><span class="badge evidence">已證實</span>程式碼層事實全部直接讀自原始碼（含 tauri / wry / portable-pty 本機 vendored 原始碼）與本機 <code>~/.zprofile</code>。</li>
+                <li><span class="badge inferred">推論</span>「實際卡頓由 A 或 B 哪條觸發」未經執行期重現（本次未跑 app）。建議實作前先用上述驗收手法重現一次，確認權重。卡頓若也發生在「無 LSP、無 terminal 輸出」的場景，優先懷疑 A 的 git_status / 掃描類高頻呼叫。</li>
+                <li><span class="badge inferred">推論</span>「沒顏色」在 dev 模式下的成因偏向 PATH 連鎖（prompt 工具 not found）；打包後則必然含 TERM 缺失。Spec C 同時覆蓋兩者。</li>
+            </ul>
+        </section>
+    </div>
+
+    <!-- ============ TAB: 證據總表 ============ -->
+    <div id="evidence" class="tab-content">
+        <section>
+            <h2>證據總表（全部為直接讀碼結果）</h2>
+            <table>
+                <thead><tr><th style="width:3rem">#</th><th style="width:40%">位置</th><th>事實</th><th style="width:24%">含義</th></tr></thead>
+                <tbody>
+                    <tr><td>E1</td><td><code>wry-0.55.1/src/wkwebview/class/wry_web_view_delegate.rs:35-61</code></td><td>IPC 進入點 <code>did_receive</code>（WKScriptMessageHandler）直接呼叫 <code>ipc_handler(r)</code>；delegate 以 MainThreadMarker 建立</td><td>IPC 在 macOS main thread 進入，無切換</td></tr>
+                    <tr><td>E2</td><td><code>tauri-2.11.2/src/ipc/protocol.rs:75,311</code></td><td>直接呼叫 <code>webview.on_message</code></td><td>無執行緒切換</td></tr>
+                    <tr><td>E3</td><td><code>tauri-2.11.2/src/webview/mod.rs:1742→1909</code></td><td><code>on_message</code> 同步呼叫 <code>run_invoke_handler</code></td><td>無執行緒切換</td></tr>
+                    <tr><td>E4</td><td><code>tauri-macros/src/command/wrapper.rs:404-436</code></td><td><code>body_blocking</code>：sync command 展開為直接呼叫</td><td>sync command 在 IPC 執行緒跑完</td></tr>
+                    <tr><td>E5</td><td><code>src-tauri/src/commands.rs</code>（統計）</td><td>105 個 command；async 僅 10 個（connect/disconnect_remote_host、SSH write/close、run_remote_command、SFTP×3、DB×2）</td><td>95 個 sync 全在 main thread</td></tr>
+                    <tr><td>E6</td><td><code>git.rs:96-108, 261-287, 509-532</code></td><td>git 全部以 <code>std::process::Command::output()</code> 執行；fetch/pull/push 為網路操作</td><td>網路延遲 = UI 凍結時長</td></tr>
+                    <tr><td>E7</td><td><code>lsp.rs:17, 617-654</code></td><td><code>DEFAULT_LSP_REQUEST_TIMEOUT_MS = 10_000</code>；request 以 <code>recv_timeout</code> 同步阻塞</td><td>hover/補全最長凍結 10 秒</td></tr>
+                    <tr><td>E8</td><td><code>lsp.rs:990-1026</code></td><td>initialize 走同一個 blocking request（10s）</td><td>首次開檔即可能卡</td></tr>
+                    <tr><td>E9</td><td><code>search.rs:61-79</code>；<code>workspace_scan.rs:13-65</code></td><td><code>ignore::WalkBuilder</code> / <code>fs::read_dir</code> 同步走訪</td><td>大 repo 搜尋/掃描卡 UI</td></tr>
+                    <tr><td>E10</td><td><code>terminal.rs:201-218</code></td><td>PTY reader 每 ≤4096 bytes emit 一個 event，無聚合</td><td>高輸出時 IPC event 風暴</td></tr>
+                    <tr><td>E11</td><td><code>terminal-model.ts:20-25</code></td><td><code>MAX_OUTPUT_CHARS=120_000</code>，超限從頭部截斷</td><td>破壞前綴不變式</td></tr>
+                    <tr><td>E12</td><td><code>TerminalTab.tsx:103-111</code></td><td>增量寫入依賴 <code>startsWith</code>；失敗即 <code>clear()</code> + 全量重寫</td><td>截斷後每 chunk 重寫 120KB（O(n²)）</td></tr>
+                    <tr><td>E13</td><td><code>terminal.rs:161-162</code></td><td>spawn 只設 cwd；無 <code>-l</code>、無 TERM/COLORTERM</td><td>非 login shell + 終端環境殘缺</td></tr>
+                    <tr><td>E14</td><td><code>portable-pty-0.9.0/src/cmdbuilder.rs:74-101, 215-223</code></td><td><code>get_base_env()</code> 僅繼承父行程環境 + 補 SHELL，不設 TERM</td><td>TERM 取決於 IDE 啟動方式；打包後為空</td></tr>
+                    <tr><td>E15</td><td><code>~/.zprofile:7</code>（本機）</td><td><code>eval "$(/opt/homebrew/bin/brew shellenv)"</code> 位於 login-only 設定檔</td><td>non-login shell 拿不到 brew PATH → command not found</td></tr>
+                    <tr><td>E16</td><td><code>AppShell.tsx:3516-3517</code></td><td>spawn 硬編碼 <code>rows: 24, cols: 80</code></td><td>PTY 尺寸與視圖脫鉤</td></tr>
+                    <tr><td>E17</td><td><code>lib.rs:119-123</code>；<code>terminal.rs:100-103</code></td><td>無 resize command；<code>TerminalProcess</code> 未保存 master handle</td><td>現行結構無法 resize</td></tr>
+                    <tr><td>E18</td><td><code>TerminalTab.tsx:48</code></td><td><code>convertEol: true</code> 用於真 PTY 輸出</td><td>行尾處理錯誤來源</td></tr>
+                </tbody>
+            </table>
+        </section>
+    </div>
+
+    <div class="actions">
+        <button class="btn" onclick="window.print()">Print / PDF</button>
+        <button class="btn" onclick="copySpecsPrompt(this)">Copy Specs as Prompt</button>
+    </div>
+</div>
+
+<script>
+function showTab(id) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    event.target.classList.add('active');
+}
+function copySpecsPrompt(btn) {
+    const prompt = `依照 docs/html/yuuzu-ide-stability-terminal-diagnosis-specs-2026-06-12.html 的診斷結果，依序實作以下修正（每項完成後跑驗收再進下一項）：
+
+[Spec B / P0] Terminal 輸出管線重構：terminal-output event 的 chunk 直接 terminal.write(chunk)（ref 直寫，不經 React state/prop）；store 的 outputBySessionId 僅供重掛載 replay；刪除 TerminalTab.tsx:103-111 的 startsWith/clear 全量重寫邏輯；（可選）terminal.rs reader thread 以 8-16ms 聚合 chunk。驗收：seq 1 2000000 期間 UI 可互動、結束後 prompt 立即可輸入。
+
+[Spec C / P0] shell 環境：terminal.rs spawn_session 中 unix 平台 command.arg("-l")，並 env 設定 TERM=xterm-256color、COLORTERM=truecolor、TERM_PROGRAM=yuuzu-ide、LANG 缺失時補 en_US.UTF-8。驗收：IDE terminal 內 echo $PATH 含 /opt/homebrew/bin、brew --version 可執行、ls -G 有色、echo $TERM 為 xterm-256color（打包後重測）。
+
+[Spec D / P1] PTY resize：TerminalProcess 增存 master handle；新增 resize_terminal_session(session_id, rows, cols) command 並在 lib.rs 註冊；前端 spawn 改用 fitAddon.proposeDimensions()，ResizeObserver fit 後 debounce 呼叫 resize。驗收：tput cols 隨視窗變化、vim 滿版。
+
+[Spec A / P1] 同步 command 遷移 async（spawn_blocking 包同步邏輯）：第一批 git_fetch/git_pull/git_push + 全部 lsp_*（並將互動型 LSP timeout 由 10s 降為 1-3s）；第二批 search_workspace/scan_*/docs_*/git_status/git_commit_graph/git_diff_file/run_workspace_task/browser_capture_preview。驗收：kill -STOP LSP server 後 hover/打字不凍結；git fetch 期間 UI 可互動。
+
+[Spec E / P2] 移除 TerminalTab.tsx 的 convertEol: true（併入 Spec B）。驗收：vim/less alternate screen 正常。
+
+限制：不做規格外的重構；每個 Spec 單獨 commit。`;
+    navigator.clipboard.writeText(prompt);
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy Specs as Prompt', 1500);
+}
+</script>
+</body>
+</html>

@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render } from "@testing-library/react";
 
-import { ensureTestDom } from "../../app/test-dom";
+import { ensureTestDom } from "../../test/test-dom";
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
 import {
   createDiagnosticsState,

@@ -350,7 +350,7 @@ export function DocsPanel({
                       [id]: "",
                     }));
                   } catch {
-                    // AppShell owns the visible error state; keep the draft intact.
+                    // The shell owns the visible error state; keep the draft intact.
                   }
                 }}
               />

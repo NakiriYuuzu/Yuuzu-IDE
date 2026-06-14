@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Change Report: v2 功能完整化 — 全域真實接線</title>
+<style>
+:root {
+    --font-sans: system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', Menlo, monospace;
+    --color-bg: #faf9f7;
+    --color-surface: #ffffff;
+    --color-text: #1a1a1a;
+    --color-text-secondary: #6b7280;
+    --color-border: #e5e5e5;
+    --color-accent: #5e8c14;
+    --color-accent-light: #edf5db;
+    --color-success: #22c55e;
+    --color-warning: #f59e0b;
+    --color-error: #ef4444;
+    --color-info: #3b82f6;
+    --radius-md: 10px;
+    --radius-lg: 16px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--font-sans); background: var(--color-bg); color: var(--color-text); line-height: 1.6; }
+.main { padding: 2rem; max-width: 1020px; margin: 0 auto; }
+header { margin-bottom: 1.5rem; }
+header .label { font-size: .75rem; text-transform: uppercase; letter-spacing: .1em; color: var(--color-accent); font-weight: 600; }
+header h1 { font-size: 1.6rem; margin: .25rem 0; }
+header .meta { color: var(--color-text-secondary); font-size: .9rem; }
+.stats { display: flex; gap: 1rem; margin: 1.25rem 0; flex-wrap: wrap; }
+.stat { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: .8rem 1.1rem; min-width: 118px; }
+.stat .value { font-size: 1.35rem; font-weight: 700; }
+.stat .label { font-size: .78rem; color: var(--color-text-secondary); }
+.card { background: var(--color-surface); border-radius: var(--radius-lg); padding: 1.4rem; margin-bottom: 1.5rem; border: 1px solid var(--color-border); }
+.card h2 { font-size: 1.08rem; margin-bottom: .75rem; }
+.card h3 { font-size: .95rem; margin: 1rem 0 .5rem; }
+.card ul { padding-left: 1.25rem; }
+.card li { margin-bottom: .4rem; font-size: .92rem; }
+table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+th { text-align: left; padding: .5rem .6rem; border-bottom: 2px solid var(--color-border); font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; color: var(--color-text-secondary); }
+td { padding: .45rem .6rem; border-bottom: 1px solid var(--color-border); vertical-align: top; }
+td.file { font-family: var(--font-mono); font-size: .78rem; white-space: nowrap; }
+.tag { display: inline-block; font-size: .68rem; font-weight: 700; padding: .1rem .5rem; border-radius: 999px; text-transform: uppercase; }
+.tag.new { background: #dcfce7; color: #166534; }
+.tag.mod { background: #fef3c7; color: #92400e; }
+.tag.fix { background: #fee2e2; color: #991b1b; }
+code { font-family: var(--font-mono); font-size: .82em; background: var(--color-accent-light); padding: .08em .35em; border-radius: 4px; }
+pre { font-family: var(--font-mono); font-size: .78rem; background: #11161f; color: #dbe4ec; border-radius: var(--radius-md); padding: 1rem; overflow-x: auto; line-height: 1.65; margin: .6rem 0; }
+details { margin: .5rem 0; }
+summary { cursor: pointer; font-weight: 600; font-size: .92rem; padding: .3rem 0; }
+.verdict { display: flex; gap: .6rem; align-items: center; font-size: .92rem; margin-bottom: .35rem; }
+.verdict .ok { color: var(--color-success); font-weight: 700; }
+.verdict .warn { color: var(--color-warning); font-weight: 700; }
+.diagram-container { overflow-x: auto; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 1rem; }
+img.shot { max-width: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); }
+@media print { details { open: true } .stats { display: none } }
+</style>
+</head>
+<body>
+<div class="main">
+<header>
+    <div class="label">Change Report · Co-Learning</div>
+    <h1>Yuuzu IDE v2 — 功能完整化:editor 寫入、DB 查詢、SFTP、git 操作、settings、browser</h1>
+    <div class="meta">2026-06-13 · branch main(未提交)· 接續 v2 real-wiring 第一輪</div>
+</header>
+
+<div class="stats">
+    <div class="stat"><div class="value">14</div><div class="label">變更檔案</div></div>
+    <div class="stat"><div class="value">418</div><div class="label">tests 全綠(+16)</div></div>
+    <div class="stat"><div class="value">7</div><div class="label">功能域接線</div></div>
+    <div class="stat"><div class="value">2</div><div class="label">驗證期抓到的 bug</div></div>
+</div>
+
+<div class="card">
+    <h2>① What — 這輪把哪些 demo 功能換成真實後端</h2>
+    <ul>
+        <li><b>編輯器可編輯 + ⌘S 儲存</b>:真檔案 tab 改為「透明 textarea 疊在語法高亮層上」的編輯面,dirty 追蹤、儲存中狀態、<code>write_text_file</code> 帶 <code>expectedVersion</code> 做磁碟版本衝突偵測。</li>
+        <li><b>DB Data grid / SQL console</b>:開表自動跑 <code>SELECT * … LIMIT(設定值)</code>;SQL 視圖是可編輯 console(⌘⏎ 執行);mutation/destructive 語句被後端拒絕時自動彈確認框,帶 <code>RUN MUTATION</code> / <code>RUN DESTRUCTIVE SQL</code> 重跑;Structure 視圖顯示 schema inspect 的真欄位;Export 走 <code>export_database_query_result</code>。</li>
+        <li><b>SFTP 真會話</b>:<code>connect_remote_host</code> → 雙 pane 真列表(local=workspace 掃描、remote=<code>list_sftp_directory</code>)、雙擊進目錄、「..」上層、⌘C/⌘V 與拖曳觸發 <code>upload/download_sftp_file</code>、本地刪除(確認後)。</li>
+        <li><b>Git 操作</b>:commit detail 的 Checkout / Cherry-pick / Revert 與右鍵選單接真指令(checkout、revert 先過確認框);graph header 新增 ⟳ Fetch / ↓ Pull / ↑ Push;side panel Fetch 同步;Copy hash 寫進系統剪貼簿。</li>
+        <li><b>Settings 持久化</b>:所有設定值寫入 localStorage 跨啟動還原;fontSize → 編輯器/終端字級即時套用;tokenChip 開關 Σ chip;cursor blink 開關。</li>
+        <li><b>Status bar 真值</b>:⟳ behind↓ ahead↑ 來自 git status、Ln/Col 來自編輯器游標、Spaces 跟 tabSize 設定、語言由副檔名推導;demo 專屬的假數字(✗0 ⚠3、dev server)在 real mode 隱藏。</li>
+        <li><b>Browser tab</b>:可編輯網址列 → <code>browser_validate_url</code>(僅 http loopback)→ iframe 載入 dev server;⟳ 重載、錯誤顯示。</li>
+        <li><b>確認框系統</b>:新增全域 <code>ConfirmModal</code>(Esc 可關),所有危險操作(checkout/revert/刪檔/危險 SQL)統一經過它。</li>
+    </ul>
+</div>
+
+<div class="card">
+    <h2>② 檔案變更表(How)</h2>
+    <table>
+        <thead><tr><th>檔案</th><th>類型</th><th>變更</th><th>工具</th></tr></thead>
+        <tbody>
+            <tr><td class="file">src/v2/v2-model.ts</td><td><span class="tag mod">MOD</span></td><td>Tab 擴充(version/savedContent/sql/grid/urlInput…)、DbGrid/DbCol 型別、sizeLabel/langLabel/buildSelect</td><td>Edit</td></tr>
+            <tr><td class="file">src/v2/bridge.ts</td><td><span class="tag mod">MOD</span></td><td>mapQueryResult、confirmationFromError、mapRemoteEntries/mapLocalEntries、parentPath、mapDbTables 帶欄位</td><td>Edit</td></tr>
+            <tr><td class="file">src/v2/v2-store.ts</td><td><span class="tag mod">MOD</span></td><td>RealDelegate +15 方法;confirm/cursor state;editor/db/sftp/git/browser actions;settings localStorage</td><td>Edit</td></tr>
+            <tr><td class="file">src/v2/controller.ts</td><td><span class="tag mod">MOD</span></td><td>delegate 實作:saveFile、dbRun(確認重跑)、dbExport、sftpOpen/Enter/Transfer/Delete、gitCheckout/CherryPick/Revert/Sync、browserGo、termKill;<b>fix:</b> openFile 存 version+savedContent;<b>fix:</b> ensureConnections 自動 inspect 展開中的連線</td><td>Edit</td></tr>
+            <tr><td class="file">src/v2/ContentViews.tsx</td><td><span class="tag mod">MOD</span></td><td>EditableBody(textarea 疊層編輯器、Tab 縮排、⌘S、游標回報);BrowserView real 模式(URL 列+iframe)</td><td>Edit</td></tr>
+            <tr><td class="file">src/v2/DbTableView.tsx</td><td><span class="tag mod">MOD</span></td><td>RealGrid(動態欄、NULL 標示、錯誤/執行中態)、RealStructure、可編輯 SQL console;demo 路徑原樣保留</td><td>Write</td></tr>
+            <tr><td class="file">src/v2/SftpView.tsx</td><td><span class="tag mod">MOD</span></td><td>連線狀態 chip、「..」導覽列、雙擊進目錄、loading/空目錄狀態</td><td>Write</td></tr>
+            <tr><td class="file">src/v2/GitGraphView.tsx</td><td><span class="tag mod">MOD</span></td><td>Fetch/Pull/Push 按鈕;Checkout/Cherry-pick/Revert/Copy hash 接 store 真 actions</td><td>Edit</td></tr>
+            <tr><td class="file">src/v2/Overlays.tsx</td><td><span class="tag mod">MOD</span></td><td>ConfirmModal;commit/term/dbconn/sftp 右鍵選單真實化(kill via SIGTERM、clear via form-feed)</td><td>Edit</td></tr>
+            <tr><td class="file">src/v2/Workbench.tsx</td><td><span class="tag mod">MOD</span></td><td>StatusBar 真值與 demo 元素隱藏;⌘S 全域快捷鍵;Esc 關 confirm;fontSize/blink 設定套用;dev badge 限 demo</td><td>Edit</td></tr>
+            <tr><td class="file">src/v2/SidePanel.tsx</td><td><span class="tag mod">MOD</span></td><td>GitBody Fetch → gitSync("fetch")</td><td>Edit</td></tr>
+            <tr><td class="file">src/v2/yuzu.css</td><td><span class="tag mod">MOD</span></td><td>編輯器疊層樣式、--yz2-ed-fs 字級變數、url-input、browser-frame、sql console、confirm modal、btn-danger</td><td>Edit/Bash</td></tr>
+            <tr><td class="file">src/v2/{bridge,v2-store,v2-model}.test.ts</td><td><span class="tag new">TEST</span></td><td>+16 tests:sftp/query 映射、confirmation 解析、dirty 流程、settings 持久化、confirm modal、clip idx</td><td>Edit</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="card">
+    <h2>③ Why — 設計取捨</h2>
+    <ul>
+        <li><b>textarea 疊層而非引入 Monaco/CodeMirror</b>:零依賴、與 Yuzu 設計的行高/字體完全一致;>3000 行自動退回純文字高亮,效能可控。語法高亮沿用設計稿的 hlLine。</li>
+        <li><b>DB 確認流程交給後端分類</b>:前端不自己猜 SQL 危險性 — 直接執行,後端拒絕時從錯誤訊息取出官方確認字串(<code>requires confirmation text: …</code>)再彈框,與 Rust 端單一事實來源對齊。</li>
+        <li><b>git checkout/revert 的確認字串</b>由 Rust 源碼確認:<code>CHECKOUT {name}</code> 與 <code>REVERT {short}</code>,在 UI 確認框後由 controller 組裝,不讓使用者打字。</li>
+        <li><b>Browser 用 iframe 而非 v1 的螢幕截圖</b>:後端 <code>browser_validate_url</code> 本就限 http loopback,dev server 預覽在 dev 模式(http origin)下 iframe 可直接互動,比截圖預覽強;打包版(tauri:// origin)若被 mixed-content 擋下會顯示錯誤訊息,留待後續評估 proxy。</li>
+        <li><b>Settings 用 localStorage</b>:後端 <code>AppSettings</code> 結構是固定欄位(density/theme/accent…),塞不下 v2 的 22 個鍵;localStorage 在 WKWebView 持久且零風險。視覺型設定(fontSize/tokenChip/blink/theme)即時套用,其餘先儲存。</li>
+    </ul>
+</div>
+
+<div class="card">
+    <h2>④ Architecture — 資料流</h2>
+    <div class="diagram-container">
+    <svg viewBox="0 0 940 430" xmlns="http://www.w3.org/2000/svg" font-family="system-ui" font-size="12">
+        <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#9ca3af"/></marker></defs>
+        <rect x="10" y="10" width="920" height="120" rx="12" fill="#f8fafc" stroke="#e5e7eb"/>
+        <text x="24" y="32" font-weight="700" fill="#374151">Views(React)</text>
+        <g fill="#fff" stroke="#d1d5db">
+            <rect x="24" y="46" width="140" height="34" rx="8"/><rect x="174" y="46" width="120" height="34" rx="8"/>
+            <rect x="304" y="46" width="120" height="34" rx="8"/><rect x="434" y="46" width="120" height="34" rx="8"/>
+            <rect x="564" y="46" width="130" height="34" rx="8"/><rect x="704" y="46" width="100" height="34" rx="8"/>
+            <rect x="814" y="46" width="100" height="34" rx="8"/>
+        </g>
+        <g fill="#374151" text-anchor="middle">
+            <text x="94" y="67">EditableBody ✎</text><text x="234" y="67">DbTableView ⛁</text>
+            <text x="364" y="67">SftpView ⇅</text><text x="494" y="67">GitGraphView ⎇</text>
+            <text x="629" y="67">BrowserView ◉ iframe</text><text x="754" y="67">StatusBar</text>
+            <text x="864" y="67">ConfirmModal</text>
+        </g>
+        <text x="24" y="112" fill="#6b7280" font-size="11">所有互動 → store actions;危險操作先經 ConfirmModal(checkout / revert / delete / 危險 SQL)</text>
+
+        <rect x="10" y="160" width="430" height="90" rx="12" fill="#f0fdf4" stroke="#bbf7d0"/>
+        <text x="24" y="182" font-weight="700" fill="#166534">v2-store(zustand,同步)</text>
+        <text x="24" y="204" fill="#374151" font-size="11">demo 分支:設計稿資料原樣運作(瀏覽器)</text>
+        <text x="24" y="222" fill="#374151" font-size="11">real 分支:realDelegate?.saveFile / dbRun / sftpTransfer / gitSync…</text>
+        <text x="24" y="240" fill="#6b7280" font-size="11">settings → localStorage(yuuzu-ide-v2-settings)</text>
+
+        <rect x="500" y="160" width="430" height="90" rx="12" fill="#eff6ff" stroke="#bfdbfe"/>
+        <text x="514" y="182" font-weight="700" fill="#1e40af">controller.ts(async 編排,Tauri 限定)</text>
+        <text x="514" y="204" fill="#374151" font-size="11">saveFile→write_text_file(expectedVersion)· dbRun→execute(+confirmation 重試)</text>
+        <text x="514" y="222" fill="#374151" font-size="11">sftpOpen→connect+list ×2 · gitSync→push/pull/fetch→reloadGit</text>
+        <text x="514" y="240" fill="#374151" font-size="11">bridge.ts 純映射(全部有測試)</text>
+
+        <rect x="10" y="290" width="920" height="120" rx="12" fill="#fafaf9" stroke="#e7e5e4"/>
+        <text x="24" y="312" font-weight="700" fill="#44403c">Tauri Rust commands</text>
+        <g fill="#fff" stroke="#d6d3d1">
+            <rect x="24" y="328" width="170" height="30" rx="8"/><rect x="204" y="328" width="200" height="30" rx="8"/>
+            <rect x="414" y="328" width="200" height="30" rx="8"/><rect x="624" y="328" width="160" height="30" rx="8"/>
+            <rect x="794" y="328" width="120" height="30" rx="8"/>
+        </g>
+        <g fill="#44403c" text-anchor="middle" font-size="11">
+            <text x="109" y="347">read/write_text_file</text><text x="304" y="347">execute_database_query(分類+確認)</text>
+            <text x="514" y="347">connect/list/upload/download SFTP</text><text x="704" y="347">git checkout/revert/push…</text>
+            <text x="854" y="347">validate_url</text>
+        </g>
+        <text x="24" y="392" fill="#78716c" font-size="11">確認字串(Rust 為準):CHECKOUT {hash} · REVERT {short} · RUN MUTATION · RUN DESTRUCTIVE SQL</text>
+
+        <g stroke="#9ca3af" stroke-width="1.5" marker-end="url(#ar)" fill="none">
+            <path d="M 300 130 L 240 160"/><path d="M 620 130 L 660 160"/>
+            <path d="M 440 205 L 500 205"/>
+            <path d="M 225 250 L 225 290"/><path d="M 715 250 L 715 290"/>
+        </g>
+    </svg>
+    </div>
+</div>
+
+<div class="card">
+    <h2>⑤ 驗證(runtime observation)</h2>
+    <div class="verdict"><span class="ok">PASS</span><span>418/418 tests(+16 新增)· tsc 乾淨 · vite build 成功</span></div>
+    <div class="verdict"><span class="ok">PASS</span><span>Demo 迴歸:Playwright 驅動 vite(瀏覽器),v2 介面、git graph、confirm modal、status bar 正常</span></div>
+    <div class="verdict"><span class="ok">PASS</span><span>Real-mode 前端全鏈:以 mock <code>__TAURI_INTERNALS__</code>(攔截 invoke、可斷言參數)在 Playwright 驅動</span></div>
+    <div class="verdict"><span class="warn">PENDING</span><span>Native 真後端最終確認:驗證進行中螢幕被鎖定(凌晨),視窗截圖不可得;fixtures 已備妥(見⑥)</span></div>
+    <details>
+        <summary>Real-mode mock-IPC 驗證明細(每項都含 IPC 參數斷言)</summary>
+        <ul>
+            <li>✅ bootstrap:registry→rail、branch=main、explorer dirs-first、badges、status bar「⟳ 0↓ 1↑」、demo 元素隱藏</li>
+            <li>✅ 編輯器:打字→dirty chip「● unsaved · ⌘S」→ Ln/Col 即時 → ⌘S → <code>write_text_file(content, expectedVersion={modified_ms:1,len:56})</code> → dirty 清除</li>
+            <li>🔍 <b>抓到 bug#1</b>:首次儲存 expectedVersion=null — openFile 漏存 version/savedContent → 已修+重驗</li>
+            <li>✅ Git:checkout confirm →「CHECKOUT c3c3…(fullhash)」、revert danger 紅鈕 →「REVERT c3c3c3c(short)」、push → git_push、之後自動 reloadGit(status+log+detail)</li>
+            <li>✅ DB:開表自動 SELECT(grid 動態欄位、NULL 灰顯、3 rows · 7ms);SQL console 改 DELETE → Run → 後端拒 → confirm「RUN MUTATION」→ 重跑帶 confirmation → 「1 rows affected」</li>
+            <li>🔍 <b>抓到 bug#2</b>:DB 連線初始展開但 schema 不載入(要收合再展開)→ ensureConnections 自動 inspect → 已修+重驗</li>
+            <li>✅ SFTP:connect→「SSH · connected」、雙 pane 真列表、雙擊 releases/ 進入、「..」返回、⌘C/⌘V → <code>download_sftp_file(remotePath=/var/www/deploy.sh, localRelativePath=deploy.sh)</code></li>
+            <li>✅ Browser:輸入 localhost:5173/app → validate → iframe src=http://localhost:5173/app、tab 標題 localhost:5173</li>
+            <li>✅ Settings:fontSize 16 → --yz2-ed-fs 即時 16px → reload 後仍 16px(localStorage)</li>
+            <li>🔍 probe:SQL 無確認直接執行 mutation → 正確被擋;貼上到同 pane → 拒絕提示;空 URL → 「Type a URL first」</li>
+        </ul>
+    </details>
+    <h3>截圖</h3>
+    <p><img class="shot" src="v2-screens/v2-git-confirm-modal.jpeg" alt="git graph + sync buttons + confirm modal"></p>
+</div>
+
+<div class="card">
+    <h2>⑥ 待辦與測試夾具(下次接續)</h2>
+    <ul>
+        <li><b>Native 最終驗證(解鎖螢幕後)</b>:tauri dev 已在跑;workspace「v2-lab」(/tmp/v2-lab,3 commits + origin=/tmp/v2-lab-remote.git)、DB profile「lab.db」(SQLite,5 users)、SSH host「loopback」已種好。驗:編輯檔案⌘S→磁碟、users 表查詢、Push→bare repo、SFTP loopback。</li>
+        <li><b>SSH loopback key 已移除</b>(安全):重建→ <code>cp ~/.ssh/id_ed25519.pub ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys</code>;驗完 <code>rm ~/.ssh/authorized_keys</code>。</li>
+        <li><b>還原 fixtures</b>:workspace-registry 備份在 <code>/tmp/workspace-registry.backup.json</code>;app 資料夾的 database-profiles.json / remote-hosts.json 為測試種子,不需要時可刪。</li>
+        <li>尚未接線(本輪範圍外):remote 端刪除/改名、branch-from-commit(後端無此指令)、editor 多游標/搜尋、diagnostics 計數、demo 編輯寫回。</li>
+    </ul>
+</div>
+
+</div>
+</body>
+</html>

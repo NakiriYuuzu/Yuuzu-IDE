@@ -21,5 +21,5 @@ export function appendDiagnosticEvent(args: {
   source: string;
   message: string;
 }): Promise<DiagnosticEvent> {
-  return call("append_diagnostic_event", args);
+  return call("append_diagnostic_event", { event: args });
 }
