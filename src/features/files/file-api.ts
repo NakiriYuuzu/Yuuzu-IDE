@@ -1,3 +1,4 @@
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { call } from "../../lib/tauri";
 import type { FileVersion } from "./file-model";
 import type { WorkspaceSearchResult } from "./search-model";
@@ -89,4 +90,18 @@ export function unwatchWorkspace(
   handle: WatchWorkspaceHandle,
 ): Promise<void> {
   return call<void>("unwatch_workspace", { handle });
+}
+
+export type WorkspaceFileChangedEvent = {
+  workspace_root: string;
+  path: string;
+  version: FileVersion | null;
+};
+
+export function onWorkspaceFileChanged(
+  handler: (event: WorkspaceFileChangedEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<WorkspaceFileChangedEvent>("workspace://file-changed", (event) =>
+    handler(event.payload),
+  );
 }

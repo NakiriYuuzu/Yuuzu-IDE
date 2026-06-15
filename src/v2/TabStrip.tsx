@@ -51,7 +51,11 @@ export function TabStrip() {
                         >
                             <span className={g.isChip ? "yz2-chip" : undefined} style={g.style}>{g.glyph}</span>
                             <span className="title">{t.type === "file" ? t.name : t.title}</span>
-                            {t.dirty ? <span className="dirty" /> : null}
+                            {t.externalChange ? (
+                                <span className="external" title="Changed on disk" />
+                            ) : t.dirty ? (
+                                <span className="dirty" />
+                            ) : null}
                             <button
                                 type="button"
                                 className="yz2-tab-close"

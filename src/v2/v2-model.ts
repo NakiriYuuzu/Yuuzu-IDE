@@ -82,6 +82,8 @@ export type Tab = {
     savedContent?: string | null
     version?: { modified_ms: number; len: number } | null
     saving?: boolean
+    // set when the file changed on disk outside the editor (file watcher)
+    externalChange?: boolean
     // real database console
     profileId?: string
     sql?: string

@@ -13,6 +13,9 @@ import {
     switchWorkspace,
 } from "../features/workspace/workspace-api"
 import { createTextFile, deletePath, readTextFile, writeTextFile } from "../features/files/file-api"
+import { evictHlCache } from "./hl-cache"
+import { externallyChangedTabIds, normalizeFsPath, treeRefreshTarget, mergeTreeChildren } from "./file-watch"
+import type { FileVersion } from "../features/files/file-model"
 import { getGitCommitDetail } from "../features/git/git-api"
 import {
     closeTerminalSession,
@@ -179,9 +182,111 @@ function tabIn(pid: string, tabId: number): Tab | null {
     return store().ui[pid]?.tabs.find((t) => t.id === tabId) ?? null
 }
 
+// Re-read a file tab from disk and apply it. force=true (manual Reload) discards
+// local edits; force=false (auto-reload) bails if the tab is no longer clean or
+// its version drifted since the read started (the user typed meanwhile).
+async function readAndApply(pid: string, tabId: number, force: boolean): Promise<void> {
+    const root = rootOf(pid)
+    const tab = tabIn(pid, tabId)
+    if (!root || !tab || tab.type !== "file" || !tab.realPath) return
+    const before = tab.version
+    try {
+        const read = await readTextFile(root, tab.realPath)
+        const cur = tabIn(pid, tabId)
+        if (!cur || cur.type !== "file" || cur.realPath !== tab.realPath) return
+        if (!force) {
+            if (cur.dirty || cur.saving) {
+                patchTab(pid, tabId, (t) => ({ ...t, externalChange: true }))
+                return
+            }
+            const bv = before
+            const cv = cur.version
+            if (!bv || !cv || bv.modified_ms !== cv.modified_ms || bv.len !== cv.len) {
+                patchTab(pid, tabId, (t) => ({ ...t, externalChange: true }))
+                return
+            }
+        }
+        evictHlCache(tabId)
+        patchTab(pid, tabId, (t) => ({
+            ...t,
+            loading: false,
+            content: read.content,
+            tooLarge: read.too_large,
+            version: read.version,
+            savedContent: read.content ?? t.savedContent,
+            dirty: false,
+            saving: false,
+            externalChange: false
+        }))
+        if (typeof read.content === "string" && cur.path && isLspSupportedDocumentPath(cur.path)) {
+            void openLspDocument(pid, cur.path, read.content).catch(() => {})
+        }
+    } catch (error) {
+        if (force) {
+            store().showToast("Reload: " + errMsg(error))
+        } else {
+            // auto-reload failed (file deleted/unreadable in the race) — surface
+            // it as a conflict instead of silently keeping stale content
+            patchTab(pid, tabId, (t) => ({ ...t, externalChange: true }))
+        }
+    }
+}
+
 // Raw query results per db tab, kept outside the store for CSV export.
 const lastDbResults = new Map<number, DatabaseQueryResult>()
 const backupTimers = new Map<number, ReturnType<typeof setTimeout>>()
+
+// Coalesced tree refreshes, keyed per project. Absorbs multi-event saves and
+// bulk git operations so the explorer re-scans each affected dir at most once.
+const treeSyncPending = new Map<string, Set<string>>()
+const treeSyncTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+async function syncTreeDir(pid: string, displayDir: string): Promise<void> {
+    const root = rootOf(pid)
+    if (!root) return
+    try {
+        if (!displayDir) {
+            const entries = await scanWorkspace(root)
+            const fresh = mapEntriesToNodes(entries)
+            patchProject(pid, (p) => {
+                p.treeData = mergeTreeChildren(p.treeData, fresh)
+                p.treeLoaded = true
+            })
+            return
+        }
+        const node = findNode(store().ui[pid]?.treeData ?? [], displayDir)
+        if (!node?.p) return
+        const entries = await scanDirectory(root, node.p)
+        const fresh = mapEntriesToNodes(entries)
+        patchProject(pid, (p) => {
+            const target = findNode(p.treeData, displayDir)
+            const merged = mergeTreeChildren(target?.d ?? [], fresh)
+            p.treeData = setNodeChildren(p.treeData, displayDir, merged)
+        })
+    } catch {
+        // best-effort: a transient scan failure just leaves the tree as-is
+    }
+}
+
+function scheduleTreeSync(pid: string, displayDir: string): void {
+    let pending = treeSyncPending.get(pid)
+    if (!pending) {
+        pending = new Set()
+        treeSyncPending.set(pid, pending)
+    }
+    pending.add(displayDir)
+    const existing = treeSyncTimers.get(pid)
+    if (existing) clearTimeout(existing)
+    const timer = setTimeout(() => {
+        treeSyncTimers.delete(pid)
+        const dirs = treeSyncPending.get(pid)
+        treeSyncPending.delete(pid)
+        if (!dirs) return
+        for (const dir of dirs) void syncTreeDir(pid, dir)
+    }, 120)
+    treeSyncTimers.set(pid, timer)
+}
+
 const lspChangeTimers = new Map<number, ReturnType<typeof setTimeout>>()
 const lspDiagTimers = new Map<number, ReturnType<typeof setTimeout>>()
 const closedLspPathsByPid = new Map<string, Set<string>>()
@@ -348,6 +453,7 @@ async function applyRenameEdits(pid: string, groups: ReturnType<typeof flattenWo
                     version: result.version,
                     dirty: false,
                     saving: false,
+                    externalChange: false,
                 }))
                 if (isLspSupportedDocumentPath(group.path)) {
                     await openLspDocument(pid, group.path, nextContent)
@@ -958,6 +1064,9 @@ const delegate = {
                     ? displayPath.slice(0, displayPath.lastIndexOf("/"))
                     : ""
                 await refreshDir(pid, parent)
+                const goneIds = (store().ui[pid]?.tabs ?? [])
+                    .filter((t) => t.path && (t.path === displayPath || t.path.startsWith(displayPath + "/")))
+                    .map((t) => t.id)
                 patchProject(pid, (q) => {
                     q.tabs = q.tabs.filter(
                         (t) => !(t.path && (t.path === displayPath || t.path.startsWith(displayPath + "/"))),
@@ -965,6 +1074,7 @@ const delegate = {
                     if (!q.tabs.find((t) => t.id === q.activeTab)) q.activeTab = q.tabs[0]?.id ?? null
                     if (q.split && !q.tabs.find((t) => t.id === q.split)) q.split = null
                 })
+                for (const id of goneIds) evictHlCache(id)
                 store().showToast("Deleted " + displayPath)
             } catch (error) {
                 store().showToast("Delete: " + errMsg(error))
@@ -995,7 +1105,7 @@ const delegate = {
 
     // ------------------------------------------------------------ editor
 
-    saveFile(tabId: number) {
+    saveFile(tabId: number, force = false) {
         const pid = store().active
         const root = rootOf(pid)
         const tab = tabIn(pid, tabId)
@@ -1005,7 +1115,7 @@ const delegate = {
         patchTab(pid, tabId, (t) => ({ ...t, saving: true }))
         void (async () => {
             try {
-                const result = await writeTextFile(root, tab.realPath as string, content, tab.version ?? null)
+                const result = await writeTextFile(root, tab.realPath as string, content, force ? null : (tab.version ?? null))
                 if (tabIn(pid, tabId)?.content === content) {
                     const pending = backupTimers.get(tabId)
                     if (pending) {
@@ -1019,6 +1129,7 @@ const delegate = {
                     version: result.version,
                     savedContent: content,
                     dirty: (t.content ?? "") !== content,
+                    externalChange: false,
                 }))
                 const current = tabIn(pid, tabId)
                 if (
@@ -1041,6 +1152,32 @@ const delegate = {
                 logDiag("error", "editor", "save failed " + errMsg(error))
             }
         })()
+    },
+
+    reloadFile(tabId: number) {
+        void readAndApply(store().active, tabId, true)
+    },
+
+    onExternalFileChange(workspaceId: string, eventWorkspaceRoot: string, eventPath: string, eventVersion: FileVersion | null) {
+        const p = store().ui[workspaceId]
+        if (!p) return
+        const ids = externallyChangedTabIds(p.tabs, eventPath, eventVersion)
+        for (const id of ids) {
+            const tab = p.tabs.find((t) => t.id === id)
+            if (!tab) continue
+            if (eventVersion != null && !tab.dirty && !tab.saving) {
+                void readAndApply(workspaceId, id, false)
+            } else {
+                patchTab(workspaceId, id, (t) => ({ ...t, externalChange: true }))
+            }
+        }
+        const target = treeRefreshTarget(
+            p.treeData,
+            normalizeFsPath(eventWorkspaceRoot),
+            normalizeFsPath(eventPath),
+            eventVersion != null
+        )
+        if (target !== null) scheduleTreeSync(workspaceId, target)
     },
 
     // ------------------------------------------------------------ database

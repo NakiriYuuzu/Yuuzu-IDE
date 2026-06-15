@@ -11,6 +11,7 @@ import { tokenChipFor, useV2Store } from "./v2-store"
 import { resizeSession, writeToSession } from "./controller"
 import { screenBoundsFromRect } from "./bridge"
 import { tabGlyph } from "./TabStrip"
+import { highlightContent } from "./hl-cache"
 
 function cursorFrom(el: HTMLTextAreaElement): { ln: number; col: number } {
     const upTo = el.value.slice(0, el.selectionStart)
@@ -25,24 +26,7 @@ function cursorFromEventTarget(target: EventTarget | null): { ln: number; col: n
     return textarea?.tagName === "TEXTAREA" ? cursorFrom(textarea as HTMLTextAreaElement) : null
 }
 
-// Highlighted-line cache for real file contents, keyed per tab.
-type HlLines = { n: number; segs: Seg[] }[]
-const realHlCache = new Map<number, { key: string; lines: HlLines }>()
 const EMPTY_DIAGNOSTICS: LspDiagnostic[] = []
-
-function highlightContent(tabId: number, content: string, lang: string): HlLines {
-    const key = lang + ":" + content.length + ":" + content.slice(0, 80)
-    const hit = realHlCache.get(tabId)
-    if (hit && hit.key === key) return hit.lines
-    const rawLines = content.split("\n")
-    const plain = rawLines.length > 3000
-    const lines = rawLines.map((l, i) => ({
-        n: i + 1,
-        segs: plain ? [{ c: "var(--yz-dbe4ec)", s: l || " " }] : hlLine(l, lang),
-    }))
-    realHlCache.set(tabId, { key, lines })
-    return lines
-}
 
 export function Segs({ segs }: { segs: Seg[] }) {
     return (
@@ -169,6 +153,8 @@ export function EditorView({ tab }: { tab: Tab }) {
     const openCtx = useV2Store((s) => s.openCtx)
     const showTokenChip = useV2Store((s) => s.stVals.tokenChip !== false)
     const toggleBlame = useV2Store((s) => s.toggleBlame)
+    const reloadTab = useV2Store((s) => s.reloadTab)
+    const overwriteTab = useV2Store((s) => s.overwriteTab)
     const path = tab.path ?? ""
     const isReal = tab.realPath !== undefined
     const editable = isReal && !tab.loading && !tab.tooLarge && typeof tab.content === "string"
@@ -212,7 +198,29 @@ export function EditorView({ tab }: { tab: Tab }) {
             <div className="yz2-ed-head">
                 <span className="yz2-ellipsis">{projectName + " › " + path.split("/").join(" › ")}</span>
                 <span className="yz2-spacer" />
-                {editable && (tab.dirty || tab.saving) ? (
+                {editable && tab.externalChange && (tab.dirty || tab.saving) ? (
+                    <span className="yz2-ext-chip" title="Unsaved local edits and this file changed on disk">
+                        ⚠ changed on disk
+                        <button
+                            type="button"
+                            className="yz2-ext-btn"
+                            title="Discard local edits and load the disk version"
+                            onClick={() => reloadTab(tab.id)}
+                        >
+                            Reload
+                        </button>
+                        <button
+                            type="button"
+                            className="yz2-ext-btn"
+                            title="Overwrite the disk version with your local edits"
+                            onClick={() => overwriteTab(tab.id)}
+                        >
+                            Overwrite
+                        </button>
+                    </span>
+                ) : editable && tab.externalChange ? (
+                    <span className="yz2-ext-chip" title="This file changed on disk">⟳ changed on disk</span>
+                ) : editable && (tab.dirty || tab.saving) ? (
                     <span className="yz2-dirty-chip">{tab.saving ? "saving…" : "● unsaved · ⌘S"}</span>
                 ) : null}
                 {meta ? <span style={{ whiteSpace: "nowrap" }}>{meta}</span> : null}

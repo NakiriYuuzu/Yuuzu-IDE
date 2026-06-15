@@ -7,6 +7,9 @@ import { confirmationTextForGitAction, type GitBlameFile, type GitBranchFull, ty
 import type { GitDiffHunks, HunkSelection } from "../features/git/git-diff-model"
 import type { GitExportFormat, GitExportScope, GitResetMode } from "../features/git/git-log-model"
 import type { BrowserPreviewBounds } from "../features/browser/browser-model"
+import type { FileVersion } from "../features/files/file-model"
+import { evictHlCache } from "./hl-cache"
+import { externallyChangedTabIds } from "./file-watch"
 
 import {
     ADD_PRESETS,
@@ -64,7 +67,14 @@ export type RealDelegate = {
     addNode: (dirPath: string, kind: "file" | "dir") => void
     deleteNode: (displayPath: string) => void
     selectCommit: (hash: string) => void
-    saveFile: (tabId: number) => void
+    saveFile: (tabId: number, force?: boolean) => void
+    reloadFile: (tabId: number) => void
+    onExternalFileChange: (
+        workspaceId: string,
+        eventWorkspaceRoot: string,
+        eventPath: string,
+        eventVersion: FileVersion | null
+    ) => void
     dbOpenTable: (tabId: number) => void
     dbRun: (tabId: number, confirmation?: string) => void
     dbExport: (tabId: number) => void
@@ -355,7 +365,10 @@ export type V2State = {
 
     // editor
     setTabContent: (tabId: number, content: string) => void
+    markExternalFileChange: (workspaceId: string, eventWorkspaceRoot: string, eventPath: string, eventVersion: FileVersion | null) => void
     saveTab: (tabId: number) => void
+    reloadTab: (tabId: number) => void
+    overwriteTab: (tabId: number) => void
     setCursor: (cursor: { ln: number; col: number } | null) => void
     gotoDefinition: (path: string, line: number, col: number) => void
     findReferences: (path: string, line: number, col: number) => void
@@ -927,7 +940,9 @@ export function createV2Store() {
                     const idx = arr.findIndex((n) => n.n === segs[segs.length - 1])
                     if (idx >= 0) arr.splice(idx, 1)
                     p.treeData = treeData
+                    const goneIds = p.tabs.filter((t) => t.path && (t.path === path || t.path.startsWith(path + "/"))).map((t) => t.id)
                     p.tabs = p.tabs.filter((t) => !(t.path && (t.path === path || t.path.startsWith(path + "/"))))
+                    for (const id of goneIds) evictHlCache(id)
                     if (!p.tabs.find((t) => t.id === p.activeTab)) {
                         p.activeTab = p.tabs[0] ? p.tabs[0].id : null
                     }
@@ -1038,9 +1053,41 @@ export function createV2Store() {
                 }
             },
 
+            markExternalFileChange: (workspaceId, eventWorkspaceRoot, eventPath, eventVersion) => {
+                if (get().mode === "real") {
+                    realDelegate?.onExternalFileChange(workspaceId, eventWorkspaceRoot, eventPath, eventVersion)
+                    return
+                }
+                set((s) => {
+                    const ui = s.ui[workspaceId]
+                    if (!ui) return {}
+                    const ids = externallyChangedTabIds(ui.tabs, eventPath, eventVersion)
+                    if (ids.length === 0) return {}
+                    const flagged = new Set(ids)
+                    const tabs = ui.tabs.map((t) => (flagged.has(t.id) ? { ...t, externalChange: true } : t))
+                    return { ui: { ...s.ui, [workspaceId]: { ...ui, tabs } } }
+                })
+            },
+
             saveTab: (tabId) => {
                 if (get().mode === "real") {
                     realDelegate?.saveFile(tabId)
+                    return
+                }
+                get().showToast("Demo mode — edits are not written to disk")
+            },
+
+            reloadTab: (tabId) => {
+                if (get().mode === "real") {
+                    realDelegate?.reloadFile(tabId)
+                    return
+                }
+                get().showToast("Demo mode — no disk to reload from")
+            },
+
+            overwriteTab: (tabId) => {
+                if (get().mode === "real") {
+                    realDelegate?.saveFile(tabId, true)
                     return
                 }
                 get().showToast("Demo mode — edits are not written to disk")
@@ -1897,6 +1944,7 @@ export function createV2Store() {
                     }
                     if (p.split === id) p.split = null
                 })
+                evictHlCache(id)
                 if (closing && get().mode === "real") realDelegate?.closeTab(closing)
             },
 
@@ -1907,6 +1955,7 @@ export function createV2Store() {
                     p.activeTab = id
                     if (p.split && p.split !== id) p.split = null
                 })
+                for (const t of removed) evictHlCache(t.id)
                 if (get().mode === "real") {
                     for (const t of removed) realDelegate?.closeTab(t)
                 }
@@ -1919,6 +1968,7 @@ export function createV2Store() {
                     p.activeTab = null
                     p.split = null
                 })
+                for (const t of removed) evictHlCache(t.id)
                 if (get().mode === "real") {
                     for (const t of removed) realDelegate?.closeTab(t)
                 }

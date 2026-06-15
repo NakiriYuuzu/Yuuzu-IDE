@@ -3,11 +3,14 @@
 // plus the global overlays and the design's keyboard model.
 
 import { useEffect } from "react"
+import { type UnlistenFn } from "@tauri-apps/api/event"
 
 import "./yuzu.css"
 import { filterPaletteCommands, filterPaletteFiles, langLabel } from "./v2-model"
 import { useV2Store, v2Store } from "./v2-store"
 import { bootstrapV2 } from "./controller"
+import { onWorkspaceFileChanged, unwatchWorkspace, watchWorkspace, type WatchWorkspaceHandle } from "../features/files/file-api"
+import { normalizeFsPath } from "./file-watch"
 import { isTauri, langForPath } from "./bridge"
 import { ProjectRail } from "./ProjectRail"
 import { SidePanel } from "./SidePanel"
@@ -215,6 +218,50 @@ function MainContent() {
     )
 }
 
+function useWorkspaceFileWatcher() {
+    const mode = useV2Store((s) => s.mode)
+    const activeId = useV2Store((s) => s.active)
+    const root = useV2Store((s) => s.meta[s.active]?.root)
+    useEffect(() => {
+        if (!isTauri() || mode !== "real" || !activeId || !root) return
+        let handle: WatchWorkspaceHandle | null = null
+        let unlisten: UnlistenFn | null = null
+        let disposed = false
+        const dispose = () => {
+            if (unlisten) {
+                unlisten()
+                unlisten = null
+            }
+            if (handle) {
+                void unwatchWorkspace(handle).catch(() => undefined)
+                handle = null
+            }
+        }
+        void (async () => {
+            try {
+                handle = await watchWorkspace(root)
+                if (disposed) {
+                    dispose()
+                    return
+                }
+                const watchedRoot = handle.workspace_root
+                unlisten = await onWorkspaceFileChanged((ev) => {
+                    if (normalizeFsPath(ev.workspace_root) !== normalizeFsPath(watchedRoot)) return
+                    useV2Store.getState().markExternalFileChange(activeId, ev.workspace_root, ev.path, ev.version)
+                })
+                if (disposed) dispose()
+            } catch {
+                // watcher is best-effort; release anything already acquired
+                dispose()
+            }
+        })()
+        return () => {
+            disposed = true
+            dispose()
+        }
+    }, [mode, activeId, root])
+}
+
 function useGlobalKeys() {
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
@@ -360,6 +407,7 @@ export function WorkbenchV2() {
     const fontSize = useV2Store((s) => (typeof s.stVals.fontSize === "string" ? s.stVals.fontSize : "13"))
     const blink = useV2Store((s) => s.stVals.blink !== false)
     useGlobalKeys()
+    useWorkspaceFileWatcher()
 
     useEffect(() => {
         void bootstrapV2()
