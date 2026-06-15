@@ -1,5 +1,7 @@
 # File Watcher v2 後續三項(自動重載 / 樹同步 / 衝突處置)— 設計文件
 
+> 🟢 **實作狀態:已實作**(2026-06-15,commit `732b7f9`)— 自動重載乾淨分頁、檔案樹同步增刪、衝突分頁 Reload/Overwrite 皆已上線;tsc 乾淨、觸及測試全綠。對應 plan:`docs/superpowers/plans/2026-06-15-file-watcher-followups.md`
+
 - 日期:2026-06-15
 - 範圍:在已上線的 file watcher「偵測+標記」基線上,補上三項使用者面向行為:**自動重載乾淨分頁**、**檔案樹同步增刪**、**衝突分頁處置 UI**。對應使用者最初的需求「外部變動會立刻更新到本地嗎?」
 - 對應 plan:待 `writing-plans` 產出逐步執行版。

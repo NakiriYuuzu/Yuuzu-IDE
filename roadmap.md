@@ -32,6 +32,27 @@ IDE process.
   JetBrains in resource usage, it needs a narrower first implementation or a
   lazy-loading model.
 
+## Frontend Shell: v2 (Yuzu Redesign)
+
+The shipping frontend is the v2 "Yuzu" redesign in `src/v2/`. `src/App.tsx`
+renders `WorkbenchV2` as the only shell: the original `src/app/AppShell.tsx`
+shell has been removed, and the per-feature UI under `src/features/*` is retained
+only as backend models, types, and the reused terminal component, not as the live
+interface.
+
+The redesign changed two engine decisions recorded under Open Decisions:
+
+- The editor is now a custom full-height `<textarea>` over per-line painted
+  highlight layers (`src/v2/ContentViews.tsx`, `src/v2/hl-cache.ts`,
+  `src/v2/v2-model.ts`), not Monaco. Highlighting runs through `hlLine` with a
+  per-tab cache.
+- The terminal still uses xterm.js by reusing the original
+  `src/features/terminal/TerminalTab` component inside the v2 `TerminalView`.
+
+Several capabilities that earlier nodes marked complete were built against the
+old shell and do not yet have a v2 interface. Their per-node status below is
+annotated accordingly, and the remaining port-over work is collected in Node 14.
+
 ## Initial Performance Targets
 
 These are working targets for architectural decisions. They can be adjusted once
@@ -401,8 +422,10 @@ Node 10.5 Git Deep Dive.
 
 ### Node 5: Docs Context And Markdown Workflows
 
-**Status:** completed and passed; measured docs results are recorded in
-`docs/architecture/node-5-docs-results.md`.
+**Status:** backend completed and passed against the old shell; measured docs
+results are recorded in `docs/architecture/node-5-docs-results.md`. The Docs
+panel and Markdown preview have **not been ported to the v2 shell** and are not
+reachable in the shipping app. v2 port-over is tracked in Node 14.
 
 **Goal:** make project docs visible, searchable, and reusable as development
 context.
@@ -431,8 +454,12 @@ context.
 
 ### Node 6: Language Intelligence
 
-**Status:** completed and passed; measured language results are recorded in
-`docs/architecture/node-6-language-results.md`.
+**Status:** backend completed and passed; measured language results are recorded
+in `docs/architecture/node-6-language-results.md`. In the v2 shell, editor
+diagnostics are wired (`diagnosticsByPath` / `diagLineSeverity` in
+`src/v2/ContentViews.tsx`), but the SidePanel Language panel is still a demo stub
+("Language services are not connected in demo mode") and the LSP control/log
+surface is not connected. v2 completion is tracked in Node 14.
 
 **Goal:** add modern code intelligence while keeping idle overhead low.
 
@@ -623,9 +650,12 @@ source-control loop.
 
 ### Node 11: Debugging
 
-**Status:** completed and passed. Final results, including the AppShell
-stopped-event live variables, stale-snapshot, and workspace refresh guard
-follow-ups, are recorded in `docs/architecture/node-11-debugging-results.md`.
+**Status:** backend completed and passed against the old shell. Final results,
+including the AppShell stopped-event live variables, stale-snapshot, and
+workspace refresh guard follow-ups, are recorded in
+`docs/architecture/node-11-debugging-results.md`. The Debug panel, breakpoint
+gutter, and debug console have **not been ported to the v2 shell**. v2 port-over
+is tracked in Node 14.
 
 **Goal:** add debugging once editor, terminal, and language intelligence are
 stable.
@@ -656,8 +686,10 @@ stable.
 
 **Goal:** open customization without destabilizing core performance.
 
-**Status:** completed and passed. Final results are recorded in
-`docs/architecture/node-12-extension-results.md`.
+**Status:** backend completed and passed. Final results are recorded in
+`docs/architecture/node-12-extension-results.md`. The extension,
+command-registry, and keybinding UI has **not been ported to the v2 shell**. v2
+port-over is tracked in Node 14.
 
 **Scope**
 
@@ -684,6 +716,9 @@ stable.
 ### Node 13: Hardening, Packaging, And Daily Driver Readiness
 
 **Status:** complete; final verification passes on the current macOS host.
+Recovery (unsaved-backup save/list/discard/restore) and the Settings modal are
+wired in the v2 shell (`src/v2/controller.ts`, `src/v2/ProjectRail.tsx`,
+`src/v2/Overlays.tsx`).
 
 **Goal:** make Yuuzu-IDE reliable enough for everyday personal use.
 
@@ -710,6 +745,48 @@ stable.
 
 - Public release polish.
 - Team collaboration features.
+
+### Node 14: v2 (Yuzu Redesign) Completion
+
+**Status:** in progress. The editor performance pass is partially done; the
+feature port-overs have not started.
+
+**Goal:** bring the shipping v2 shell up to the capability the old shell already
+proved, and close out the editor performance pass, so that nodes marked complete
+are actually reachable in the app the user runs.
+
+**Scope**
+
+- Port the Docs panel and Markdown preview into the v2 shell (Node 5 UI).
+- Port the Debug panel, breakpoint gutter, and debug console into the v2 shell
+  (Node 11 UI).
+- Port the extension, command-registry, and keybinding surface into the v2 shell
+  (Node 12 UI).
+- Connect the v2 SidePanel Language panel to the real LSP control and log
+  surface, replacing the demo stub (Node 6 completion).
+- Editor performance pass, tracked in
+  `docs/superpowers/plans/2026-06-15-editor-perf-cache-lsp-sizing.md`:
+  - Done: shared `hl-cache` module with eviction on tab close, and
+    `content-visibility` on offscreen editor lines.
+  - Pending: the LSP memory bucket measurement (a manual GUI step) and the
+    follow-up change review.
+- Retire the superseded `src/features/*` UI components once their behavior is
+  confirmed in v2, keeping the models, types, and the reused `TerminalTab`.
+
+**Acceptance**
+
+- Docs, Debug, and Extension features are reachable and usable from the v2 shell,
+  matching their old-shell acceptance.
+- The Language panel reports real language-server state instead of the demo stub.
+- The editor performance plan is closed out with the LSP memory numbers recorded
+  and the review done.
+- No dead `src/features/*` UI remains that the v2 shell does not import.
+
+**Non-goals**
+
+- New capabilities beyond what earlier nodes already specified.
+- Rewriting the v2 editor engine again.
+- Public release polish.
 
 ## Suggested First Milestones
 
@@ -750,9 +827,13 @@ stable.
 - Desktop stack: Tauri 2 with Vite, React, TypeScript, and shadcn/ui is the
   primary route. Rust-native no-WebView frameworks are fallback research only if
   Node 0 measurements show WebView overhead is unacceptable.
-- Editor engine: Monaco Editor is the first route, loaded lazily inside the main
-  workbench WebView.
-- Terminal engine: xterm.js is the first terminal renderer; Rust owns PTY process
+- Editor engine: Monaco Editor was the first route, but the shipping v2 shell
+  replaced it with a custom full-height `<textarea>` over per-line painted
+  highlight layers (`hlLine` plus a per-tab highlight cache). Monaco now survives
+  only in the retired `src/features/editor/` code. See Frontend Shell: v2 (Yuzu
+  Redesign).
+- Terminal engine: xterm.js is the terminal renderer; the v2 shell reuses the
+  `src/features/terminal/TerminalTab` component, and Rust owns PTY process
   lifecycle through a PTY abstraction such as `portable-pty`.
 - Index storage format.
 - Workspace metadata file location.
@@ -760,11 +841,23 @@ stable.
 
 ## Current Priority
 
-Node 0, Node 1, Node 2, Node 3, Node 4, Node 5, Node 6, Node 7, Node 8,
-Node 9, Node 10, Node 10.5 (Git Deep Dive), Node 11, Node 12, and Node 13 are
-complete. Node 13 evidence is recorded in
-`docs/architecture/node-13-hardening-results.md`; Git Deep Dive evidence is
-recorded in `docs/architecture/git-deep-dive-results.md`.
+Node 0 through Node 13 (including Node 10.5 Git Deep Dive) are complete at the
+backend and old-shell level. However, the shipping frontend is now the v2 "Yuzu"
+redesign (see Frontend Shell: v2), and several completed nodes do not yet have a
+v2 interface. With v2 as the only shell, the user-reachable surface is:
+
+- Fully in v2: Node 1 shell, Node 2 editor/search, Node 3 terminal, Node 4 and
+  10.5 git, Node 7 agent, Node 8 browser, Node 9 database, Node 10 remote, and
+  Node 13 settings/recovery.
+- Partial in v2: Node 6 language — editor diagnostics are wired, but the LSP
+  control panel is a demo stub.
+- Not yet in v2: Node 5 docs, Node 11 debug, and Node 12 extension UI.
+
+The active priority is **Node 14: v2 (Yuzu Redesign) Completion**, which ports
+the missing Docs, Debug, and Extension surfaces, connects the Language panel to
+real LSP state, and closes the editor performance pass. Node 13 evidence is
+recorded in `docs/architecture/node-13-hardening-results.md`; Git Deep Dive
+evidence is recorded in `docs/architecture/git-deep-dive-results.md`.
 
 - Node 0 measurements keep Tauri 2 as the main route; Rust-native fallback
   research remains deferred.
