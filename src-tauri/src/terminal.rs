@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     io::{Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{mpsc, Arc, Mutex},
     thread,
     time::{Duration, Instant},
@@ -187,7 +187,7 @@ impl TerminalState {
         rows: u16,
         cols: u16,
     ) -> Result<TerminalSessionInfo, String> {
-        let cwd = cwd.canonicalize().map_err(|err| err.to_string())?;
+        let cwd = normalize_session_cwd(&cwd)?;
         let pty_system = NativePtySystem::default();
         let pair = pty_system
             .openpty(terminal_size(rows, cols))
@@ -381,6 +381,15 @@ fn kill_and_wait(child: &mut dyn Child) {
     let _ = child.wait();
 }
 
+/// Canonicalizes a terminal session's working directory without the Windows
+/// `\\?\` verbatim prefix that `std::fs::canonicalize` emits. `CreateProcessW`'s
+/// `lpCurrentDirectory` does not honor verbatim paths, so a verbatim cwd silently
+/// drops the shell into the system default directory (e.g. `C:\Windows`) instead
+/// of the workspace. `dunce::canonicalize` matches std on non-Windows platforms.
+fn normalize_session_cwd(cwd: &Path) -> Result<PathBuf, String> {
+    dunce::canonicalize(cwd).map_err(|err| err.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use portable_pty::{Child, ChildKiller, ExitStatus, PtySystem};
@@ -391,6 +400,7 @@ mod tests {
         thread,
         time::Duration,
     };
+    use tempfile::tempdir;
 
     #[derive(Debug)]
     struct NoopKiller;
@@ -744,5 +754,32 @@ mod tests {
         super::kill_and_wait(&mut child);
 
         assert_eq!(*events.lock().expect("events"), vec!["kill", "wait"]);
+    }
+
+    #[test]
+    fn session_cwd_is_absolute() {
+        let dir = tempdir().expect("tempdir");
+
+        let cwd = super::normalize_session_cwd(dir.path()).expect("normalized cwd");
+
+        assert!(cwd.is_absolute());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn session_cwd_strips_windows_verbatim_prefix() {
+        let dir = tempdir().expect("tempdir");
+        let verbatim = std::fs::canonicalize(dir.path()).expect("verbatim path");
+        assert!(
+            verbatim.to_string_lossy().starts_with(r"\\?\"),
+            "precondition: std canonicalize must produce a verbatim prefix on Windows"
+        );
+
+        let cwd = super::normalize_session_cwd(&verbatim).expect("normalized cwd");
+
+        assert!(
+            !cwd.to_string_lossy().starts_with(r"\\?\"),
+            "terminal cwd must drop the verbatim prefix that CreateProcessW ignores"
+        );
     }
 }

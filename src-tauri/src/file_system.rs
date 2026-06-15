@@ -87,11 +87,13 @@ fn workspace_child(
     path: &Path,
     resolution: PathResolution,
 ) -> Result<PathBuf, String> {
-    let root = workspace_root
-        .canonicalize()
-        .map_err(|err| err.to_string())?;
+    // `dunce::canonicalize` avoids the Windows `\\?\` verbatim prefix that
+    // `std::fs::canonicalize` emits. Without this, an already-canonical
+    // verbatim root compared against a non-verbatim absolute candidate fails
+    // `starts_with`, rejecting valid paths as "outside workspace" on Windows.
+    let root = dunce::canonicalize(workspace_root).map_err(|err| err.to_string())?;
     let lexical_root = if workspace_root.is_absolute() {
-        normalize_path(workspace_root)?
+        normalize_path(dunce::simplified(workspace_root))?
     } else {
         root.clone()
     };
@@ -107,7 +109,7 @@ fn workspace_child(
             return Err(format!("path outside workspace: {}", candidate.display()));
         }
 
-        let canonical = candidate.canonicalize().map_err(|err| err.to_string())?;
+        let canonical = dunce::canonicalize(&candidate).map_err(|err| err.to_string())?;
         if !canonical.starts_with(&root) {
             return Err(format!("path outside workspace: {}", candidate.display()));
         }
@@ -125,8 +127,7 @@ fn workspace_child(
         return Err(format!("path outside workspace: {}", candidate.display()));
     }
 
-    let existing_parent = nearest_existing_parent(&normalized)?
-        .canonicalize()
+    let existing_parent = dunce::canonicalize(nearest_existing_parent(&normalized)?)
         .map_err(|err| err.to_string())?;
     if !existing_parent.starts_with(&root) {
         return Err(format!("path outside workspace: {}", candidate.display()));
@@ -439,6 +440,43 @@ mod tests {
         let result = super::workspace_child_for_existing_dir(root.path(), outside.path());
 
         assert!(result.unwrap_err().contains("outside workspace"));
+    }
+
+    #[test]
+    fn workspace_child_for_existing_dir_accepts_absolute_cwd_under_canonical_root() {
+        // Mirrors the terminal/task spawn path: `trusted_workspace_root` returns a
+        // canonicalized root, and the frontend passes an absolute cwd (cwd == root).
+        let root = tempdir().expect("tempdir");
+        let canonical_root = dunce::canonicalize(root.path()).expect("canonical root");
+
+        let result = super::workspace_child_for_existing_dir(&canonical_root, &canonical_root);
+
+        assert!(
+            result.is_ok(),
+            "absolute cwd equal to the workspace root must be accepted: {result:?}"
+        );
+        assert_eq!(result.expect("cwd"), canonical_root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn workspace_child_for_existing_dir_accepts_absolute_cwd_under_verbatim_root() {
+        // Regression for Windows: `std::fs::canonicalize` yields a `\\?\` verbatim
+        // root, while the frontend passes a non-verbatim absolute cwd. The prefix
+        // mismatch previously rejected the workspace's own directory as "outside".
+        let root = tempdir().expect("tempdir");
+        let verbatim_root = std::fs::canonicalize(root.path()).expect("verbatim root");
+        assert!(
+            verbatim_root.to_string_lossy().starts_with(r"\\?\"),
+            "precondition: std canonicalize must produce a verbatim prefix on Windows"
+        );
+
+        let result = super::workspace_child_for_existing_dir(&verbatim_root, root.path());
+
+        assert!(
+            result.is_ok(),
+            "absolute cwd inside a verbatim root must be accepted: {result:?}"
+        );
     }
 
     #[test]
