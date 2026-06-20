@@ -3026,6 +3026,10 @@ circle.lane-5 {
   background: var(--editor);
 }
 
+.terminal-host .xterm-image-layer {
+  filter: var(--terminal-image-filter, none);
+}
+
 .terminal-failure {
   height: 100%;
   display: flex;

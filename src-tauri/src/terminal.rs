@@ -18,9 +18,25 @@ const MAX_COALESCED_CHUNK_BYTES: usize = 64 * 1024;
 fn apply_terminal_session_env(command: &mut CommandBuilder) {
     #[cfg(not(windows))]
     command.arg("-l");
-    command.env("TERM", "xterm-256color");
+    command.env("TERM", "mlterm-256color");
     command.env("COLORTERM", "truecolor");
-    command.env("TERM_PROGRAM", "yuuzu-ide");
+    for key in [
+        "TERM_PROGRAM",
+        "TERM_PROGRAM_VERSION",
+        "TERM_SESSION_ID",
+        "ITERM_PROFILE",
+        "ITERM_PROFILE_NAME",
+        "KITTY_WINDOW_ID",
+        "WEZTERM_EXECUTABLE",
+        "WEZTERM_VERSION",
+        "TMUX",
+        "TMUX_PANE",
+        "ZELLIJ",
+        "ZELLIJ_SESSION_NAME",
+        "ZELLIJ_VERSION",
+    ] {
+        command.env_remove(key);
+    }
     if command.get_env("LANG").is_none_or(|value| value.is_empty()) {
         command.env("LANG", "en_US.UTF-8");
     }
@@ -486,8 +502,21 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
-    fn shell_command_starts_a_login_shell_with_terminal_env() {
+    fn shell_command_starts_a_login_shell_with_sixel_capable_terminal_env() {
         let mut command = portable_pty::CommandBuilder::new("/bin/zsh");
+        command.env("TERM_PROGRAM", "Apple_Terminal");
+        command.env("TERM_PROGRAM_VERSION", "999");
+        command.env("TERM_SESSION_ID", "leaked-session");
+        command.env("ITERM_PROFILE", "leaked-profile");
+        command.env("ITERM_PROFILE_NAME", "leaked-profile-name");
+        command.env("KITTY_WINDOW_ID", "42");
+        command.env("WEZTERM_EXECUTABLE", "wezterm");
+        command.env("WEZTERM_VERSION", "999");
+        command.env("TMUX", "leaked-tmux");
+        command.env("TMUX_PANE", "%1");
+        command.env("ZELLIJ", "1");
+        command.env("ZELLIJ_SESSION_NAME", "leaked-zellij");
+        command.env("ZELLIJ_VERSION", "999");
 
         super::apply_terminal_session_env(&mut command);
 
@@ -496,7 +525,7 @@ mod tests {
         assert_eq!(argv[1].to_str(), Some("-l"));
         assert_eq!(
             command.get_env("TERM").and_then(|value| value.to_str()),
-            Some("xterm-256color")
+            Some("mlterm-256color")
         );
         assert_eq!(
             command
@@ -504,12 +533,23 @@ mod tests {
                 .and_then(|value| value.to_str()),
             Some("truecolor")
         );
-        assert_eq!(
-            command
-                .get_env("TERM_PROGRAM")
-                .and_then(|value| value.to_str()),
-            Some("yuuzu-ide")
-        );
+        for key in [
+            "TERM_PROGRAM",
+            "TERM_PROGRAM_VERSION",
+            "TERM_SESSION_ID",
+            "ITERM_PROFILE",
+            "ITERM_PROFILE_NAME",
+            "KITTY_WINDOW_ID",
+            "WEZTERM_EXECUTABLE",
+            "WEZTERM_VERSION",
+            "TMUX",
+            "TMUX_PANE",
+            "ZELLIJ",
+            "ZELLIJ_SESSION_NAME",
+            "ZELLIJ_VERSION",
+        ] {
+            assert!(command.get_env(key).is_none(), "{key} should be scrubbed");
+        }
     }
 
     #[test]

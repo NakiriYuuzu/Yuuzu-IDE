@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { ITheme } from "@xterm/xterm";
 
 import { loadXterm } from "./load-xterm";
 import {
@@ -18,6 +19,95 @@ type TerminalDimensions = {
   rows: number;
   cols: number;
 };
+
+const terminalThemeTokens = {
+  background: ["--yz-090c12", "#090c12"],
+  foreground: ["--yz-e6edf3", "#e6edf3"],
+  cursor: ["--yz-a8e23f", "#a8e23f"],
+  cursorAccent: ["--yz-0a0e15", "#0a0e15"],
+  selectionBackground: ["--yz-34421d", "#34421d"],
+  black: ["--yz-0a0e15", "#0a0e15"],
+  red: ["--yz-f07178", "#f07178"],
+  green: ["--yz-9ccc65", "#9ccc65"],
+  yellow: ["--yz-ffcb6b", "#ffcb6b"],
+  blue: ["--yz-82aaff", "#82aaff"],
+  magenta: ["--yz-c792ea", "#c792ea"],
+  cyan: ["--yz-6fd6c3", "#6fd6c3"],
+  white: ["--yz-dbe4ec", "#dbe4ec"],
+  brightBlack: ["--yz-5a6675", "#5a6675"],
+  brightRed: ["--yz-f78c6c", "#f78c6c"],
+  brightGreen: ["--yz-bdf04f", "#bdf04f"],
+  brightYellow: ["--yz-f6a960", "#f6a960"],
+  brightBlue: ["--yz-82aaff", "#82aaff"],
+  brightMagenta: ["--yz-ce93d8", "#ce93d8"],
+  brightCyan: ["--yz-6fd6c3", "#6fd6c3"],
+  brightWhite: ["--yz-e6edf3", "#e6edf3"],
+} as const satisfies Partial<Record<keyof ITheme, readonly [string, string]>>;
+
+const codexPetSourceHue = 225;
+
+function terminalThemeColor(tokenName: string, fallback: string): string {
+  if (typeof document === "undefined") return fallback;
+  const style = document.defaultView?.getComputedStyle(document.documentElement);
+  const token = style?.getPropertyValue(tokenName).trim();
+  return token || fallback;
+}
+
+function parseCssRgb(color: string): [number, number, number] | null {
+  const hex = color.trim().match(/^#([\da-f]{3}|[\da-f]{6})$/i)?.[1];
+  if (hex) {
+    const value =
+      hex.length === 3
+        ? hex
+            .split("")
+            .map((part) => part + part)
+            .join("")
+        : hex;
+    return [
+      Number.parseInt(value.slice(0, 2), 16),
+      Number.parseInt(value.slice(2, 4), 16),
+      Number.parseInt(value.slice(4, 6), 16),
+    ];
+  }
+
+  const rgb = color
+    .trim()
+    .match(/^rgba?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)/i);
+  if (!rgb) return null;
+  return [rgb[1], rgb[2], rgb[3]].map((part) =>
+    Math.max(0, Math.min(255, Number(part))),
+  ) as [number, number, number];
+}
+
+function rgbHue([red, green, blue]: [number, number, number]): number {
+  const r = red / 255;
+  const g = green / 255;
+  const b = blue / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const delta = max - min;
+
+  if (delta === 0) return 0;
+  if (max === r) return ((g - b) / delta + (g < b ? 6 : 0)) * 60;
+  if (max === g) return ((b - r) / delta + 2) * 60;
+  return ((r - g) / delta + 4) * 60;
+}
+
+function terminalImageFilterFromCss(): string {
+  const accent = parseCssRgb(terminalThemeColor("--yz-a8e23f", "#a8e23f"));
+  if (!accent) return "none";
+  const hueRotation = Math.round((rgbHue(accent) - codexPetSourceHue + 360) % 360);
+  return `hue-rotate(${hueRotation}deg) saturate(1.15) brightness(1.02)`;
+}
+
+function terminalThemeFromCss(): ITheme {
+  return Object.fromEntries(
+    Object.entries(terminalThemeTokens).map(([themeKey, [tokenName, fallback]]) => [
+      themeKey,
+      terminalThemeColor(tokenName, fallback),
+    ]),
+  ) as ITheme;
+}
 
 function normalizeTerminalDimensions(
   dimensions: TerminalDimensions | undefined,
@@ -60,6 +150,7 @@ export function TerminalTab({ sessionId, onInput, onResize }: TerminalTabProps) 
     let cleanup: (() => void) | undefined;
     let inputCleanup: (() => void) | undefined;
     let unsubscribeChunks: (() => void) | undefined;
+    let themeObserver: MutationObserver | undefined;
     let lastSentDimensions: TerminalDimensions | null = null;
     let resizeFrame: number | undefined;
 
@@ -72,17 +163,13 @@ export function TerminalTab({ sessionId, onInput, onResize }: TerminalTabProps) 
         if (disposed || !hostRef.current) {
           return;
         }
+        const host = hostRef.current;
 
         const terminal = new Terminal({
           allowProposedApi: true,
           cursorBlink: true,
           fontSize: 13,
-          theme: {
-            background: "#0a0e15",
-            foreground: "#e6edf3",
-            cursor: "#a8e23f",
-            selectionBackground: "#34421d",
-          },
+          theme: terminalThemeFromCss(),
         });
         const imageAddon = new ImageAddon({
           enableSizeReports: true,
@@ -96,7 +183,24 @@ export function TerminalTab({ sessionId, onInput, onResize }: TerminalTabProps) 
 
         terminal.loadAddon(imageAddon);
         terminal.loadAddon(fitAddon);
-        terminal.open(hostRef.current);
+        terminal.open(host);
+
+        const applyTerminalTheme = () => {
+          terminal.options.theme = terminalThemeFromCss();
+          host.style.setProperty(
+            "--terminal-image-filter",
+            terminalImageFilterFromCss(),
+          );
+        };
+        applyTerminalTheme();
+        const DocumentMutationObserver = document.defaultView?.MutationObserver;
+        if (DocumentMutationObserver) {
+          themeObserver = new DocumentMutationObserver(applyTerminalTheme);
+          themeObserver.observe(document.documentElement, {
+            attributes: true,
+            attributeFilter: ["data-yz-theme", "style", "class"],
+          });
+        }
 
         cleanup = createTerminalCleanup(terminal);
 
@@ -160,6 +264,7 @@ export function TerminalTab({ sessionId, onInput, onResize }: TerminalTabProps) 
         cleanup = createTerminalCleanup(terminal, resizeObserver);
       } catch (error) {
         if (!disposed) {
+          themeObserver?.disconnect();
           unsubscribeChunks?.();
           inputCleanup?.();
           cleanup?.();
@@ -179,6 +284,7 @@ export function TerminalTab({ sessionId, onInput, onResize }: TerminalTabProps) 
           clearTimeout(resizeFrame);
         }
       }
+      themeObserver?.disconnect();
       unsubscribeChunks?.();
       inputCleanup?.();
       cleanup?.();

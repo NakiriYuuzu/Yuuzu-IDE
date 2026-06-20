@@ -54,6 +54,41 @@ async function waitUntil(assertion: () => void) {
   throw lastError;
 }
 
+const terminalThemeVars: Record<string, string> = {
+  "--yz-090c12": "#101820",
+  "--yz-e6edf3": "#e6edf3",
+  "--yz-a8e23f": "#a8e23f",
+  "--yz-34421d": "#34421d",
+  "--yz-0a0e15": "#0a0e15",
+  "--yz-f07178": "#f07178",
+  "--yz-9ccc65": "#9ccc65",
+  "--yz-ffcb6b": "#ffcb6b",
+  "--yz-82aaff": "#82aaff",
+  "--yz-c792ea": "#c792ea",
+  "--yz-6fd6c3": "#6fd6c3",
+  "--yz-dbe4ec": "#dbe4ec",
+  "--yz-5a6675": "#5a6675",
+  "--yz-f78c6c": "#f78c6c",
+  "--yz-bdf04f": "#bdf04f",
+  "--yz-f6a960": "#f6a960",
+  "--yz-ce93d8": "#ce93d8",
+};
+
+function setTerminalThemeVars(overrides: Record<string, string> = {}) {
+  for (const [name, value] of Object.entries({
+    ...terminalThemeVars,
+    ...overrides,
+  })) {
+    document.documentElement.style.setProperty(name, value);
+  }
+}
+
+function clearTerminalThemeVars() {
+  for (const name of Object.keys(terminalThemeVars)) {
+    document.documentElement.style.removeProperty(name);
+  }
+}
+
 function installAnimationFrameMock() {
   const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
   const originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
@@ -189,6 +224,7 @@ async function mountTerminalTab(
   });
 
   return {
+    container,
     unmount: () => {
       root.unmount();
       container.remove();
@@ -287,6 +323,125 @@ describe("TerminalTab output pipeline", () => {
 
     mounted.unmount();
     clearTerminalReplayOutput("w:tab-4");
+    loadXtermMock.mockReset();
+  });
+
+  test("uses Yuuzu CSS tokens for the xterm color palette", async () => {
+    FakeTerminal.instances = [];
+    FakeFitAddon.instances = [];
+    FakeImageAddon.instances = [];
+    setTerminalThemeVars();
+    loadXtermMock.mockResolvedValueOnce(fakeXterm());
+    clearTerminalReplayOutput("w:tab-theme");
+
+    const mounted = await mountTerminalTab("w:tab-theme");
+    await waitUntil(() => expect(FakeTerminal.instances.length).toBe(1));
+
+    expect(FakeTerminal.instances[0]!.options.theme).toMatchObject({
+      background: "#101820",
+      foreground: "#e6edf3",
+      cursor: "#a8e23f",
+      selectionBackground: "#34421d",
+      red: "#f07178",
+      green: "#9ccc65",
+      yellow: "#ffcb6b",
+      blue: "#82aaff",
+      magenta: "#c792ea",
+      cyan: "#6fd6c3",
+      brightBlack: "#5a6675",
+      brightGreen: "#bdf04f",
+    });
+
+    mounted.unmount();
+    clearTerminalThemeVars();
+    clearTerminalReplayOutput("w:tab-theme");
+    loadXtermMock.mockReset();
+  });
+
+  test("updates the xterm theme when the app theme attribute changes", async () => {
+    FakeTerminal.instances = [];
+    FakeFitAddon.instances = [];
+    FakeImageAddon.instances = [];
+    const previousTheme = document.documentElement.getAttribute("data-yz-theme");
+    document.documentElement.setAttribute("data-yz-theme", "dark");
+    setTerminalThemeVars();
+    loadXtermMock.mockResolvedValueOnce(fakeXterm());
+    clearTerminalReplayOutput("w:tab-theme-change");
+
+    const mounted = await mountTerminalTab("w:tab-theme-change");
+    await waitUntil(() => expect(FakeTerminal.instances.length).toBe(1));
+    const terminal = FakeTerminal.instances[0]!;
+    expect((terminal.options.theme as Record<string, string>).background).toBe(
+      "#101820",
+    );
+
+    setTerminalThemeVars({
+      "--yz-090c12": "#f7f9fc",
+      "--yz-e6edf3": "#1b2430",
+      "--yz-a8e23f": "#5e8c14",
+      "--yz-34421d": "#d8eab8",
+      "--yz-82aaff": "#2a6fdb",
+    });
+    document.documentElement.setAttribute("data-yz-theme", "light");
+
+    await waitUntil(() =>
+      expect(terminal.options.theme).toMatchObject({
+        background: "#f7f9fc",
+        foreground: "#1b2430",
+        cursor: "#5e8c14",
+        selectionBackground: "#d8eab8",
+        blue: "#2a6fdb",
+      }),
+    );
+
+    mounted.unmount();
+    if (previousTheme) {
+      document.documentElement.setAttribute("data-yz-theme", previousTheme);
+    } else {
+      document.documentElement.removeAttribute("data-yz-theme");
+    }
+    clearTerminalThemeVars();
+    clearTerminalReplayOutput("w:tab-theme-change");
+    loadXtermMock.mockReset();
+  });
+
+  test("tints terminal image layers from the active theme accent", async () => {
+    FakeTerminal.instances = [];
+    FakeFitAddon.instances = [];
+    FakeImageAddon.instances = [];
+    const previousTheme = document.documentElement.getAttribute("data-yz-theme");
+    document.documentElement.setAttribute("data-yz-theme", "dark");
+    setTerminalThemeVars();
+    loadXtermMock.mockResolvedValueOnce(fakeXterm());
+    clearTerminalReplayOutput("w:tab-image-theme");
+
+    const mounted = await mountTerminalTab("w:tab-image-theme");
+    await waitUntil(() => expect(FakeTerminal.instances.length).toBe(1));
+    const host = mounted.container.querySelector(".terminal-host") as HTMLElement;
+
+    expect(host.style.getPropertyValue("--terminal-image-filter")).toBe(
+      "hue-rotate(216deg) saturate(1.15) brightness(1.02)",
+    );
+
+    setTerminalThemeVars({
+      "--yz-a8e23f": "#5e8c14",
+    });
+    document.documentElement.setAttribute("data-yz-theme", "light");
+
+    await waitUntil(() =>
+      expect(host.style.getPropertyValue("--terminal-image-filter")).toBe(
+        "hue-rotate(218deg) saturate(1.15) brightness(1.02)",
+      ),
+    );
+
+    mounted.unmount();
+    if (previousTheme) {
+      document.documentElement.setAttribute("data-yz-theme", previousTheme);
+    } else {
+      document.documentElement.removeAttribute("data-yz-theme");
+    }
+    clearTerminalThemeVars();
+    clearTerminalReplayOutput("w:tab-image-theme");
     loadXtermMock.mockReset();
   });
 
