@@ -1,6 +1,6 @@
 # Database 連線管理 — 設計文件
 
-> 🟡 **實作狀態:部分實作**(2026-06-15 核對)— 後端 profile CRUD(`save/delete/list_database_profile`、keyring secret)與基礎 DB 瀏覽/查詢已有;**缺**新增/編輯/測試連線 UI、`test_database_connection` command 與 `ConnectionTestResult`。對應 plan:`docs/superpowers/plans/2026-06-15-database-connection-management.md`
+> 🟢 **實作狀態:已完成**(2026-06-16 核對)— 已補上新增/編輯/刪除/測試連線 UI、`test_database_connection` command 與 `ConnectionTestResult`;後端 profile CRUD(`save/delete/list_database_profile`、keyring secret)與基礎 DB 瀏覽/查詢維持既有整合。對應 plan:`docs/superpowers/plans/2026-06-15-database-connection-management.md`
 
 - 日期:2026-06-15
 - 範圍:在 Yuuzu-IDE 補上「建立與管理 database 連線」的前端,對標 JetBrains Data Source 的核心流程。
@@ -67,7 +67,7 @@ React 元件 (SidePanel DbBody / DbConnDialog)
 v2-store.ts (V2State actions + RealDelegate interface)
       │  real mode 轉派
       ▼
-controller.ts (RealDelegate 實作,保留 raw profiles)
+controller.ts (RealDelegate 實作,同步 dbProfiles)
       │  呼叫 feature api
       ▼
 features/database/database-api.ts (call 封裝)
@@ -90,26 +90,28 @@ demo mode 在 store 內以本地陣列模擬;real mode 轉派給 `RealDelegate`,
       pub ok: bool,
       pub message: String,
       pub elapsed_ms: u64,
+      pub server_version: Option<String>,
   }
   ```
 - **新函式**(`database.rs`):`pub async fn test_database_connection_input(input: &DatabaseProfileInput) -> ConnectionTestResult`
   - 直接從 `input` 的明文欄位組連線參數(`host` / `port` / `database` / `username` / `password` 或 `sqlite_path`),**不經過 keyring、不經過既有 `connection_parts`**(那些接的是已存檔的 `DatabaseProfile`,型別與用途不同)。
+  - edit 模式若 `input.id` 存在且 TCP 密碼欄位留空,command 會先在後端讀取該 profile 既有 secret,再交給此函式測試;secret 不會回傳到前端。
   - 各 driver 跑最小驗證:
-    - SQLite:`Connection::open` + `PRAGMA schema_version`。
-    - PostgreSQL:`PostgresConfig` connect(NoTls) + `SELECT 1`。
-    - MSSQL:`TcpStream::connect` + `TiberiusClient::connect` + `SELECT 1`。
+    - SQLite:`Connection::open_with_flags(..., SQLITE_OPEN_READ_ONLY)` + `SELECT sqlite_version()`。
+    - PostgreSQL:`PostgresConfig` connect(NoTls) + `SELECT version()`。
+    - MSSQL:`TcpStream::connect` + `TiberiusClient::connect` + `SELECT @@VERSION`。
   - **自帶精簡連線(約 15 行 / driver),不抽共用、不改動既有 `inspect_*` / `execute_*` 四個函式** —— 最 surgical、零回歸風險。連線建立的重複留待日後另案清理(見 §2 out-of-scope)。
   - **必須包 `tokio::time::timeout`(預設 10 秒,tokio `"time"` feature 已啟用)**:既有 `inspect_*` / `execute_*` 的連線均無 timeout,使用者填錯 host 時會卡在 OS TCP timeout(20~75 秒),Test 體驗無法接受。
   - 回傳 `ok=false` 時帶 backend 的精準錯誤(連線被拒 / 認證失敗 / 逾時 / 檔案不存在)。
   - 限制:PG 沿用既有 `NoTls`,連要求 SSL 的正式 PG 會失敗(屬既有限制,SSL 見 §2 out-of-scope)。
-- **command 包裝**(`commands.rs`,照 `inspect_database_schema` 模式):
+- **command 包裝**(`commands.rs`,State-aware wrapper):
   ```rust
-  pub async fn test_database_connection(input: DatabaseProfileInput, state: State<'_, AppState>)
+  pub async fn test_database_connection(state: State<'_, AppState>, input: DatabaseProfileInput)
       -> Result<ConnectionTestResult, String>
   ```
 - 註冊到 `lib.rs` 的 `invoke_handler`。
 
-> 其餘(save / delete / 編輯時保留密碼)**backend 完全不用改**:`save_profile`(`database.rs:495-510`)已實作「`password=Some` 寫 keyring、`password=None` 保留既有 secret」,且 `input.id` 有無即決定編輯或新增。
+> save / delete / 編輯時保留密碼沿用既有 `save_profile`:`password=Some` 寫 keyring、`password=None` 保留既有 secret,且 `input.id` 有無即決定編輯或新增。
 
 ---
 
@@ -117,18 +119,18 @@ demo mode 在 store 內以本地陣列模擬;real mode 轉派給 `RealDelegate`,
 
 新檔 `src/v2/DbConnDialog.tsx`,沿用 `BranchPopup.tsx` 的結構與 `yz2-branch-popup` 樣式風格(新 class 前綴 `yz2-dbdlg`)。
 
-- **開關狀態**:由 store 控制 `dbDialog: { mode: "new" } | { mode: "edit"; profileId: string } | null`(比照 `branchPopupOpen`)。
+- **開關狀態**:由 store 控制 per-project `dbDialog: DbDialogState`(含 `open` / `mode` / `profileId` / loading 與 result state,比照既有 per-project UI state)。
 - **表單欄位**(對應 `DatabaseProfileInput`):
   - `name`(必填)
   - `kind`:SQLite / PostgreSQL / MsSql 三選一;切換時顯示對應欄位。
-  - SQLite:`sqlite_path` + 用 `@tauri-apps/plugin-dialog` 的檔案選擇按鈕。
+  - SQLite:`sqlite_path` 路徑輸入欄位。
   - TCP(PG/MSSQL):`host` / `port`(預設 PG `5432`、MSSQL `1433`)/ `database` / `username` / `password`。
   - `read_only`、`production` 兩個開關。
 - **動作列**:
-  - **Test Connection** → `testDbConn(input)`,在 dialog 內 inline 顯示 ok / 錯誤訊息與耗時(`elapsed_ms`)。
+  - **Test Connection** → `testDbConn(input)`,在 dialog 內 inline 顯示 ok / 錯誤訊息、耗時(`elapsed_ms`)與版本(`server_version`)。
   - **Save** → 新增走 `saveDbConn`(無 id)、編輯走 `saveDbConn`(帶 id)。
   - **Cancel** → 關閉 dialog。
-- **編輯模式**:用 `profileId` 從 controller 保留的 raw profile 預填欄位;`password` 不預填,placeholder 標「留空 = 不變更」。
+- **編輯模式**:用 `profileId` 從 per-project `dbProfiles` 預填欄位;`password` 不預填,placeholder 標「留空 = 不變更」。
 - **驗證**:前端做基本必填檢查(name、依 kind 的必填欄位);深度驗證交給 backend(save/test 回錯)。
 
 掛載點:`Workbench.tsx` 與 `BranchPopup` 同層加入 `<DbConnDialog />`。
@@ -144,25 +146,26 @@ demo mode 在 store 內以本地陣列模擬;real mode 轉派給 `RealDelegate`,
 
 ### (b) `controller.ts`(RealDelegate)
 
-新增 3 個方法,並保留 raw profiles 供編輯預填:
+新增 3 個方法,並保留 `dbProfiles` 供編輯預填:
 
-- `dbSaveConn(input)` → `saveDatabaseProfile(input)`(`input.id` 有無即區分新增/編輯)→ 重新 `listDatabaseProfiles` → `mapDbProfiles` 更新 `dbConns` + 更新 raw profiles map → 關 dialog + toast。
-- `dbDeleteConn(profileId)` → `deleteDatabaseProfile(root, profileId)` → refresh `dbConns` 與 raw profiles。
+- `dbSaveConn(input)` → `saveDatabaseProfile(input)`(`input.id` 有無即區分新增/編輯)→ 重新 `listDatabaseProfiles` → `mapDbProfiles` 更新 `dbConns` + `dbProfiles` → 關 dialog + toast。
+- `dbDeleteConn(profileId)` → `deleteDatabaseProfile(root, profileId)` → refresh `dbConns` 與 `dbProfiles`。
 - `dbTestConn(input)` → `testDatabaseConnection(input)` → 回傳 `ConnectionTestResult` 給 dialog 顯示。
-- 新增 `rawProfiles: Map<string, DatabaseProfile>`,於 bootstrap(`controller.ts:514`)與每次 add/edit/delete 後同步更新。
+- `ensureConnections` 與每次 add/edit/delete 後同步 `ProjectUI.dbProfiles`,供 edit dialog prefill。
 
 ### (c) `v2-store.ts`
 
 - `RealDelegate` interface 加 3 方法簽名:`dbSaveConn` / `dbDeleteConn` / `dbTestConn`。
 - `V2State` 加 actions:`openDbConnDialog(mode, profileId?)` / `closeDbConnDialog` / `saveDbConn(input)` / `deleteDbConn(profileId)` / `testDbConn(input)`。
-- 加 `dbDialog` 開關狀態(per-project UI 狀態,比照既有 `branchPopupOpen`)。
+- 加 `dbProfiles` 與 `dbDialog` 開關狀態(per-project UI 狀態,比照既有 `branchPopupOpen`)。
 - demo mode:本地模擬(直接操作 `dbConns` 陣列);real mode:轉派 `realDelegate`。
 
 ### (d) `SidePanel.tsx` 的 `DbBody`
 
 - panel header 加「**+**」按鈕 → `openDbConnDialog("new")`。
-- 每個連線 row 加 hover 動作:**編輯**(`openDbConnDialog("edit", profileId)`)、**刪除**(confirm → `deleteDbConn`)。
-- 沿用既有 row action 的樣式與互動。
+- empty state 加「新增連線」按鈕 → `openDbConnDialog("new")`。
+- 每個連線 row 的 context menu 加:**編輯連線**(`openDbConnDialog("edit", profileId)`)、**刪除連線**(confirm → `deleteDbConn`)。
+- 沿用既有 context menu 與 confirm modal 樣式與互動。
 
 ### (e) `yuzu.css`
 
@@ -173,9 +176,9 @@ demo mode 在 store 內以本地陣列模擬;real mode 轉派給 `RealDelegate`,
 ## 7. 資料流
 
 - **新增**:`DbBody`「+」→ `openDbConnDialog("new")` → 填表 →(可選)Test → Save → `saveDbConn(input 無 id)` → `saveDatabaseProfile` → backend 建 profile + 寫 keyring → `listDatabaseProfiles` → 更新 `dbConns` → 關 dialog → toast。
-- **編輯**:row 編輯鈕 → `openDbConnDialog("edit", id)` → 由 raw profile 預填 → 改 → Save → `saveDbConn(input 帶 id)` → `saveDatabaseProfile`(密碼留空則保留既有 secret)→ refresh。
+- **編輯**:row context menu「編輯連線」→ `openDbConnDialog("edit", id)` → 由 `dbProfiles` 預填 → 改 → Save → `saveDbConn(input 帶 id)` → `saveDatabaseProfile`(密碼留空則保留既有 secret)→ refresh。
 - **刪除**:row 刪除鈕 → `ConfirmModal`(`Overlays.tsx:626`)→ `deleteDbConn` → `deleteDatabaseProfile` → backend 移除 profile + secret → refresh。
-- **測試**:Test 鈕 → `testDbConn(當前表單 input)` → `test_database_connection` → 明文連線 + 最小 query → 回 `{ ok, message, elapsed_ms }` → dialog inline 顯示。
+- **測試**:Test 鈕 → `testDbConn(當前表單 input)` → `test_database_connection` → 新增時用表單明文密碼,編輯時若密碼留空則後端補既有 secret → 最小 query → 回 `{ ok, message, elapsed_ms, server_version }` → dialog inline 顯示。
 
 ---
 
@@ -209,9 +212,9 @@ demo mode 在 store 內以本地陣列模擬;real mode 轉派給 `RealDelegate`,
 
 - **已驗證**:PG/MSSQL 的連線建立段在 `inspect_*` 與 `execute_*` 各重複一次,且**均無 timeout**;test 採自帶精簡連線並自行加 `tokio::time::timeout`(§4),不動既有四函式 → 零回歸風險,代價是連線程式碼多一份重複(見 §2 out-of-scope)。
 - MSSQL config 沿用既有 `tds73` + rustls 設定;timeout 秒數(預設 10s)上線後可再調。
-- 編輯預填依賴 controller 的 raw profiles;add / edit / delete 後都要同步更新,避免預填過期資料。
-- SQLite 檔案選擇用 `@tauri-apps/plugin-dialog`(已裝);確認選取後的 path 正確寫回表單。
-- `bridge.mapDbProfiles` 目前為精簡映射;編輯改走 raw profiles,**不需**擴充 v2 `DbConn` model(避免污染 v2 model)。
+- 編輯預填依賴 per-project `dbProfiles`;add / edit / delete 後都要同步更新,避免預填過期資料。
+- SQLite path 由表單輸入;後端以 read-only open 驗證既有檔案,不建立 missing file。
+- `bridge.mapDbProfiles` 目前為精簡映射;編輯改走 `dbProfiles`,**不需**擴充 v2 `DbConn` model(避免污染 v2 model)。
 - `DatabaseProfileInput` 無 SSL 欄位,故 SSL 不在範圍;若日後要支援需同時改 backend struct。
 
 ---
@@ -225,12 +228,12 @@ demo mode 在 store 內以本地陣列模擬;real mode 轉派給 `RealDelegate`,
 
 修改:
 
-- `src-tauri/src/database.rs`(新 `ConnectionTestResult` + test 函式 + 抽共用連線)
+- `src-tauri/src/database.rs`(新 `ConnectionTestResult` + 自包含 connection test probe)
 - `src-tauri/src/commands.rs`(`test_database_connection` command)
 - `src-tauri/src/lib.rs`(註冊 command)
 - `src/features/database/database-api.ts`(`testDatabaseConnection`)
 - `src/features/database/database-model.ts`(`ConnectionTestResult`)
-- `src/v2/controller.ts`(RealDelegate 4 方法 + raw profiles)
+- `src/v2/controller.ts`(RealDelegate database methods + dbProfiles sync)
 - `src/v2/v2-store.ts`(actions + RealDelegate interface + dbDialog 狀態)
 - `src/v2/SidePanel.tsx`(DbBody「+」與 row 動作)
 - `src/v2/Workbench.tsx`(掛載 DbConnDialog)

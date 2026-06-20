@@ -816,6 +816,33 @@ impl AppState {
         crate::database::inspect_database_schema_async(&profile, &self.database_secrets).await
     }
 
+    pub async fn test_database_connection(
+        &self,
+        input: crate::database::DatabaseProfileInput,
+    ) -> Result<crate::database::ConnectionTestResult, String> {
+        let workspace_root = self.trusted_workspace_root(&input.workspace_root)?;
+        let input = crate::database::DatabaseProfileInput {
+            workspace_root: workspace_root.to_string_lossy().to_string(),
+            ..input
+        };
+
+        let input = if let Some(profile_id) = input.id.as_deref() {
+            let profile = self.database_profiles.get_profile(profile_id)?;
+            if profile.workspace_root != input.workspace_root {
+                return Err("database profile does not belong to workspace".to_string());
+            }
+            crate::database::test_database_connection_input_with_saved_secret(
+                input,
+                &profile,
+                &self.database_secrets,
+            )?
+        } else {
+            input
+        };
+
+        Ok(crate::database::test_database_connection_input(&input).await)
+    }
+
     pub async fn execute_database_query(
         &self,
         request: crate::database::DatabaseQueryRequest,
@@ -1192,6 +1219,14 @@ pub fn delete_database_profile(
     profile_id: String,
 ) -> Result<(), String> {
     state.delete_database_profile(&workspace_root, &profile_id)
+}
+
+#[tauri::command]
+pub async fn test_database_connection(
+    state: State<'_, AppState>,
+    input: crate::database::DatabaseProfileInput,
+) -> Result<crate::database::ConnectionTestResult, String> {
+    state.test_database_connection(input).await
 }
 
 #[tauri::command]
@@ -2410,7 +2445,7 @@ fn lsp_language_from_command_arg(language: &str) -> Result<crate::lsp::LanguageI
         "TypeScript" | "typescript" | "ts" => Ok(crate::lsp::LanguageId::TypeScript),
         "JavaScript" | "javascript" | "js" => Ok(crate::lsp::LanguageId::JavaScript),
         "Python" | "python" | "py" => Ok(crate::lsp::LanguageId::Python),
-        value if value.is_empty() => Err("unsupported language server: empty".to_string()),
+        "" => Err("unsupported language server: empty".to_string()),
         value => Err(format!("unsupported language server: {value}")),
     }
 }
@@ -3208,6 +3243,21 @@ mod tests {
         fn assert_flat_signature(_command: FlatDeleteDatabaseProfileCommand) {}
 
         assert_flat_signature(super::delete_database_profile);
+    }
+
+    #[test]
+    fn test_database_connection_preserves_flat_command_signature() {
+        fn assert_flat_signature<F>(_command: F)
+        where
+            F: for<'app_state> AsyncFn(
+                State<'app_state, AppState>,
+                crate::database::DatabaseProfileInput,
+            )
+                -> Result<crate::database::ConnectionTestResult, String>,
+        {
+        }
+
+        assert_flat_signature(super::test_database_connection);
     }
 
     #[test]

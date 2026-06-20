@@ -214,6 +214,57 @@ describe("ContextMenu", () => {
             act(() => v2Store.setState(previous))
         }
     })
+
+    test("database connection menu exposes edit and confirmed delete actions", () => {
+        const previous = {
+            openDbConnDialog: v2Store.getState().openDbConnDialog,
+            deleteDbConn: v2Store.getState().deleteDbConn,
+        }
+        const calls: unknown[][] = []
+        act(() => v2Store.setState((s) => ({
+            openDbConnDialog: (...args: unknown[]) => calls.push(["edit", ...args]),
+            deleteDbConn: (...args: unknown[]) => {
+                calls.push(["delete", ...args])
+                return Promise.resolve()
+            },
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    dbConns: [{
+                        name: "App DB",
+                        engine: "PostgreSQL",
+                        live: true,
+                        tables: [],
+                        profileId: "pg-1",
+                    }],
+                },
+            },
+        })))
+
+        try {
+            act(() => v2Store.getState().openCtx({ kind: "dbconn", x: 12, y: 20, ci: 0, name: "App DB", live: true }))
+            let view = render(<ContextMenu />)
+            fireEvent.click(view.getByRole("button", { name: "編輯連線" }))
+            expect(calls).toEqual([["edit", "edit", "pg-1"]])
+            view.unmount()
+
+            act(() => v2Store.getState().openCtx({ kind: "dbconn", x: 12, y: 20, ci: 0, name: "App DB", live: true }))
+            view = render(<ContextMenu />)
+            fireEvent.click(view.getByRole("button", { name: "刪除連線" }))
+            expect(v2Store.getState().confirm?.title).toBe("刪除連線")
+            view.unmount()
+
+            view = render(<ConfirmModal />)
+            fireEvent.click(view.getByRole("button", { name: "刪除" }))
+            expect(calls).toEqual([
+                ["edit", "edit", "pg-1"],
+                ["delete", "pg-1"],
+            ])
+        } finally {
+            act(() => v2Store.setState(previous))
+        }
+    })
 })
 
 describe("ReferencesOverlay", () => {

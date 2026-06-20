@@ -22,6 +22,7 @@ import { ConflictView } from "./ConflictView"
 import { BranchPopup } from "./BranchPopup"
 import { StashPanel } from "./StashPanel"
 import { DbTableView } from "./DbTableView"
+import { DbConnDialog } from "./DbConnDialog"
 import { SftpView } from "./SftpView"
 import { AgentZone } from "./AgentZone"
 import { CommandPalette, ConfirmModal, ContextMenu, ReferencesOverlay, SettingsModal, Toast, runPaletteAction } from "./Overlays"
@@ -428,6 +429,7 @@ export function WorkbenchV2() {
             <BranchPopup />
             <StashPanel />
             <ContextMenu />
+            <DbConnDialog />
             <ReferencesOverlay />
             <CommandPalette />
             <SettingsModal />

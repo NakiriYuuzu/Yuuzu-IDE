@@ -14,7 +14,30 @@ import {
   subscribeTerminalChunks,
 } from "./terminal-replay-buffer";
 
-const RESIZE_NOTIFY_DEBOUNCE_MS = 100;
+type TerminalDimensions = {
+  rows: number;
+  cols: number;
+};
+
+function normalizeTerminalDimensions(
+  dimensions: TerminalDimensions | undefined,
+): TerminalDimensions | null {
+  if (!dimensions) return null;
+  const rows = Math.floor(dimensions.rows);
+  const cols = Math.floor(dimensions.cols);
+  if (!Number.isFinite(rows) || !Number.isFinite(cols)) return null;
+  return {
+    rows: Math.max(1, rows),
+    cols: Math.max(1, cols),
+  };
+}
+
+function sameTerminalDimensions(
+  left: TerminalDimensions | null,
+  right: TerminalDimensions,
+): boolean {
+  return left?.rows === right.rows && left.cols === right.cols;
+}
 
 type TerminalTabProps = {
   sessionId: string;
@@ -37,19 +60,21 @@ export function TerminalTab({ sessionId, onInput, onResize }: TerminalTabProps) 
     let cleanup: (() => void) | undefined;
     let inputCleanup: (() => void) | undefined;
     let unsubscribeChunks: (() => void) | undefined;
-    let resizeNotifyTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastSentDimensions: TerminalDimensions | null = null;
+    let resizeFrame: number | undefined;
 
     setLoadFailure(null);
 
     async function startTerminal() {
       try {
-        const { Terminal, FitAddon } = await loadXterm();
+        const { Terminal, FitAddon, ImageAddon } = await loadXterm();
 
         if (disposed || !hostRef.current) {
           return;
         }
 
         const terminal = new Terminal({
+          allowProposedApi: true,
           cursorBlink: true,
           fontSize: 13,
           theme: {
@@ -59,13 +84,26 @@ export function TerminalTab({ sessionId, onInput, onResize }: TerminalTabProps) 
             selectionBackground: "#34421d",
           },
         });
+        const imageAddon = new ImageAddon({
+          enableSizeReports: true,
+          pixelLimit: 16_777_216,
+          sixelSupport: true,
+          sixelScrolling: true,
+          sixelPaletteLimit: 256,
+          storageLimit: 128,
+        });
         const fitAddon = new FitAddon();
 
+        terminal.loadAddon(imageAddon);
         terminal.loadAddon(fitAddon);
         terminal.open(hostRef.current);
-        fitAddon.fit();
 
         cleanup = createTerminalCleanup(terminal);
+
+        const dataDisposable = terminal.onData((data) => {
+          onInputRef.current(sessionId, data);
+        });
+        inputCleanup = createTerminalInputCleanup(dataDisposable);
 
         const replay = replayTerminalOutput(sessionId);
         if (replay) {
@@ -75,25 +113,48 @@ export function TerminalTab({ sessionId, onInput, onResize }: TerminalTabProps) 
           terminal.write(chunk);
         });
 
-        const dataDisposable = terminal.onData((data) => {
-          onInputRef.current(sessionId, data);
-        });
-        inputCleanup = createTerminalInputCleanup(dataDisposable);
-
-        const notifyPtySize = () => {
-          const dimensions = fitAddon.proposeDimensions();
-          if (dimensions) {
-            onResizeRef.current?.(sessionId, dimensions.rows, dimensions.cols);
+        // 終端機無法區分 shift+enter 與 enter(兩者都送 CR),攔截後改送 LF
+        // 讓 Claude Code 之類的 TUI 視為換行(等同預設的 ctrl+j),而非送出。
+        terminal.attachCustomKeyEventHandler((event) => {
+          if (
+            event.type === "keydown" &&
+            event.key === "Enter" &&
+            event.shiftKey
+          ) {
+            onInputRef.current(sessionId, "\n");
+            return false;
           }
+          return true;
+        });
+
+        const syncTerminalSize = () => {
+          const dimensions = normalizeTerminalDimensions(fitAddon.proposeDimensions());
+          if (!dimensions) return;
+
+          fitAddon.fit();
+
+          if (sameTerminalDimensions(lastSentDimensions, dimensions)) return;
+          lastSentDimensions = dimensions;
+          onResizeRef.current?.(sessionId, dimensions.rows, dimensions.cols);
         };
-        notifyPtySize();
+
+        const scheduleTerminalSizeSync = () => {
+          if (resizeFrame !== undefined) return;
+          const requestFrame =
+            typeof globalThis.requestAnimationFrame === "function"
+              ? globalThis.requestAnimationFrame.bind(globalThis)
+              : (callback: FrameRequestCallback) =>
+                  Number(setTimeout(() => callback(Date.now()), 0));
+          resizeFrame = requestFrame(() => {
+            resizeFrame = undefined;
+            syncTerminalSize();
+          });
+        };
+
+        syncTerminalSize();
 
         const resizeObserver = new ResizeObserver(() => {
-          fitAddon.fit();
-          if (resizeNotifyTimer !== undefined) {
-            clearTimeout(resizeNotifyTimer);
-          }
-          resizeNotifyTimer = setTimeout(notifyPtySize, RESIZE_NOTIFY_DEBOUNCE_MS);
+          scheduleTerminalSizeSync();
         });
         resizeObserver.observe(hostRef.current);
         cleanup = createTerminalCleanup(terminal, resizeObserver);
@@ -111,8 +172,12 @@ export function TerminalTab({ sessionId, onInput, onResize }: TerminalTabProps) 
 
     return () => {
       disposed = true;
-      if (resizeNotifyTimer !== undefined) {
-        clearTimeout(resizeNotifyTimer);
+      if (resizeFrame !== undefined) {
+        if (typeof globalThis.cancelAnimationFrame === "function") {
+          globalThis.cancelAnimationFrame(resizeFrame);
+        } else {
+          clearTimeout(resizeFrame);
+        }
       }
       unsubscribeChunks?.();
       inputCleanup?.();

@@ -493,6 +493,13 @@
     color: var(--yz-5a6675);
     padding: 4px 8px 7px;
 }
+.yz2-sec-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-right: 6px;
+}
+.yz2-sec-head .yz2-sec-label { flex: 1; }
 .yz2-tree-row {
     display: flex;
     align-items: center;
@@ -629,6 +636,10 @@
     color: var(--yz-8b97a7);
 }
 .yz2-btn-ghost:hover { color: var(--yz-e6edf3); }
+.yz2-btn-accent:disabled, .yz2-btn-ghost:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
 .yz2-recent-row {
     display: flex;
     align-items: center;
@@ -675,6 +686,30 @@
 .yz2-db-table .nm { flex: 1; font-size: 12px; color: var(--yz-8b97a7); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
 .yz2-db-table .ct { font-size: 10px; color: var(--yz-5a6675); }
 .yz2-panel-note { margin: 14px 8px; font-size: 11px; color: var(--yz-5a6675); line-height: 1.7; }
+.yz2-db-add-empty {
+    display: block;
+    margin-top: 8px;
+    width: 100%;
+    height: 30px;
+    border-radius: 6px;
+    border: 1px solid var(--yz-45611a);
+    background: var(--yz-1b2410);
+    color: var(--yz-a8e23f);
+    text-align: center;
+    cursor: pointer;
+    font-weight: 700;
+}
+.yz2-db-add-empty:hover { background: var(--yz-232f12); }
+.yz2-db-add-mini {
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    display: grid;
+    place-items: center;
+    color: var(--yz-a8e23f);
+    cursor: pointer;
+}
+.yz2-db-add-mini:hover { background: var(--yz-141a26); }
 .yz2-lang-title {
     display: flex;
     align-items: center;
@@ -2415,6 +2450,125 @@
     font-size: 14px;
 }
 .yz2-modal-close:hover { background: var(--yz-1a2230); color: var(--yz-e6edf3); }
+.yz2-dbdlg {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 400;
+    width: 520px;
+    max-width: calc(100vw - 28px);
+    max-height: calc(100vh - 28px);
+    background: var(--yz-0c1018);
+    border: 1px solid var(--yz-2b3547);
+    border-radius: 8px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: yzIn 0.18s ease;
+}
+.yz2-dbdlg-head {
+    height: 44px;
+    flex: 0 0 44px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--yz-1c2433);
+    font-size: 13px;
+    font-weight: 700;
+}
+.yz2-dbdlg-body {
+    padding: 14px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.yz2-dbdlg-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+}
+.yz2-dbdlg-field > span {
+    font-size: 10px;
+    color: var(--yz-8b97a7);
+}
+.yz2-dbdlg-field input, .yz2-dbdlg-field select {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--yz-090c12);
+    border: 1px solid var(--yz-1c2433);
+    border-radius: 6px;
+    color: var(--yz-e6edf3);
+    font: inherit;
+    font-size: 12px;
+    min-height: 31px;
+    padding: 7px 9px;
+    outline: none;
+}
+.yz2-dbdlg-field input:focus, .yz2-dbdlg-field select:focus {
+    border-color: var(--yz-45611a);
+}
+.yz2-dbdlg-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 92px;
+    gap: 10px;
+}
+.yz2-dbdlg-wide { grid-column: 1 / -1; }
+.yz2-dbdlg-checks {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding-top: 2px;
+}
+.yz2-dbdlg-checks label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--yz-8b97a7);
+}
+.yz2-dbdlg-msg {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    min-height: 28px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+}
+.yz2-dbdlg-msg.is-ok {
+    background: var(--yz-0f1a0c);
+    border: 1px solid var(--yz-45611a);
+    color: var(--yz-a8e23f);
+}
+.yz2-dbdlg-msg.is-error {
+    background: var(--yz-1d0f12);
+    border: 1px solid var(--yz-3a1a22);
+    color: var(--yz-f07178);
+}
+.yz2-dbdlg-actions {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px 12px;
+    border-top: 1px solid var(--yz-1c2433);
+}
+.yz2-dbdlg-actions .yz2-btn-accent,
+.yz2-dbdlg-actions .yz2-btn-ghost {
+    flex: 0 0 auto;
+    min-width: 82px;
+    padding: 6px 14px;
+}
+.yz2-dbdlg-root {
+    font-size: 10px;
+    color: var(--yz-5a6675);
+}
 .yz2-settings-body { flex: 1; display: flex; min-height: 0; }
 .yz2-settings-nav {
     width: 172px;

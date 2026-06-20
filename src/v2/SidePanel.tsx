@@ -289,19 +289,30 @@ function DbBody() {
     const dbs = useV2Store((s) => s.ui[s.active].dbConns)
     const toggleDbConn = useV2Store((s) => s.toggleDbConn)
     const openDbTable = useV2Store((s) => s.openDbTable)
+    const openDbConnDialog = useV2Store((s) => s.openDbConnDialog)
     const openCtx = useV2Store((s) => s.openCtx)
 
     if (!dbs.length) {
         return (
             <>
                 <div className="yz2-sec-label">DATABASES</div>
-                <div className="yz2-panel-note">No connections in this project.<br />+ Add connection</div>
+                <div className="yz2-panel-note">
+                    No connections in this project.
+                    <button type="button" className="yz2-db-add-empty" onClick={() => openDbConnDialog()}>
+                        + 新增連線
+                    </button>
+                </div>
             </>
         )
     }
     return (
         <>
-            <div className="yz2-sec-label">DATABASES</div>
+            <div className="yz2-sec-head">
+                <span className="yz2-sec-label">DATABASES</span>
+                <button type="button" className="yz2-db-add-mini" onClick={() => openDbConnDialog()} title="新增連線">
+                    +
+                </button>
+            </div>
             {dbs.map((conn, ci) => {
                 const isOpen = !!dbOpen[ci]
                 return (

@@ -5,7 +5,8 @@
 import type { GitBlameFile, GitBranchFull, GitChangeKind, GitConflictFile, GitStashEntry } from "../features/git/git-model"
 import type { GitDiffHunks } from "../features/git/git-diff-model"
 import type { LanguageServerStatus, LspDiagnostic } from "../features/language/language-model"
-import type { QueryKind } from "../features/database/database-model"
+import type { DatabaseProfile, QueryKind } from "../features/database/database-model"
+import type { DbDialogState } from "./db-dialog"
 
 export type FnMode = "files" | "git" | "db" | "ssh" | "agent" | "lang"
 
@@ -254,6 +255,8 @@ export type ProjectUI = {
     branchPopupOpen: boolean
     stashPanelOpen: boolean
     dbConns: DbConn[]
+    dbProfiles: DatabaseProfile[]
+    dbDialog: DbDialogState
     sshHosts: SshHost[]
     treeLoaded: boolean
     gitLoaded: boolean

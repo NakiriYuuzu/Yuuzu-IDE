@@ -409,6 +409,35 @@ export function mapDbProfiles(profiles: DatabaseProfile[]): DbConn[] {
     }))
 }
 
+export function mapDbProfilesPreservingState(profiles: DatabaseProfile[], existing: DbConn[]): DbConn[] {
+    const byProfileId = new Map(existing.flatMap((conn) => (conn.profileId ? [[conn.profileId, conn]] : [])))
+    return mapDbProfiles(profiles).map((conn) => {
+        const previous = conn.profileId ? byProfileId.get(conn.profileId) : undefined
+        if (!previous) return conn
+        return {
+            ...conn,
+            live: previous.live,
+            inspected: previous.inspected,
+            tables: previous.tables,
+        }
+    })
+}
+
+export function remapDbOpenByProfileId(
+    next: DbConn[],
+    previous: DbConn[],
+    previousOpen: Record<number, boolean>,
+): Record<number, boolean> {
+    const openByProfileId = new Map(
+        previous.flatMap((conn, index) => (conn.profileId && previousOpen[index] ? [[conn.profileId, true]] : [])),
+    )
+    const nextOpen: Record<number, boolean> = {}
+    next.forEach((conn, index) => {
+        if (conn.profileId && openByProfileId.get(conn.profileId)) nextOpen[index] = true
+    })
+    return nextOpen
+}
+
 export function mapDbTables(tables: DatabaseTable[]): DbConn["tables"] {
     return tables.map((t) => ({
         n: t.schema ? `${t.schema}.${t.name}` : t.name,

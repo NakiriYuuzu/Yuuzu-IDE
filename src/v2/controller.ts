@@ -69,12 +69,15 @@ import type { HunkSelection } from "../features/git/git-diff-model"
 import type { GitExportFormat, GitExportScope, GitResetMode } from "../features/git/git-log-model"
 import {
     executeDatabaseQuery,
+    deleteDatabaseProfile,
     exportDatabaseQueryResult,
     inspectDatabaseSchema,
     listDatabaseQueryHistory,
     listDatabaseProfiles,
+    saveDatabaseProfile,
+    testDatabaseConnection,
 } from "../features/database/database-api"
-import type { DatabaseQueryResult } from "../features/database/database-model"
+import type { ConnectionTestResult, DatabaseProfile, DatabaseProfileInput, DatabaseQueryResult } from "../features/database/database-model"
 import {
     connectRemoteHost,
     disconnectRemoteHost,
@@ -113,6 +116,7 @@ import {
     langForPath,
     mapBackups,
     mapDbProfiles,
+    mapDbProfilesPreservingState,
     mapDbTables,
     mapDiagnosticEvents,
     mapDiffHunks,
@@ -129,6 +133,7 @@ import {
     mapRemoteHosts,
     mapWorkspaceToMeta,
     parentPath,
+    remapDbOpenByProfileId,
     setNodeChildren,
 } from "./bridge"
 import { flattenTree } from "./v2-model"
@@ -621,17 +626,36 @@ async function ensureConnections(pid: string): Promise<void> {
             listRemoteHosts(root).catch(() => []),
         ])
         patchProject(pid, (p) => {
+            p.dbProfiles = profiles
             if (!p.dbConns.length) p.dbConns = mapDbProfiles(profiles)
             if (!p.sshHosts.length) p.sshHosts = mapRemoteHosts(hosts)
         })
         // Connections rendered expanded should show their schema right away.
-        const p = store().ui[pid]
-        p?.dbConns.forEach((conn, idx) => {
-            if (p.dbOpen[idx] && conn.profileId && !conn.inspected) void inspectDb(pid, idx)
-        })
+        inspectExpandedDbConns(pid)
     } catch (error) {
         store().showToast("Connections: " + errMsg(error))
     }
+}
+
+function inspectExpandedDbConns(pid: string): void {
+    const p = store().ui[pid]
+    p?.dbConns.forEach((conn, idx) => {
+        if (p.dbOpen[idx] && conn.profileId && !conn.inspected) void inspectDb(pid, idx)
+    })
+}
+
+async function reloadDatabaseProfiles(pid: string): Promise<DatabaseProfile[]> {
+    const root = rootOf(pid)
+    if (!root) return []
+    const profiles = await listDatabaseProfiles(root)
+    patchProject(pid, (p) => {
+        const dbConns = mapDbProfilesPreservingState(profiles, p.dbConns)
+        p.dbOpen = remapDbOpenByProfileId(dbConns, p.dbConns, p.dbOpen)
+        p.dbProfiles = profiles
+        p.dbConns = dbConns
+    })
+    inspectExpandedDbConns(pid)
+    return profiles
 }
 
 async function ensureActiveProjectData(pid: string): Promise<void> {
@@ -1101,6 +1125,26 @@ const delegate = {
         if (!conn?.profileId) return
         store().showToast("Refreshing " + conn.name + "…")
         void inspectDb(pid, idx)
+    },
+
+    async dbTestConn(input: DatabaseProfileInput): Promise<ConnectionTestResult> {
+        return testDatabaseConnection(input)
+    },
+
+    async dbSaveConn(input: DatabaseProfileInput): Promise<void> {
+        const pid = store().active
+        await saveDatabaseProfile(input)
+        await reloadDatabaseProfiles(pid)
+        store().showToast("Saved " + input.name)
+    },
+
+    async dbDeleteConn(profileId: string): Promise<void> {
+        const pid = store().active
+        const root = rootOf(pid)
+        if (!root) return
+        await deleteDatabaseProfile(root, profileId)
+        await reloadDatabaseProfiles(pid)
+        store().showToast("Deleted database connection")
     },
 
     // ------------------------------------------------------------ editor

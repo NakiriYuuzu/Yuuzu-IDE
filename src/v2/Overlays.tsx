@@ -154,14 +154,30 @@ function buildCtxItems(ctx: CtxTarget, store: V2State): MenuEntry[] {
             ]
         case "dbconn": {
             const ci = ctx.ci ?? 0
+            const conn = p.dbConns[ci]
+            const profileId = conn?.profileId
             return [
+                { glyph: "✎", label: "編輯連線", disabled: !profileId, run: () => {
+                    if (profileId) store.openDbConnDialog("edit", profileId)
+                } },
                 { glyph: "⟳", label: "Refresh schemas", run: () => store.refreshDbConn(ci) },
                 { glyph: "⛁", label: "New query console", run: () => {
-                    const conn = store.ui[store.active].dbConns[ci]
                     if (conn?.tables[0]) store.openDbTable(ci, conn.tables[0], "sql")
                 } },
                 { glyph: "⧉", label: "Copy connection string", run: () => toast("Copied " + (ctx.name ?? "") + " connection string") },
                 { divider: true },
+                { glyph: "×", label: "刪除連線", danger: true, disabled: !profileId, run: () => {
+                    if (!profileId) return
+                    store.openConfirm({
+                        title: "刪除連線",
+                        body: "確定要刪除「" + (conn?.name ?? ctx.name ?? "") + "」這個連線設定嗎?此操作無法復原。",
+                        label: "刪除",
+                        danger: true,
+                        action: () => {
+                            void store.deleteDbConn(profileId)
+                        },
+                    })
+                } },
                 { glyph: "○", label: ctx.live ? "Disconnect" : "Connect", run: () =>
                     toast((ctx.live ? "Disconnected from " : "Connected to ") + (ctx.name ?? "")) },
             ]
@@ -292,6 +308,7 @@ export function ContextMenu() {
                             type="button"
                             key={item.label}
                             className={"yz2-menu-item" + (item.danger ? " danger" : "")}
+                            aria-label={item.label}
                             disabled={item.disabled}
                             onClick={() => {
                                 if (item.disabled) return

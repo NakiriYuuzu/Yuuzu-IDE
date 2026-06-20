@@ -1,5 +1,6 @@
 import { call } from "../../lib/tauri";
 import type {
+  ConnectionTestResult,
   DatabaseExport,
   DatabaseProfile,
   DatabaseProfileInput,
@@ -26,6 +27,12 @@ export function deleteDatabaseProfile(
   profileId: string,
 ): Promise<void> {
   return call("delete_database_profile", { workspaceRoot, profileId });
+}
+
+export function testDatabaseConnection(
+  input: DatabaseProfileInput,
+): Promise<ConnectionTestResult> {
+  return call("test_database_connection", { input });
 }
 
 export function inspectDatabaseSchema(profileId: string): Promise<DatabaseSchema> {

@@ -170,4 +170,34 @@ describe("SidePanel", () => {
 
         expect(calls).toEqual([["restart", "Rust"]])
     })
+
+    test("database empty state opens the add connection dialog", () => {
+        const calls: unknown[][] = []
+        const previousOpenDbConnDialog = v2Store.getState().openDbConnDialog
+        restoreActions = () => {
+            v2Store.setState({
+                openDbConnDialog: previousOpenDbConnDialog,
+            })
+        }
+        act(() => {
+            v2Store.setState((s) => ({
+                active: "api",
+                openDbConnDialog: (...args: unknown[]) => calls.push(args),
+                ui: {
+                    ...s.ui,
+                    api: {
+                        ...s.ui.api,
+                        fn: "db",
+                        dbConns: [],
+                    },
+                },
+            }))
+        })
+
+        const view = render(<SidePanel />)
+
+        fireEvent.click(view.getByRole("button", { name: "+ 新增連線" }))
+
+        expect(calls).toEqual([[]])
+    })
 })

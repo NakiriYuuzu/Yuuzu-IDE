@@ -6,7 +6,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use futures_util::stream::TryStreamExt;
@@ -121,6 +121,14 @@ pub struct DatabaseProfileInput {
     pub password: Option<String>,
     pub read_only: bool,
     pub production: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ConnectionTestResult {
+    pub ok: bool,
+    pub message: String,
+    pub elapsed_ms: u64,
+    pub server_version: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -697,6 +705,166 @@ pub fn mssql_connection_parts(
     password: Option<String>,
 ) -> Result<TcpConnectionParts, String> {
     postgres_connection_parts(profile, password)
+}
+
+fn required_input(value: &Option<String>, label: &str) -> Result<String, String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| label.to_string())
+}
+
+fn test_result(
+    start_ms: u64,
+    ok: bool,
+    message: String,
+    server_version: Option<String>,
+) -> ConnectionTestResult {
+    ConnectionTestResult {
+        ok,
+        message,
+        elapsed_ms: database_now_ms().saturating_sub(start_ms),
+        server_version,
+    }
+}
+
+fn probe_sqlite_connection(path: &Path) -> Result<String, String> {
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|err| format!("SQLite 連線失敗:{err}"))?;
+    let version: String = connection
+        .query_row("SELECT sqlite_version()", [], |row| row.get(0))
+        .map_err(|err| format!("SQLite 連線失敗:{err}"))?;
+    Ok("SQLite ".to_string() + &version)
+}
+
+async fn probe_postgres_connection(input: &DatabaseProfileInput) -> Result<String, String> {
+    let host = required_input(&input.host, "PostgreSQL 連線缺少主機")?;
+    let port = input
+        .port
+        .ok_or_else(|| "PostgreSQL 連線缺少 port".to_string())?;
+    let database = required_input(&input.database, "PostgreSQL 連線缺少資料庫名稱")?;
+    let mut config = PostgresConfig::new();
+    config.host(&host);
+    config.port(port);
+    config.dbname(&database);
+    if let Some(username) = input
+        .username
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        config.user(username);
+    }
+    if let Some(password) = input.password.as_deref() {
+        config.password(password);
+    }
+
+    let (client, connection) = config
+        .connect(NoTls)
+        .await
+        .map_err(|err| format!("PostgreSQL 連線失敗:{err}"))?;
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    let row = client
+        .query_one("SELECT version()", &[])
+        .await
+        .map_err(|err| format!("PostgreSQL 連線失敗:{err}"))?;
+    row.try_get::<_, String>(0)
+        .map_err(|err| format!("PostgreSQL 連線失敗:{err}"))
+}
+
+async fn probe_mssql_connection(input: &DatabaseProfileInput) -> Result<String, String> {
+    let host = required_input(&input.host, "MSSQL 連線缺少主機")?;
+    let port = input
+        .port
+        .ok_or_else(|| "MSSQL 連線缺少 port".to_string())?;
+    let database = required_input(&input.database, "MSSQL 連線缺少資料庫名稱")?;
+    let mut config = TiberiusConfig::new();
+    config.host(&host);
+    config.port(port);
+    config.database(&database);
+    if let Some(username) = input
+        .username
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        config.authentication(AuthMethod::sql_server(
+            username,
+            input.password.as_deref().unwrap_or_default(),
+        ));
+    }
+
+    let stream = TcpStream::connect((host.as_str(), port))
+        .await
+        .map_err(|err| format!("MSSQL 連線失敗:{err}"))?;
+    let mut client = TiberiusClient::connect(config, stream.compat_write())
+        .await
+        .map_err(|err| format!("MSSQL 連線失敗:{err}"))?;
+    let mut stream = client
+        .query("SELECT @@VERSION", &[])
+        .await
+        .map_err(|err| format!("MSSQL 連線失敗:{err}"))?;
+    while let Some(item) = stream
+        .try_next()
+        .await
+        .map_err(|err| format!("MSSQL 連線失敗:{err}"))?
+    {
+        let QueryItem::Row(row) = item else {
+            continue;
+        };
+        let version = row
+            .try_get::<&str, _>(0)
+            .map_err(|err| format!("MSSQL 連線失敗:{err}"))?
+            .ok_or_else(|| "MSSQL 連線失敗:missing version".to_string())?;
+        return Ok(version.to_string());
+    }
+    Err("MSSQL 連線失敗:missing version".to_string())
+}
+
+pub async fn test_database_connection_input(input: &DatabaseProfileInput) -> ConnectionTestResult {
+    let start_ms = database_now_ms();
+    let probe = async {
+        match input.kind {
+            DatabaseKind::SQLite => {
+                let path = required_input(&input.sqlite_path, "SQLite 連線缺少檔案路徑")?;
+                probe_sqlite_connection(Path::new(&path))
+            }
+            DatabaseKind::PostgreSQL => probe_postgres_connection(input).await,
+            DatabaseKind::MsSql => probe_mssql_connection(input).await,
+        }
+    };
+
+    match tokio::time::timeout(Duration::from_secs(10), probe).await {
+        Ok(Ok(server_version)) => {
+            test_result(start_ms, true, "連線成功".to_string(), Some(server_version))
+        }
+        Ok(Err(error)) => test_result(start_ms, false, error, None),
+        Err(_) => test_result(start_ms, false, "連線逾時(10 秒)".to_string(), None),
+    }
+}
+
+pub fn test_database_connection_input_with_saved_secret(
+    mut input: DatabaseProfileInput,
+    profile: &DatabaseProfile,
+    secrets: &dyn DatabaseSecretStore,
+) -> Result<DatabaseProfileInput, String> {
+    if input.id.as_deref() != Some(profile.id.as_str()) {
+        return Err("database profile id mismatch".to_string());
+    }
+
+    if input.password.is_none()
+        && matches!(input.kind, DatabaseKind::PostgreSQL | DatabaseKind::MsSql)
+    {
+        if let Some(secret_id) = profile.source.secret_id() {
+            input.password = Some(secrets.get_secret(secret_id)?);
+        }
+    }
+
+    Ok(input)
 }
 
 fn profile_secret(
@@ -3050,6 +3218,147 @@ mod tests {
         assert_eq!(parts.port, 1433);
         assert_eq!(parts.database, "app");
         assert_eq!(parts.username.as_deref(), Some("yuuzu"));
+    }
+
+    #[tokio::test]
+    async fn test_database_connection_input_accepts_existing_sqlite_file() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let db_path = temp.path().join("app.db");
+        seed_sqlite_database(&db_path);
+
+        let result = test_database_connection_input(&DatabaseProfileInput {
+            id: None,
+            workspace_root: "/workspace".to_string(),
+            name: "SQLite".to_string(),
+            kind: DatabaseKind::SQLite,
+            sqlite_path: Some(db_path.to_string_lossy().to_string()),
+            host: None,
+            port: None,
+            database: None,
+            username: None,
+            password: None,
+            read_only: true,
+            production: false,
+        })
+        .await;
+
+        assert!(result.ok);
+        assert_eq!(result.message, "連線成功");
+        assert!(result
+            .server_version
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("SQLite "));
+    }
+
+    #[tokio::test]
+    async fn test_database_connection_input_reports_missing_sqlite_file_without_creating_it() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let db_path = temp.path().join("missing.db");
+
+        let result = test_database_connection_input(&DatabaseProfileInput {
+            id: None,
+            workspace_root: "/workspace".to_string(),
+            name: "SQLite".to_string(),
+            kind: DatabaseKind::SQLite,
+            sqlite_path: Some(db_path.to_string_lossy().to_string()),
+            host: None,
+            port: None,
+            database: None,
+            username: None,
+            password: None,
+            read_only: true,
+            production: false,
+        })
+        .await;
+
+        assert!(!result.ok);
+        assert!(result.message.contains("SQLite 連線失敗"));
+        assert!(!db_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_database_connection_input_reports_tcp_validation_errors_as_result() {
+        let result = test_database_connection_input(&DatabaseProfileInput {
+            id: None,
+            workspace_root: "/workspace".to_string(),
+            name: "Postgres".to_string(),
+            kind: DatabaseKind::PostgreSQL,
+            sqlite_path: None,
+            host: None,
+            port: Some(5432),
+            database: Some("app".to_string()),
+            username: Some("yuuzu".to_string()),
+            password: Some("secret".to_string()),
+            read_only: false,
+            production: false,
+        })
+        .await;
+
+        assert!(!result.ok);
+        assert_eq!(result.message, "PostgreSQL 連線缺少主機");
+    }
+
+    #[test]
+    fn test_database_connection_input_with_saved_secret_fills_blank_edit_password() {
+        let profile = tcp_profile(DatabaseKind::PostgreSQL, 5432, Some("secret-1"));
+        let secrets = InMemoryDatabaseSecretStore::default();
+        secrets
+            .set_secret("secret-1", "stored-secret")
+            .expect("seed secret");
+
+        let input = test_database_connection_input_with_saved_secret(
+            DatabaseProfileInput {
+                id: Some(profile.id.clone()),
+                workspace_root: "/workspace".to_string(),
+                name: "Postgres".to_string(),
+                kind: DatabaseKind::PostgreSQL,
+                sqlite_path: None,
+                host: Some("localhost".to_string()),
+                port: Some(5432),
+                database: Some("app".to_string()),
+                username: Some("yuuzu".to_string()),
+                password: None,
+                read_only: false,
+                production: false,
+            },
+            &profile,
+            &secrets,
+        )
+        .expect("resolved input");
+
+        assert_eq!(input.password.as_deref(), Some("stored-secret"));
+    }
+
+    #[test]
+    fn test_database_connection_input_with_saved_secret_keeps_explicit_password() {
+        let profile = tcp_profile(DatabaseKind::PostgreSQL, 5432, Some("secret-1"));
+        let secrets = InMemoryDatabaseSecretStore::default();
+        secrets
+            .set_secret("secret-1", "stored-secret")
+            .expect("seed secret");
+
+        let input = test_database_connection_input_with_saved_secret(
+            DatabaseProfileInput {
+                id: Some(profile.id.clone()),
+                workspace_root: "/workspace".to_string(),
+                name: "Postgres".to_string(),
+                kind: DatabaseKind::PostgreSQL,
+                sqlite_path: None,
+                host: Some("localhost".to_string()),
+                port: Some(5432),
+                database: Some("app".to_string()),
+                username: Some("yuuzu".to_string()),
+                password: Some("typed-secret".to_string()),
+                read_only: false,
+                production: false,
+            },
+            &profile,
+            &secrets,
+        )
+        .expect("resolved input");
+
+        assert_eq!(input.password.as_deref(), Some("typed-secret"));
     }
 
     #[test]

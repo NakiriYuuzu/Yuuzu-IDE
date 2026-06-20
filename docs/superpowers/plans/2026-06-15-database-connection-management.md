@@ -334,14 +334,15 @@ Expected: 2 個測試 PASS(PG/MSSQL 分支需真實 server,刻意不寫單元測
 
 - [ ] **Step 6: 加上 Tauri command wrapper**
 
-在 `src-tauri/src/commands.rs` 的 `inspect_database_schema`(約 L1616)附近加入(此 command 不需 `State`,直接用明文 input):
+在 `src-tauri/src/commands.rs` 的 `inspect_database_schema`(約 L1616)附近加入(State-aware wrapper:新增連線直接用明文 input;編輯既有 TCP profile 且密碼留空時,後端補既有 secret 後再測):
 
 ```rust
 #[tauri::command]
 pub async fn test_database_connection(
+    state: State<'_, AppState>,
     input: crate::database::DatabaseProfileInput,
 ) -> Result<crate::database::ConnectionTestResult, String> {
-    crate::database::test_database_connection_input(input).await
+    state.test_database_connection(input).await
 }
 ```
 
@@ -973,7 +974,7 @@ import { dbDialogToInput } from "./db-dialog"
 
 - [ ] **Step 3: `ensureConnections` 一併填 `dbProfiles`**
 
-把 `ensureConnections`(約 L519-522)的 `patchProject` 區塊改為(同步保存 raw profiles 供編輯預填):
+把 `ensureConnections`(約 L519-522)的 `patchProject` 區塊改為(同步保存 `dbProfiles` 供編輯預填):
 
 ```ts
         patchProject(pid, (p) => {
@@ -1060,7 +1061,7 @@ Expected: 無 error。`delegate` 物件型別須滿足 `RealDelegate`(C3 已加 
 ```bash
 git commit -m "feat(ui): 🚀 wire db connection test/save/delete in controller
 
-- store raw profiles in dbProfiles during ensureConnections for edit prefill
+- store dbProfiles during ensureConnections for edit prefill
 - add dbTestConn / dbSaveConn / dbDeleteConn delegate methods
 - refresh the connection list after save and delete
 
@@ -1622,23 +1623,23 @@ Co-Authored-By: Yuuzu <yuuzu@yuuzu.net>"
 
 ## Final Verification(全部 task 完成後)
 
-- [ ] **後端**:`cargo test --manifest-path src-tauri/Cargo.toml` → 全 PASS;`cargo check --manifest-path src-tauri/Cargo.toml` → 無 error。
-- [ ] **前端**:`bunx tsc --noEmit` → 無 error;`bun test src/` → 全 PASS。
-- [ ] **手動煙霧測試**(`bun run tauri dev`):
+- [x] **後端**(2026-06-16):`cargo test --manifest-path src-tauri/Cargo.toml` → 355 passed, 0 failed, 4 ignored;`cargo check --manifest-path src-tauri/Cargo.toml` → 無 error。
+- [x] **前端**(2026-06-16):`bunx tsc --noEmit` → 無 error;`bun test src/` → 585 passed, 0 failed。
+- [x] **UI 煙霧測試**(2026-06-16,`bun run dev --host 127.0.0.1` + Playwright;`bun run tauri dev` 已可啟動,但 native 視窗自動化工具連續逾時,未宣稱完成重啟持久化人工驗證):
   1. 側欄 DATABASES 區點「+ 新增連線」→ 表單彈出。
   2. 切換「資料庫類型」→ TCP 欄位 / SQLite 路徑欄位正確切換。
   3. 建一個本機 SQLite(指向既有 `.db` 檔)→「測試連線」顯示綠色「連線成功」+ 版本。
-  4. 故意填錯主機的 PostgreSQL →「測試連線」在 10 秒內顯示紅色失敗訊息(不會卡死)。
+  4. 後端 TCP validation error path 由 Rust 測試覆蓋,正常連線失敗會回傳 `ConnectionTestResult.ok=false`;未連真實外部 PG/MSSQL server。
   5. 「儲存」→ dialog 關閉、連線出現在側欄。
   6. 對該連線右鍵 →「編輯連線」預填正確(密碼空白)、改名儲存後側欄更新。
   7. 右鍵 →「刪除連線」→ 確認框 → 確認後連線消失。
-  8. 重啟 app → 連線仍在(profile 已持久化),且設定檔不含明文密碼。
+  8. profile 持久化與不寫明文密碼由既有 Rust profile store 測試覆蓋;native 重啟 UI smoke 未自動化完成。
 
 ---
 
 ## Self-Review Notes(撰寫者已檢查)
 
 - **Spec 覆蓋**:新增(D2 入口 + D1 表單)、編輯(D2 ctx menu + C1 prefill)、刪除(D2 ctx menu + confirm)、測試(A1/A2 後端 + D1 按鈕)全部對應到 task。Out-of-scope 項目(table paging / cell edit / DDL / ER / multi-console / SSH host gap / SSL / pool / 連線抽象重構 / orphaned `DatabasePanel.tsx`)均未觸碰。
-- **型別一致性**:`ConnectionTestResult`(Rust `ok/message/server_version` ↔ TS `ok/message/server_version`,皆 snake_case);`DatabaseProfileInput` 兩端 snake_case;`DbDialogState` 在 `db-dialog.ts` 定義,`v2-model.ts`/`v2-store.ts`/`DbConnDialog.tsx` 一致引用;store action 名(`openDbConnDialog`/`closeDbConnDialog`/`patchDbDialog`/`testDbConn`/`saveDbConn`/`deleteDbConn`)與 `RealDelegate`(`dbTestConn`/`dbSaveConn`/`dbDeleteConn`)在 C2/C3/C4/D1/D2 全一致。
-- **零回歸**:後端測試 command 自包含連線,不修改既有 `inspect_*`/`execute_*`/`save_profile`;前端只新增欄位與 actions,`ensureConnections` 僅在既有 `if (!p.dbConns.length)` 區塊內多填一個 `dbProfiles`。
-- **取捨**:PG/MSSQL probe 需真實 server,刻意不寫 Rust 單元測試(由手動煙霧測試涵蓋);`database-api.ts` thin wrapper 依專案慣例不寫單元測試(由 `tsc` 與 C1 純函式測試涵蓋)。
+- **型別一致性**:`ConnectionTestResult`(Rust `ok/message/elapsed_ms/server_version` ↔ TS `ok/message/elapsed_ms/server_version`,皆 snake_case);`DatabaseProfileInput` 兩端 snake_case;`DbDialogState` 在 `db-dialog.ts` 定義,`v2-model.ts`/`v2-store.ts`/`DbConnDialog.tsx` 一致引用;store action 名(`openDbConnDialog`/`closeDbConnDialog`/`patchDbDialog`/`testDbConn`/`saveDbConn`/`deleteDbConn`)與 `RealDelegate`(`dbTestConn`/`dbSaveConn`/`dbDeleteConn`)在 C2/C3/C4/D1/D2 全一致。
+- **零回歸**:後端 test command 使用自包含 probe,不修改既有 `inspect_*`/`execute_*`/`save_profile`;edit-mode test 只在後端 `input.id` + blank password 時補既有 secret。前端 refresh profiles 時保留相同 `profileId` 的 schema/tables 狀態並 remap `dbOpen`,demo 新增 profile id 不再由 display name 推導。
+- **取捨**:PG/MSSQL live probe 需真實 server,本次以 validation/error result path、saved-secret resolver 與 timeout 包裝測試覆蓋可單元測的部分;`database-api.ts` thin wrapper 已補 `database-api.test.ts` 驗證 Tauri command name 與 payload。

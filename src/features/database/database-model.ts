@@ -45,6 +45,13 @@ export type DatabaseProfileInput = {
   production: boolean;
 };
 
+export type ConnectionTestResult = {
+  ok: boolean;
+  message: string;
+  elapsed_ms: number;
+  server_version?: string | null;
+};
+
 export type DatabaseColumn = {
   name: string;
   data_type: string;

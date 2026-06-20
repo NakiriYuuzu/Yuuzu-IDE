@@ -165,6 +165,150 @@ describe("connected domain actions", () => {
         expect(tab.history?.some((row) => row.kind === "Mutation")).toBe(true)
     })
 
+    test("database dialog opens from raw profiles for editing without a password", () => {
+        const store = freshStore()
+        store.setState((s) => ({
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    dbProfiles: [{
+                        id: "pg-1",
+                        workspace_root: "/workspace",
+                        name: "App Postgres",
+                        kind: "PostgreSQL",
+                        source: {
+                            Tcp: {
+                                host: "localhost",
+                                port: 5432,
+                                database: "app",
+                                username: "yuuzu",
+                                secret_id: "secret-1",
+                            },
+                        },
+                        read_only: false,
+                        production: true,
+                        created_ms: 1,
+                        updated_ms: 2,
+                    }],
+                },
+            },
+        }))
+
+        ;(store.getState() as any).openDbConnDialog("edit", "pg-1")
+
+        expect(store.getState().ui.api.dbDialog).toMatchObject({
+            open: true,
+            mode: "edit",
+            profileId: "pg-1",
+            name: "App Postgres",
+            host: "localhost",
+            port: "5432",
+            database: "app",
+            username: "yuuzu",
+            password: "",
+            production: true,
+        })
+    })
+
+    test("real database management actions delegate and update dialog state", async () => {
+        const store = freshStore()
+        const calls: unknown[][] = []
+        registerRealDelegate({
+            dbTestConn: async (...args: unknown[]) => {
+                calls.push(["test", ...args])
+                return { ok: true, message: "連線成功", elapsed_ms: 1, server_version: "SQLite 3" }
+            },
+            dbSaveConn: async (...args: unknown[]) => {
+                calls.push(["save", ...args])
+            },
+            dbDeleteConn: async (...args: unknown[]) => {
+                calls.push(["delete", ...args])
+            },
+        } as any)
+        store.setState((s) => ({
+            mode: "real",
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    dbDialog: {
+                        ...s.ui.api.dbDialog,
+                        open: true,
+                    },
+                },
+            },
+        }))
+        const input = {
+            workspace_root: "/workspace",
+            name: "Local",
+            kind: "SQLite" as const,
+            sqlite_path: "/workspace/app.db",
+            read_only: false,
+            production: false,
+        }
+
+        await (store.getState() as any).testDbConn(input)
+        expect(store.getState().ui.api.dbDialog.testResult?.ok).toBe(true)
+        await (store.getState() as any).saveDbConn(input)
+        await (store.getState() as any).deleteDbConn("pg-1")
+
+        expect(calls).toEqual([
+            ["test", input],
+            ["save", input],
+            ["delete", "pg-1"],
+        ])
+        expect(store.getState().ui.api.dbDialog.open).toBe(false)
+    })
+
+    test("demo saveDbConn keeps raw profiles so saved connections can be edited", async () => {
+        const store = freshStore()
+        const input = {
+            workspace_root: "/demo/api",
+            name: "Smoke DB",
+            kind: "SQLite" as const,
+            sqlite_path: "/tmp/smoke.db",
+            read_only: false,
+            production: false,
+        }
+
+        await (store.getState() as any).saveDbConn(input)
+        const profileId = store.getState().ui.api.dbConns.find((conn) => conn.name === "Smoke DB")?.profileId
+        expect(profileId).toBeTruthy()
+
+        ;(store.getState() as any).openDbConnDialog("edit", profileId)
+
+        expect(store.getState().ui.api.dbDialog).toMatchObject({
+            open: true,
+            mode: "edit",
+            profileId,
+            name: "Smoke DB",
+            sqlitePath: "/tmp/smoke.db",
+        })
+    })
+
+    test("demo saveDbConn gives duplicate names distinct profile ids", async () => {
+        const store = freshStore()
+        const input = {
+            workspace_root: "/demo/api",
+            name: "Duplicate DB",
+            kind: "SQLite" as const,
+            sqlite_path: "/tmp/duplicate.db",
+            read_only: false,
+            production: false,
+        }
+
+        await (store.getState() as any).saveDbConn(input)
+        await (store.getState() as any).saveDbConn(input)
+
+        const conns = store.getState().ui.api.dbConns.filter((conn) => conn.name === "Duplicate DB")
+        expect(conns.length).toBe(2)
+        expect(new Set(conns.map((conn) => conn.profileId)).size).toBe(2)
+
+        await (store.getState() as any).deleteDbConn(conns[0].profileId!)
+        expect(store.getState().ui.api.dbConns.filter((conn) => conn.name === "Duplicate DB").length).toBe(1)
+    })
+
     test("demo sftp disconnect and reconnect stay safe", () => {
         const store = freshStore()
         const st = store.getState() as any

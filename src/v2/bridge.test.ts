@@ -16,7 +16,9 @@ import {
     mapLspLocations,
     mapDbProfiles,
     mapDbHistory,
+    mapDbProfilesPreservingState,
     mapDbTables,
+    remapDbOpenByProfileId,
     mapBackups,
     mapDiagnosticEvents,
     mapDiffHunks,
@@ -409,6 +411,48 @@ describe("connection mapping", () => {
         ])
         expect(conns[0]).toMatchObject({ name: "local.db", engine: "SQLite", profileId: "p1", tables: [] })
         expect(engineLabel("postgresql")).toBe("PostgreSQL")
+    })
+
+    test("preserves inspected schema state and remaps open indexes by profile id", () => {
+        const profiles = [
+            {
+                id: "p2",
+                workspace_root: "/w",
+                name: "renamed",
+                kind: "PostgreSQL" as never,
+                source: "manual" as never,
+                read_only: false,
+                production: false,
+                created_ms: 0,
+                updated_ms: 1,
+            },
+            {
+                id: "p1",
+                workspace_root: "/w",
+                name: "local.db",
+                kind: "SQLite" as never,
+                source: "manual" as never,
+                read_only: false,
+                production: false,
+                created_ms: 0,
+                updated_ms: 1,
+            },
+        ]
+        const existing = [
+            { name: "local.db", engine: "SQLite", live: true, profileId: "p1", inspected: true, tables: [{ n: "users", c: "2" }] },
+            { name: "prod", engine: "PostgreSQL", live: true, profileId: "p2", inspected: true, tables: [{ n: "public.items", c: "7" }] },
+        ]
+
+        const conns = mapDbProfilesPreservingState(profiles, existing)
+        expect(conns[0]).toMatchObject({
+            name: "renamed",
+            engine: "PostgreSQL",
+            live: true,
+            inspected: true,
+            tables: [{ n: "public.items", c: "7" }],
+        })
+        expect(conns[1].tables).toEqual([{ n: "users", c: "2" }])
+        expect(remapDbOpenByProfileId(conns, existing, { 0: true })).toEqual({ 1: true })
     })
 
     test("maps schema tables with column metadata", () => {

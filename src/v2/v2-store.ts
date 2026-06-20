@@ -8,8 +8,10 @@ import type { GitDiffHunks, HunkSelection } from "../features/git/git-diff-model
 import type { GitExportFormat, GitExportScope, GitResetMode } from "../features/git/git-log-model"
 import type { BrowserPreviewBounds } from "../features/browser/browser-model"
 import type { FileVersion } from "../features/files/file-model"
+import type { ConnectionTestResult, DatabaseProfile, DatabaseProfileInput } from "../features/database/database-model"
 import { evictHlCache } from "./hl-cache"
 import { externallyChangedTabIds } from "./file-watch"
+import { dbProfileToDialog, defaultDbDialogState, newDbDialogState } from "./db-dialog"
 
 import {
     ADD_PRESETS,
@@ -47,6 +49,18 @@ import type {
     TreeNode,
 } from "./v2-model"
 
+let demoDbProfileSeq = 0
+
+function nextDemoDbProfileId(existing: DatabaseProfile[]): string {
+    const existingIds = new Set(existing.map((profile) => profile.id))
+    let profileId = ""
+    do {
+        demoDbProfileSeq += 1
+        profileId = "demo-db-" + demoDbProfileSeq.toString(36)
+    } while (existingIds.has(profileId))
+    return profileId
+}
+
 // Real-backend delegate — registered by controller.ts when running inside
 // Tauri. Actions consult it first so the demo logic stays the browser
 // fallback and the store never imports async code.
@@ -80,6 +94,9 @@ export type RealDelegate = {
     dbExport: (tabId: number) => void
     dbRefresh: (ci: number) => void
     dbHistory: (tabId: number) => void
+    dbTestConn: (input: DatabaseProfileInput) => Promise<ConnectionTestResult>
+    dbSaveConn: (input: DatabaseProfileInput) => Promise<void>
+    dbDeleteConn: (profileId: string) => Promise<void>
     sftpOpen: (host: SshHost) => void
     sftpDisconnect: () => void
     sftpReconnect: () => void
@@ -244,6 +261,8 @@ export function defUI(pid: string): ProjectUI {
         branchPopupOpen: false,
         stashPanelOpen: false,
         dbConns: dbsFor(pid).map((c) => ({ ...c, tables: c.tables.map((t) => ({ ...t })) })),
+        dbProfiles: [],
+        dbDialog: defaultDbDialogState(),
         sshHosts: hostsFor(pid).map((h) => ({ ...h })),
         treeLoaded: true,
         gitLoaded: true,
@@ -276,6 +295,8 @@ export function emptyUI(): ProjectUI {
         branchPopupOpen: false,
         stashPanelOpen: false,
         dbConns: [],
+        dbProfiles: [],
+        dbDialog: defaultDbDialogState(),
         sshHosts: [],
         treeLoaded: false,
         gitLoaded: false,
@@ -357,6 +378,12 @@ export type V2State = {
     exportDbResult: (tabId: number) => void
     refreshDbConn: (ci: number) => void
     loadDbHistory: (tabId: number) => void
+    openDbConnDialog: (mode?: "new" | "edit", profileId?: string) => void
+    closeDbConnDialog: () => void
+    patchDbDialog: (patch: Partial<ReturnType<typeof defaultDbDialogState>>) => void
+    testDbConn: (input: DatabaseProfileInput) => Promise<ConnectionTestResult | null>
+    saveDbConn: (input: DatabaseProfileInput) => Promise<void>
+    deleteDbConn: (profileId: string) => Promise<void>
     openSftp: (host: SshHost) => void
     sftpDisconnect: () => void
     sftpReconnect: () => void
@@ -1039,6 +1066,131 @@ export function createV2Store() {
                         t.id === tabId ? { ...t, history: demoDbHistory(), historyLoading: false } : t,
                     )
                 })
+            },
+
+            openDbConnDialog: (mode = "new", profileId) => {
+                upd((p) => {
+                    if (mode === "edit" && profileId) {
+                        const profile = p.dbProfiles.find((item) => item.id === profileId)
+                        if (profile) {
+                            p.dbDialog = dbProfileToDialog(profile)
+                            return
+                        }
+                    }
+                    p.dbDialog = newDbDialogState()
+                })
+            },
+
+            closeDbConnDialog: () => {
+                upd((p) => {
+                    p.dbDialog = defaultDbDialogState()
+                })
+            },
+
+            patchDbDialog: (patch) => {
+                upd((p) => {
+                    p.dbDialog = {
+                        ...p.dbDialog,
+                        ...patch,
+                        error: Object.prototype.hasOwnProperty.call(patch, "error") ? patch.error ?? null : p.dbDialog.error,
+                        testResult: Object.prototype.hasOwnProperty.call(patch, "testResult") ? patch.testResult ?? null : p.dbDialog.testResult,
+                    }
+                })
+            },
+
+            testDbConn: async (input) => {
+                upd((p) => {
+                    p.dbDialog = { ...p.dbDialog, testing: true, error: null, testResult: null }
+                })
+                try {
+                    const result = get().mode === "real" && realDelegate
+                        ? await realDelegate.dbTestConn(input)
+                        : { ok: true, message: "連線成功", elapsed_ms: 1, server_version: input.kind }
+                    upd((p) => {
+                        p.dbDialog = { ...p.dbDialog, testing: false, testResult: result, error: null }
+                    })
+                    return result
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error)
+                    upd((p) => {
+                        p.dbDialog = { ...p.dbDialog, testing: false, error: message }
+                    })
+                    return null
+                }
+            },
+
+            saveDbConn: async (input) => {
+                upd((p) => {
+                    p.dbDialog = { ...p.dbDialog, saving: true, error: null }
+                })
+                try {
+                    if (get().mode === "real" && realDelegate) {
+                        await realDelegate.dbSaveConn(input)
+                    } else {
+                        const profileId = input.id ?? nextDemoDbProfileId(get().ui[get().active].dbProfiles)
+                        const now = Date.now()
+                        const profile: DatabaseProfile = {
+                            id: profileId,
+                            workspace_root: input.workspace_root,
+                            name: input.name,
+                            kind: input.kind,
+                            source: input.kind === "SQLite"
+                                ? { SQLite: { path: input.sqlite_path ?? "" } }
+                                : {
+                                    Tcp: {
+                                        host: input.host ?? "",
+                                        port: input.port ?? (input.kind === "MsSql" ? 1433 : 5432),
+                                        database: input.database ?? "",
+                                        username: input.username ?? null,
+                                        secret_id: input.password ? "demo-secret:" + profileId : null,
+                                    },
+                                },
+                            read_only: input.read_only,
+                            production: input.production,
+                            created_ms: now,
+                            updated_ms: now,
+                        }
+                        const conn = {
+                            name: input.name,
+                            engine: input.kind === "MsSql" ? "MS SQL Server" : input.kind,
+                            live: true,
+                            tables: [],
+                            profileId,
+                        }
+                        upd((p) => {
+                            p.dbConns = input.id
+                                ? p.dbConns.map((item) => (item.profileId === input.id ? conn : item))
+                                : [...p.dbConns, conn]
+                            p.dbProfiles = input.id
+                                ? p.dbProfiles.map((item) => (item.id === input.id ? profile : item))
+                                : [...p.dbProfiles, profile]
+                        })
+                    }
+                    upd((p) => {
+                        p.dbDialog = defaultDbDialogState()
+                    })
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error)
+                    upd((p) => {
+                        p.dbDialog = { ...p.dbDialog, saving: false, error: message }
+                    })
+                }
+            },
+
+            deleteDbConn: async (profileId) => {
+                try {
+                    if (get().mode === "real" && realDelegate) {
+                        await realDelegate.dbDeleteConn(profileId)
+                    } else {
+                        upd((p) => {
+                            p.dbConns = p.dbConns.filter((conn) => conn.profileId !== profileId)
+                            p.dbProfiles = p.dbProfiles.filter((profile) => profile.id !== profileId)
+                        })
+                    }
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error)
+                    get().showToast("Delete connection: " + message)
+                }
             },
 
             setTabContent: (tabId, content) => {

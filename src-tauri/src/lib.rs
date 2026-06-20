@@ -107,6 +107,7 @@ pub fn run() {
             commands::list_database_profiles,
             commands::save_database_profile,
             commands::delete_database_profile,
+            commands::test_database_connection,
             commands::inspect_database_schema,
             commands::execute_database_query,
             commands::list_database_query_history,
