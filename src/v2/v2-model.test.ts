@@ -237,11 +237,15 @@ describe("file chips", () => {
         expect(chipFor("a.ts")[0]).toBe("ts")
         expect(chipFor("a.js")[0]).toBe("js")
         expect(chipFor("script.py")[0]).toBe("py")
+        expect(chipFor("Program.cs")[0]).toBe("cs")
+        expect(chipFor("Main.kt")[0]).toBe("kt")
+        expect(chipFor("build.gradle.kts")[0]).toBe("kt")
         expect(chipFor("a.json")[0]).toBe("{}")
         expect(chipFor("index.html")[0]).toBe("html")
         expect(chipFor("page.htm")[0]).toBe("html")
         expect(chipFor("a.unknown")[0]).toBe("·")
     })
+
 })
 
 describe("git demo data", () => {

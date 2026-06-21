@@ -16,7 +16,7 @@ export type LspDiagnostic = {
 export type LanguageServerStatus = {
   workspace_id: string;
   workspace_root: string;
-  language: "Rust" | "TypeScript" | "JavaScript" | "Python" | string;
+  language: "Rust" | "TypeScript" | "JavaScript" | "Python" | "CSharp" | "Kotlin" | string;
   display_name: string;
   state: "Unsupported" | "MissingCommand" | "Running" | "Stopped" | "Error" | string;
   pid: number | null;
@@ -30,6 +30,27 @@ export type LanguageHover = {
   line: number;
   character: number;
   contents: string;
+};
+
+export type LanguageCompletionItem = {
+  label: string;
+  detail: string | null;
+  insertText: string;
+};
+
+export type LanguageCodeAction = {
+  title: string;
+  kind: string | null;
+  edit: unknown | null;
+};
+
+export type LanguageSymbol = {
+  name: string;
+  kind: string | null;
+  path: string;
+  line: number;
+  col: number;
+  containerName: string | null;
 };
 
 export type LanguageViewState = {
@@ -136,8 +157,57 @@ export function isLspSupportedDocumentPath(path: string): boolean {
     lower.endsWith(".cjs") ||
     lower.endsWith(".py") ||
     lower.endsWith(".pyw") ||
-    lower.endsWith(".pyi")
+    lower.endsWith(".pyi") ||
+    lower.endsWith(".cs") ||
+    lower.endsWith(".kt") ||
+    lower.endsWith(".kts")
   );
+}
+
+function completionItemRows(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object") {
+    const items = (value as Record<string, unknown>).items;
+    if (Array.isArray(items)) return items;
+  }
+  return [];
+}
+
+function completionInsertText(row: Record<string, unknown>, label: string): string {
+  if (typeof row.insertText === "string") return row.insertText;
+  const textEdit = row.textEdit;
+  if (textEdit && typeof textEdit === "object") {
+    const newText = (textEdit as Record<string, unknown>).newText;
+    if (typeof newText === "string") return newText;
+  }
+  return label;
+}
+
+export function normalizeLanguageCompletionItems(value: unknown): LanguageCompletionItem[] {
+  return completionItemRows(value).flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Record<string, unknown>;
+    if (typeof row.label !== "string" || !row.label.trim()) return [];
+    return [{
+      label: row.label,
+      detail: typeof row.detail === "string" ? row.detail : null,
+      insertText: completionInsertText(row, row.label),
+    }];
+  });
+}
+
+export function normalizeLanguageCodeActions(value: unknown): LanguageCodeAction[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Record<string, unknown>;
+    if (typeof row.title !== "string" || !row.title.trim()) return [];
+    return [{
+      title: row.title,
+      kind: typeof row.kind === "string" ? row.kind : null,
+      edit: row.edit ?? null,
+    }];
+  });
 }
 
 export function lspDocumentChangeForWorkspace(

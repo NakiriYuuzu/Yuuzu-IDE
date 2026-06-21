@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { act, cleanup, fireEvent, render } from "@testing-library/react"
 
 import { ensureTestDom } from "../test/test-dom"
-import { ConfirmModal, ContextMenu, ReferencesOverlay, SettingsModal } from "./Overlays"
+import { CodeActionsOverlay, ConfirmModal, ContextMenu, ReferencesOverlay, SettingsModal } from "./Overlays"
 import { v2Store } from "./v2-store"
 
 ensureTestDom()
@@ -129,6 +129,7 @@ describe("ContextMenu", () => {
             gotoDefinition: v2Store.getState().gotoDefinition,
             findReferences: v2Store.getState().findReferences,
             renameSymbol: v2Store.getState().renameSymbol,
+            codeActionsAt: v2Store.getState().codeActionsAt,
         }
         const calls: unknown[][] = []
         const prompt = globalThis.prompt
@@ -137,6 +138,7 @@ describe("ContextMenu", () => {
             gotoDefinition: (...args: unknown[]) => calls.push(["goto", ...args]),
             findReferences: (...args: unknown[]) => calls.push(["refs", ...args]),
             renameSymbol: (...args: unknown[]) => calls.push(["rename", ...args]),
+            codeActionsAt: (...args: unknown[]) => calls.push(["actions", ...args]),
         }))
         globalThis.prompt = () => "renamed"
 
@@ -163,6 +165,10 @@ describe("ContextMenu", () => {
             view = openMenu()
             fireEvent.click(view.getByRole("button", { name: /Rename Symbol/ }))
             view.unmount()
+
+            view = openMenu()
+            fireEvent.click(view.getByRole("button", { name: /Code Actions/ }))
+            view.unmount()
         } finally {
             globalThis.prompt = prompt
             act(() => v2Store.setState(previous))
@@ -172,6 +178,7 @@ describe("ContextMenu", () => {
             ["goto", "src/server.ts", 2, 4],
             ["refs", "src/server.ts", 2, 4],
             ["rename", "src/server.ts", 2, 4, "renamed"],
+            ["actions", "src/server.ts", 2, 4],
         ])
     })
 
@@ -180,6 +187,7 @@ describe("ContextMenu", () => {
             gotoDefinition: v2Store.getState().gotoDefinition,
             findReferences: v2Store.getState().findReferences,
             renameSymbol: v2Store.getState().renameSymbol,
+            codeActionsAt: v2Store.getState().codeActionsAt,
         }
         const calls: unknown[][] = []
 
@@ -187,6 +195,7 @@ describe("ContextMenu", () => {
             gotoDefinition: (...args: unknown[]) => calls.push(["goto", ...args]),
             findReferences: (...args: unknown[]) => calls.push(["refs", ...args]),
             renameSymbol: (...args: unknown[]) => calls.push(["rename", ...args]),
+            codeActionsAt: (...args: unknown[]) => calls.push(["actions", ...args]),
         }))
 
         try {
@@ -201,14 +210,17 @@ describe("ContextMenu", () => {
             const goto = view.getByRole("button", { name: /Go to Definition/ }) as HTMLButtonElement
             const refs = view.getByRole("button", { name: /Find References/ }) as HTMLButtonElement
             const rename = view.getByRole("button", { name: /Rename Symbol/ }) as HTMLButtonElement
+            const actions = view.getByRole("button", { name: /Code Actions/ }) as HTMLButtonElement
 
             expect(goto.disabled).toBe(true)
             expect(refs.disabled).toBe(true)
             expect(rename.disabled).toBe(true)
+            expect(actions.disabled).toBe(true)
 
             fireEvent.click(goto)
             fireEvent.click(refs)
             fireEvent.click(rename)
+            fireEvent.click(actions)
             expect(calls).toEqual([])
         } finally {
             act(() => v2Store.setState(previous))
@@ -598,6 +610,62 @@ describe("SettingsModal", () => {
             act(() => v2Store.setState(previous))
         }
     })
+
+    test("Language Servers searches workspace symbols and opens a selected result", async () => {
+        const previous = {
+            active: v2Store.getState().active,
+            mode: v2Store.getState().mode,
+            stOpen: v2Store.getState().stOpen,
+            stSec: v2Store.getState().stSec,
+            ui: structuredClone(v2Store.getState().ui),
+            openFile: v2Store.getState().openFile,
+            workspaceSymbols: v2Store.getState().workspaceSymbols,
+        }
+
+        const opened: Array<{ path: string; reveal?: { line: number; col: number } }> = []
+
+        act(() => v2Store.setState((s) => ({
+            active: "api",
+            mode: "real",
+            stOpen: true,
+            stSec: "language",
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    lspLoaded: true,
+                    lspServers: [],
+                    diagnosticsByPath: {},
+                    lspLogs: [],
+                },
+            },
+            workspaceSymbols: async (query) => query === "User"
+                ? [{
+                    name: "UserService",
+                    kind: "Class",
+                    path: "src/UserService.cs",
+                    line: 8,
+                    col: 5,
+                    containerName: "App.Services",
+                }]
+                : [],
+            openFile: (path, reveal) => opened.push({ path, reveal }),
+        })))
+
+        try {
+            const view = render(<SettingsModal />)
+            fireEvent.change(view.getByLabelText("Workspace symbol query"), { target: { value: "User" } })
+            fireEvent.click(view.getByRole("button", { name: "Search workspace symbols" }))
+
+            const result = await view.findByRole("button", { name: /Open symbol UserService/ })
+            fireEvent.click(result)
+
+            expect(opened).toEqual([{ path: "src/UserService.cs", reveal: { line: 8, col: 5 } }])
+            expect(v2Store.getState().stOpen).toBe(false)
+        } finally {
+            act(() => v2Store.setState(previous))
+        }
+    })
 })
 
 describe("ReferencesOverlay", () => {
@@ -634,6 +702,42 @@ describe("ReferencesOverlay", () => {
             expect(v2Store.getState().ui.api.lspRefs).toBeNull()
         } finally {
             act(() => v2Store.setState({ openFile: previous }))
+        }
+    })
+})
+
+describe("CodeActionsOverlay", () => {
+    test("renders code actions and applies the selected action", () => {
+        const previous = {
+            active: v2Store.getState().active,
+            ui: structuredClone(v2Store.getState().ui),
+            applyCodeAction: v2Store.getState().applyCodeAction,
+        }
+        const applied: number[] = []
+
+        act(() => v2Store.setState((s) => ({
+            active: "api",
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    lspActions: [{
+                        title: "Add using System",
+                        kind: "quickfix",
+                        edit: { changes: {} },
+                    }],
+                },
+            },
+            applyCodeAction: (index) => applied.push(index),
+        })))
+
+        try {
+            const view = render(<CodeActionsOverlay />)
+            fireEvent.click(view.getByRole("button", { name: /Apply code action Add using System/ }))
+
+            expect(applied).toEqual([0])
+        } finally {
+            act(() => v2Store.setState(previous))
         }
     })
 })

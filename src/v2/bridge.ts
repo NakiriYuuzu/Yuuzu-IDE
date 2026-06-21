@@ -12,7 +12,7 @@ import { formatWhen } from "../features/git/git-log-model"
 import type { DatabaseProfile, DatabaseQueryHistoryEntry, DatabaseQueryResult, DatabaseTable } from "../features/database/database-model"
 import type { BrowserPreviewBounds } from "../features/browser/browser-model"
 import type { DiagnosticEvent } from "../features/diagnostics/diagnostics-model"
-import type { LspDiagnostic } from "../features/language/language-model"
+import type { LanguageSymbol, LspDiagnostic } from "../features/language/language-model"
 import type { RemoteFileEntry, RemoteHostProfile } from "../features/remote/remote-model"
 
 import { emptyGitData, sizeLabel } from "./v2-model"
@@ -97,6 +97,8 @@ export function langForPath(path: string): string {
     if (ext === "js" || ext === "jsx" || ext === "mjs" || ext === "cjs") return "js"
     if (ext === "json") return "json"
     if (ext === "py" || ext === "pyw" || ext === "pyi") return "py"
+    if (ext === "cs") return "cs"
+    if (ext === "kt" || ext === "kts") return "kt"
     if (ext === "html" || ext === "htm") return "html"
     if (ext === "sql") return "sql"
     if (ext === "css" || ext === "scss") return "css"
@@ -237,6 +239,66 @@ export function mapLspDiagnostics(diags: LspDiagnostic[]): Record<string, LspDia
         byPath[diagnostic.path] = [...(byPath[diagnostic.path] ?? []), diagnostic]
     }
     return byPath
+}
+
+const SYMBOL_KINDS: Record<number, string> = {
+    1: "File",
+    2: "Module",
+    3: "Namespace",
+    4: "Package",
+    5: "Class",
+    6: "Method",
+    7: "Property",
+    8: "Field",
+    9: "Constructor",
+    10: "Enum",
+    11: "Interface",
+    12: "Function",
+    13: "Variable",
+    14: "Constant",
+    15: "String",
+    16: "Number",
+    17: "Boolean",
+    18: "Array",
+    19: "Object",
+    20: "Key",
+    21: "Null",
+    22: "EnumMember",
+    23: "Struct",
+    24: "Event",
+    25: "Operator",
+    26: "TypeParameter",
+}
+
+function symbolKindLabel(value: unknown): string | null {
+    if (typeof value === "string") return value
+    if (typeof value === "number") return SYMBOL_KINDS[value] ?? String(value)
+    return null
+}
+
+export function mapLspSymbols(value: unknown, root: string): LanguageSymbol[] {
+    const rows = Array.isArray(value) ? value : value ? [value] : []
+    return rows.flatMap((row) => {
+        if (!row || typeof row !== "object") return []
+        const item = row as Record<string, unknown>
+        if (typeof item.name !== "string" || !item.name.trim()) return []
+        const location = item.location && typeof item.location === "object"
+            ? item.location as Record<string, unknown>
+            : null
+        const uri = typeof location?.uri === "string" ? location.uri : ""
+        const range = isWireRange(location?.range) ? location.range : null
+        const path = uri ? relativePathFromUri(root, uri) : null
+        if (!path || !range) return []
+        const pos = wireRangeToCursor(range)
+        return [{
+            name: item.name,
+            kind: symbolKindLabel(item.kind),
+            path,
+            line: pos.line,
+            col: pos.col,
+            containerName: typeof item.containerName === "string" ? item.containerName : null,
+        }]
+    })
 }
 
 function isLspRangeLike(value: unknown): value is LspRangeLike {

@@ -9,7 +9,7 @@ import type { GitExportFormat, GitExportScope, GitResetMode } from "../features/
 import type { BrowserPreviewBounds } from "../features/browser/browser-model"
 import type { FileVersion } from "../features/files/file-model"
 import type { ConnectionTestResult, DatabaseProfile, DatabaseProfileInput } from "../features/database/database-model"
-import type { LanguageHover } from "../features/language/language-model"
+import type { LanguageCompletionItem, LanguageHover, LanguageSymbol } from "../features/language/language-model"
 import { evictHlCache } from "./hl-cache"
 import { externallyChangedTabIds } from "./file-watch"
 import { dbProfileToDialog, defaultDbDialogState, newDbDialogState } from "./db-dialog"
@@ -149,7 +149,11 @@ export type RealDelegate = {
     gotoDefinition: (path: string, line: number, col: number) => void
     findReferences: (path: string, line: number, col: number) => void
     renameSymbol: (path: string, line: number, col: number, newName: string) => void
+    completeAt: (path: string, line: number, col: number) => Promise<LanguageCompletionItem[]>
+    codeActionsAt: (path: string, line: number, col: number) => void
+    applyCodeAction: (index: number) => void
     hoverAt: (path: string, line: number, col: number) => Promise<LanguageHover | null>
+    workspaceSymbols: (query: string) => Promise<LanguageSymbol[]>
     restartLspServer: (language: string) => void
     reloadLang: () => void
     lspChange: (tabId: number) => void
@@ -273,6 +277,7 @@ export function defUI(pid: string): ProjectUI {
         lspServers: [],
         lspLogs: [],
         lspRefs: null,
+        lspActions: null,
         lspLoaded: false,
     }
 }
@@ -307,6 +312,7 @@ export function emptyUI(): ProjectUI {
         lspServers: [],
         lspLogs: [],
         lspRefs: null,
+        lspActions: null,
         lspLoaded: false,
     }
 }
@@ -409,9 +415,14 @@ export type V2State = {
     gotoDefinition: (path: string, line: number, col: number) => void
     findReferences: (path: string, line: number, col: number) => void
     renameSymbol: (path: string, line: number, col: number, newName: string) => void
+    completeAt: (path: string, line: number, col: number) => Promise<LanguageCompletionItem[]>
+    codeActionsAt: (path: string, line: number, col: number) => void
+    applyCodeAction: (index: number) => void
     hoverAt: (path: string, line: number, col: number) => Promise<LanguageHover | null>
+    workspaceSymbols: (query: string) => Promise<LanguageSymbol[]>
     restartLspServer: (language: string) => void
     closeRefs: () => void
+    closeCodeActions: () => void
     reloadLang: () => void
 
     // git
@@ -1352,9 +1363,32 @@ export function createV2Store() {
                 return null
             },
 
+            completeAt: async (path, line, col) => {
+                if (get().mode === "real") {
+                    return (await realDelegate?.completeAt(path, line, col)) ?? []
+                }
+                return []
+            },
+
             findReferences: (path, line, col) => {
                 if (get().mode === "real") {
                     realDelegate?.findReferences(path, line, col)
+                    return
+                }
+                get().showToast("Language service needs a real workspace")
+            },
+
+            codeActionsAt: (path, line, col) => {
+                if (get().mode === "real") {
+                    realDelegate?.codeActionsAt(path, line, col)
+                    return
+                }
+                get().showToast("Language service needs a real workspace")
+            },
+
+            applyCodeAction: (index) => {
+                if (get().mode === "real") {
+                    realDelegate?.applyCodeAction(index)
                     return
                 }
                 get().showToast("Language service needs a real workspace")
@@ -1380,6 +1414,19 @@ export function createV2Store() {
                 upd((p) => {
                     p.lspRefs = null
                 })
+            },
+
+            closeCodeActions: () => {
+                upd((p) => {
+                    p.lspActions = null
+                })
+            },
+
+            workspaceSymbols: async (query) => {
+                if (get().mode === "real") {
+                    return (await realDelegate?.workspaceSymbols(query)) ?? []
+                }
+                return []
             },
 
             reloadLang: () => {

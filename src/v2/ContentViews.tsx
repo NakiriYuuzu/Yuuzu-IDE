@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react"
 import type { MouseEvent as ReactMouseEvent } from "react"
 import { TerminalTab } from "../features/terminal/TerminalTab"
 import { isLspSupportedDocumentPath } from "../features/language/language-model"
-import type { LspDiagnostic } from "../features/language/language-model"
+import type { LanguageCompletionItem, LspDiagnostic } from "../features/language/language-model"
 
 import { blameLineMap, ctxPct, diagLineSeverity, estTokens, fmtK, hlCode, hlLine, normSeverity, termSegs } from "./v2-model"
 import type { Seg, Tab } from "./v2-model"
@@ -47,6 +47,14 @@ function focusWithoutScroll(el: HTMLTextAreaElement): void {
     }
 }
 
+function scheduleFrame(fn: () => void): void {
+    if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(fn)
+        return
+    }
+    setTimeout(fn, 0)
+}
+
 let cwCache = { key: "", w: 0 }
 function measureCharWidth(el: HTMLElement): number {
     const docView = el.ownerDocument?.defaultView
@@ -83,6 +91,18 @@ function clampRevealCol(content: string, line: number, col: number): number {
     const idx = Math.max(1, Math.min(line, Math.max(1, lines.length))) - 1
     const lineText = lines[idx] ?? ""
     return Math.min(Math.max(1, col), Math.max(1, lineText.length + 1))
+}
+
+function wordStartBefore(value: string, offset: number): number {
+    let start = Math.max(0, Math.min(offset, value.length))
+    while (start > 0 && /[A-Za-z0-9_$]/.test(value[start - 1])) start -= 1
+    return start
+}
+
+function cursorFromOffset(value: string, offset: number): { ln: number; col: number } {
+    const upTo = value.slice(0, Math.max(0, Math.min(offset, value.length)))
+    const lastBreak = upTo.lastIndexOf("\n")
+    return { ln: upTo.split("\n").length, col: upTo.length - lastBreak }
 }
 
 function diagMatchesPosition(d: LspDiagnostic, line: number, col: number): boolean {
@@ -154,6 +174,7 @@ function EditableBody({ tab }: { tab: Tab }) {
     const setTabContent = useV2Store((s) => s.setTabContent)
     const saveTab = useV2Store((s) => s.saveTab)
     const gotoDefinition = useV2Store((s) => s.gotoDefinition)
+    const completeAt = useV2Store((s) => s.completeAt)
     const hoverAt = useV2Store((s) => s.hoverAt)
     const clearReveal = useV2Store((s) => s.clearReveal)
     const setCursor = useV2Store((s) => s.setCursor)
@@ -165,8 +186,10 @@ function EditableBody({ tab }: { tab: Tab }) {
     const [hover, setHover] = useState<{ x: number; y: number; diags: LspDiagnostic[]; doc: string | null } | null>(
         null,
     )
+    const [completion, setCompletion] = useState<{ items: LanguageCompletionItem[]; sel: number; x: number; y: number } | null>(null)
     const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
     const hoverSeq = useRef(0)
+    const completionSeq = useRef(0)
     const lines = highlightContent(tab.id, content, tab.contentLang ?? "md")
     const blameByLine = blameLineMap(tab.blame)
     const sevByLine = diagLineSeverity(diagnostics)
@@ -175,6 +198,50 @@ function EditableBody({ tab }: { tab: Tab }) {
         if (hoverTimer.current) clearTimeout(hoverTimer.current)
         hoverSeq.current += 1
         setHover(null)
+    }
+
+    function clearCompletion() {
+        completionSeq.current += 1
+        setCompletion(null)
+    }
+
+    function completionPosition(el: HTMLTextAreaElement, ln: number, col: number): { x: number; y: number } {
+        const body = el.closest(".yz2-ed-body") as HTMLElement | null
+        const scrollLeft = body?.scrollLeft ?? 0
+        const scrollTop = body?.scrollTop ?? 0
+        return {
+            x: Math.max(0, (col - 1) * measureCharWidth(el) - scrollLeft),
+            y: Math.max(0, 10 + (ln - 1) * 21 - scrollTop + 22),
+        }
+    }
+
+    async function requestCompletion(el: HTMLTextAreaElement) {
+        if (!supported) return
+        const cur = cursorFrom(el)
+        const seq = ++completionSeq.current
+        const items = await completeAt(tab.path ?? "", cur.ln, cur.col)
+        if (seq !== completionSeq.current) return
+        if (!items.length) {
+            setCompletion(null)
+            return
+        }
+        setCompletion({ items, sel: 0, ...completionPosition(el, cur.ln, cur.col) })
+    }
+
+    function applyCompletionItem(item: LanguageCompletionItem) {
+        const el = taRef.current
+        if (!el) return
+        const start = wordStartBefore(el.value, el.selectionStart)
+        const end = el.selectionEnd
+        const next = el.value.slice(0, start) + item.insertText + el.value.slice(end)
+        const nextOffset = start + item.insertText.length
+        setTabContent(tab.id, next)
+        setCursor(cursorFromOffset(next, nextOffset))
+        clearCompletion()
+        scheduleFrame(() => {
+            el.selectionStart = el.selectionEnd = nextOffset
+            focusWithoutScroll(el)
+        })
     }
 
     function onAreaMouseMove(e: ReactMouseEvent<HTMLTextAreaElement>) {
@@ -235,11 +302,14 @@ function EditableBody({ tab }: { tab: Tab }) {
 
     useEffect(() => {
         setHover(null)
+        setCompletion(null)
         hoverSeq.current += 1
+        completionSeq.current += 1
 
         return () => {
             if (hoverTimer.current) clearTimeout(hoverTimer.current)
             hoverSeq.current += 1
+            completionSeq.current += 1
         }
     }, [tab.path, diagnostics])
 
@@ -302,12 +372,44 @@ function EditableBody({ tab }: { tab: Tab }) {
                     }}
                     onChange={(e) => {
                         clearHover()
+                        clearCompletion()
                         setTabContent(tab.id, e.target.value)
                         setCursor(cursorFrom(e.target))
                     }}
                     onSelect={(e) => setCursor(cursorFrom(e.currentTarget))}
                     onBlur={() => setCursor(null)}
                     onKeyDown={(e) => {
+                        if (completion) {
+                            if (e.key === "ArrowDown") {
+                                e.preventDefault()
+                                setCompletion((current) => current
+                                    ? { ...current, sel: Math.min(current.items.length - 1, current.sel + 1) }
+                                    : current)
+                                return
+                            }
+                            if (e.key === "ArrowUp") {
+                                e.preventDefault()
+                                setCompletion((current) => current
+                                    ? { ...current, sel: Math.max(0, current.sel - 1) }
+                                    : current)
+                                return
+                            }
+                            if (e.key === "Enter") {
+                                e.preventDefault()
+                                applyCompletionItem(completion.items[completion.sel])
+                                return
+                            }
+                            if (e.key === "Escape") {
+                                e.preventDefault()
+                                clearCompletion()
+                                return
+                            }
+                        }
+                        if ((e.metaKey || e.ctrlKey) && (e.code === "Space" || e.key === " ")) {
+                            e.preventDefault()
+                            void requestCompletion(e.currentTarget)
+                            return
+                        }
                         if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
                             e.preventDefault()
                             saveTab(tab.id)
@@ -319,7 +421,7 @@ function EditableBody({ tab }: { tab: Tab }) {
                             const start = el.selectionStart
                             const indent = " ".repeat(tabSize)
                             setTabContent(tab.id, el.value.slice(0, start) + indent + el.value.slice(el.selectionEnd))
-                            requestAnimationFrame(() => {
+                            scheduleFrame(() => {
                                 el.selectionStart = el.selectionEnd = start + indent.length
                             })
                         }
@@ -334,6 +436,23 @@ function EditableBody({ tab }: { tab: Tab }) {
                             </div>
                         ))}
                         {hover.doc ? <pre className="yz2-ed-hover-doc">{hover.doc}</pre> : null}
+                    </div>
+                ) : null}
+                {completion ? (
+                    <div className="yz2-ed-complete" style={{ left: completion.x, top: completion.y }}>
+                        {completion.items.slice(0, 12).map((item, index) => (
+                            <button
+                                type="button"
+                                key={item.label + ":" + index}
+                                className={"yz2-ed-complete-row" + (index === completion.sel ? " is-active" : "")}
+                                aria-label={"Insert completion " + item.label}
+                                onMouseDown={(event) => event.preventDefault()}
+                                onClick={() => applyCompletionItem(item)}
+                            >
+                                <span className="label">{item.label}</span>
+                                {item.detail ? <span className="detail">{item.detail}</span> : null}
+                            </button>
+                        ))}
                     </div>
                 ) : null}
             </div>

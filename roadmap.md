@@ -31,6 +31,10 @@ IDE process.
 - **Low overhead over feature breadth:** if a feature makes the app feel like
   JetBrains in resource usage, it needs a narrower first implementation or a
   lazy-loading model.
+- **Editor surface is replaceable; intelligence is core-owned:** the visible
+  editor may move from the current textarea engine to CodeMirror, but document
+  sync, LSP, file watching, indexing, diagnostics caching, and expensive
+  scheduling should remain Rust/Tauri responsibilities.
 
 ## Frontend Shell: v2 (Yuzu Redesign)
 
@@ -45,7 +49,9 @@ The redesign changed two engine decisions recorded under Open Decisions:
 - The editor is now a custom full-height `<textarea>` over per-line painted
   highlight layers (`src/v2/ContentViews.tsx`, `src/v2/hl-cache.ts`,
   `src/v2/v2-model.ts`), not Monaco. Highlighting runs through `hlLine` with a
-  per-tab cache.
+  per-tab cache. The next editor-platform direction is CodeMirror 6, tracked
+  separately in Node 15, while preserving the v2 UI/UX and the Rust/Tauri LSP
+  backbone.
 - The terminal still uses xterm.js by reusing the original
   `src/features/terminal/TerminalTab` component inside the v2 `TerminalView`.
 
@@ -129,7 +135,8 @@ real measurements exist.
 - Lazy start language servers only when needed.
 - Language server health and logs.
 - Minimal built-in support for Rust, TypeScript/JavaScript, Python, Markdown,
-  JSON, YAML, SQL, and shell scripts.
+  JSON, YAML, SQL, shell scripts, and C# syntax through the planned CodeMirror
+  C# language package.
 
 ### Terminal And Tasks
 
@@ -785,8 +792,82 @@ are actually reachable in the app the user runs.
 **Non-goals**
 
 - New capabilities beyond what earlier nodes already specified.
-- Rewriting the v2 editor engine again.
+- CodeMirror or Monaco editor-engine replacement; that is tracked separately in
+  Node 15.
 - Public release polish.
+
+### Node 15: CodeMirror Editor Platform And C# Syntax Package
+
+**Status:** planned. This node records the 2026-06-21 direction to move the
+editor-platform track toward CodeMirror 6, keep language intelligence in the
+Rust/Tauri core and LSP layer, and build a first-party C# syntax package instead
+of depending permanently on a legacy stream mode.
+
+**Goal:** make the shipping editor feel closer to JetBrains for daily coding
+while staying lighter than JetBrains: CodeMirror owns the editor interaction
+surface, Rust/Tauri owns document state, file watching, auto-save, LSP, indexing,
+diagnostics, and scheduling, and a first-party `lang-csharp` package provides
+fast C# syntax support.
+
+**Scope**
+
+- Introduce an editor adapter boundary so the v2 workbench can keep the current
+  textarea engine as a fallback while a CodeMirror 6 surface reaches parity.
+- Use CodeMirror 6 as the preferred next editor surface for Rust, C#, YAML,
+  Markdown, HTML, CSS, XML, JavaScript, and TypeScript. Monaco may be retained as
+  comparison or retired support code, but is not the default direction for this
+  node.
+- Keep LSP mandatory for semantic intelligence: diagnostics, completion, hover,
+  go to definition, references, rename, symbols, formatting, and code actions.
+  CodeMirror language packages provide syntax, indentation, folding, brackets,
+  comments, snippets, and local fallback completion only.
+- Build an internal `@yuuzu/codemirror-lang-csharp` package with a handwritten
+  Lezer grammar rather than relying on `@codemirror/legacy-modes` as the long-term
+  implementation.
+- Cover the first C# package slice: parser, syntax highlighting, indentation,
+  folding, language data, comment toggling, bracket behavior, keywords, common
+  snippets, and stable behavior on incomplete or invalid code.
+- Support C# constructs needed for daily editing first: namespaces, classes,
+  interfaces, records, methods, properties, attributes, generics, lambdas,
+  pattern matching, preprocessor directives, comments, normal strings,
+  interpolated strings, verbatim strings, and raw strings.
+- Wire the editor surface into the Rust/Tauri open-document model so auto-save,
+  dirty state, external file changes, file watcher refreshes, and LSP
+  `didOpen`/`didChange`/`didSave` notifications use one source of truth.
+- Add two-stage completion: immediate local/snippet/path/symbol suggestions for
+  perceived latency, then LSP results merged, deduplicated, and ranked when the
+  language server responds.
+- Measure memory, typing latency, file-open latency, completion first paint, and
+  LSP merge latency against the current textarea engine and any Monaco spike.
+
+**Acceptance**
+
+- The v2 UI/UX remains visually consistent with the current Yuzu shell after the
+  CodeMirror surface is enabled.
+- Rust, YAML, Markdown, HTML, CSS, XML, JavaScript, and TypeScript files have
+  CodeMirror syntax support through maintained language packages.
+- `.cs` and `.csx` files use the first-party Lezer-based C# package for syntax
+  highlighting, indentation, folding, language data, and basic snippets.
+- The C# parser is error-tolerant enough that partially typed code does not
+  blank the editor, break indentation, or collapse unrelated folding regions.
+- Semantic behavior still comes from LSP, including C# completion, diagnostics,
+  definition, references, rename, and code actions when a C# language server is
+  configured.
+- Auto-save and file watcher flows preserve dirty edits, handle external changes
+  predictably, and do not send stale document versions to LSP.
+- Completion first paint can come from local data before LSP returns, with stale
+  asynchronous responses ignored by document/version checks.
+- Focused Bun tests cover the editor adapter, language selection, local
+  completion merge behavior, and dirty/save/external-change state transitions.
+
+**Non-goals**
+
+- Replacing Roslyn, OmniSharp, or any C# language server with a homemade C# type
+  checker.
+- Recreating IntelliJ PSI, full C# semantic resolve, project-wide refactoring,
+  or framework-level inspections inside the CodeMirror package.
+- Removing the textarea fallback before CodeMirror reaches verified parity.
+- Making Monaco the primary editor direction.
 
 ## Suggested First Milestones
 
@@ -829,9 +910,10 @@ are actually reachable in the app the user runs.
   Node 0 measurements show WebView overhead is unacceptable.
 - Editor engine: Monaco Editor was the first route, but the shipping v2 shell
   replaced it with a custom full-height `<textarea>` over per-line painted
-  highlight layers (`hlLine` plus a per-tab highlight cache). Monaco now survives
-  only in the retired `src/features/editor/` code. See Frontend Shell: v2 (Yuzu
-  Redesign).
+  highlight layers (`hlLine` plus a per-tab highlight cache). The next planned
+  editor-platform route is CodeMirror 6 with a first-party Lezer-based
+  `lang-csharp` package; Monaco remains comparison or retired support code, not
+  the primary direction. See Node 15.
 - Terminal engine: xterm.js is the terminal renderer; the v2 shell reuses the
   `src/features/terminal/TerminalTab` component, and Rust owns PTY process
   lifecycle through a PTY abstraction such as `portable-pty`.
@@ -855,9 +937,13 @@ v2 interface. With v2 as the only shell, the user-reachable surface is:
 
 The active priority is **Node 14: v2 (Yuzu Redesign) Completion**, which ports
 the missing Docs, Debug, and Extension surfaces, connects the Language panel to
-real LSP state, and closes the editor performance pass. Node 13 evidence is
-recorded in `docs/architecture/node-13-hardening-results.md`; Git Deep Dive
-evidence is recorded in `docs/architecture/git-deep-dive-results.md`.
+real LSP state, and closes the editor performance pass. The next planned editor
+platform track is **Node 15: CodeMirror Editor Platform And C# Syntax Package**,
+which replaces the old "do not rewrite the editor engine again" stance with a
+scoped CodeMirror migration and first-party Lezer-based C# syntax package. Node
+13 evidence is recorded in `docs/architecture/node-13-hardening-results.md`; Git
+Deep Dive evidence is recorded in
+`docs/architecture/git-deep-dive-results.md`.
 
 - Node 0 measurements keep Tauri 2 as the main route; Rust-native fallback
   research remains deferred.
