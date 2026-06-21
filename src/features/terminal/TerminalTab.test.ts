@@ -126,6 +126,7 @@ class FakeTerminal {
   addons: unknown[] = [];
   writes: string[] = [];
   dataHandlers: Array<(data: string) => void> = [];
+  titleHandlers: Array<(title: string) => void> = [];
   clearCalls = 0;
   keyHandler: ((event: KeyboardEvent) => boolean) | undefined;
 
@@ -156,11 +157,22 @@ class FakeTerminal {
       },
     };
   }
+  onTitleChange(handler: (title: string) => void) {
+    this.titleHandlers.push(handler);
+    return {
+      dispose: () => {
+        this.titleHandlers = this.titleHandlers.filter((item) => item !== handler);
+      },
+    };
+  }
   attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) {
     this.keyHandler = handler;
   }
   emitData(data: string) {
     this.dataHandlers.forEach((handler) => handler(data));
+  }
+  emitTitle(title: string) {
+    this.titleHandlers.forEach((handler) => handler(title));
   }
 }
 
@@ -206,6 +218,7 @@ async function mountTerminalTab(
   sessionId: string,
   onResize?: (sessionId: string, rows: number, cols: number) => void,
   onInput?: (sessionId: string, data: string) => void,
+  onTitleChange?: (sessionId: string, title: string) => void,
 ) {
   const { createRoot } = await import("react-dom/client");
   const { flushSync } = await import("react-dom");
@@ -219,6 +232,7 @@ async function mountTerminalTab(
         sessionId,
         onInput: onInput ?? (() => {}),
         onResize,
+        onTitleChange,
       }),
     );
   });
@@ -665,7 +679,7 @@ describe("TerminalTab output pipeline", () => {
     loadXtermMock.mockReset();
   });
 
-  test("sends a newline on shift+enter instead of submitting", async () => {
+  test("sends one newline across shift+enter keydown and keypress", async () => {
     FakeTerminal.instances = [];
     FakeFitAddon.instances = [];
     FakeImageAddon.instances = [];
@@ -691,6 +705,18 @@ describe("TerminalTab output pipeline", () => {
     expect(shiftEnter).toBe(false);
     expect(inputs).toEqual([["w:tab-9", "\n"]]);
 
+    const shiftEnterKeypress = terminal.keyHandler!({
+      type: "keypress",
+      key: "Enter",
+      shiftKey: true,
+      charCode: 13,
+      which: 13,
+      keyCode: 13,
+    } as KeyboardEvent);
+
+    expect(shiftEnterKeypress).toBe(false);
+    expect(inputs).toEqual([["w:tab-9", "\n"]]);
+
     const plainEnter = terminal.keyHandler!({
       type: "keydown",
       key: "Enter",
@@ -702,6 +728,32 @@ describe("TerminalTab output pipeline", () => {
 
     mounted.unmount();
     clearTerminalReplayOutput("w:tab-9");
+    loadXtermMock.mockReset();
+  });
+
+  test("forwards raw title updates with the mounted session id", async () => {
+    FakeTerminal.instances = [];
+    FakeFitAddon.instances = [];
+    FakeImageAddon.instances = [];
+    loadXtermMock.mockResolvedValueOnce(fakeXterm());
+    clearTerminalReplayOutput("w:tab-title");
+    const titleEvents: Array<[string, string]> = [];
+
+    const mounted = await mountTerminalTab(
+      "w:tab-title",
+      undefined,
+      undefined,
+      (sessionId, title) => titleEvents.push([sessionId, title]),
+    );
+    await waitUntil(() => expect(FakeTerminal.instances.length).toBe(1));
+    const terminal = FakeTerminal.instances[0]!;
+
+    terminal.emitTitle("raw session title");
+
+    expect(titleEvents).toEqual([["w:tab-title", "raw session title"]]);
+
+    mounted.unmount();
+    clearTerminalReplayOutput("w:tab-title");
     loadXtermMock.mockReset();
   });
 });

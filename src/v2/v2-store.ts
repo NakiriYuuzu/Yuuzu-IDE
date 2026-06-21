@@ -341,6 +341,7 @@ export type V2State = {
     stOpen: boolean
     stSec: string
     stVals: Record<string, string | boolean>
+    sidePanelWidth: number
     toast: string | null
     azWidth: number
     azColsOverride: number | null
@@ -358,6 +359,8 @@ export type V2State = {
     closeProject: (pid: string) => void
     toggleTheme: () => void
     setPanelOpen: (open: boolean) => void
+    setSidePanelWidth: (width: number) => void
+    persistSidePanelWidth: () => void
     setAzWidth: (width: number) => void
     setAzColsOverride: (cols: number | null) => void
     showToast: (msg: string) => void
@@ -471,6 +474,8 @@ export type V2State = {
     runTermCmd: (tabId: number) => void
     clearTerm: (tabId: number) => void
     killTerm: (tabId: number) => void
+    applyOscTitle: (sessionId: string, rawTitle: string) => void
+    renameTerminalTab: (tabId: number, nextTitle: string) => void
 
     // sftp
     sftpSelect: (pane: SftpPane, idx: number) => void
@@ -491,6 +496,7 @@ export type V2State = {
     azExitMax: () => void
     setAzBuf: (id: number, fn: (buf: string) => string) => void
     runAzCmd: (id: number) => void
+    renameAgentSession: (winId: number, nextTitle: string) => void
 
     // overlays
     openCtx: (target: CtxTarget) => void
@@ -512,6 +518,21 @@ export type V2State = {
 
 const THEME_KEY = "yuuzu-ide-theme"
 const SETTINGS_KEY = "yuuzu-ide-v2-settings"
+
+export const SIDE_PANEL_MIN_WIDTH = 220
+export const SIDE_PANEL_DEFAULT_WIDTH = 284
+export const SIDE_PANEL_MAX_WIDTH = 420
+
+export function clampSidePanelWidth(width: number): number {
+    if (!Number.isFinite(width)) return SIDE_PANEL_DEFAULT_WIDTH
+    return Math.max(SIDE_PANEL_MIN_WIDTH, Math.min(SIDE_PANEL_MAX_WIDTH, Math.round(width)))
+}
+
+function sidePanelWidthFromSettings(vals: Record<string, string | boolean>): number {
+    const raw = vals.sidePanelWidth
+    if (typeof raw !== "string") return SIDE_PANEL_DEFAULT_WIDTH
+    return clampSidePanelWidth(Number(raw))
+}
 
 function loadTheme(): "dark" | "light" {
     try {
@@ -558,6 +579,10 @@ export function settingLimit(vals: Record<string, string | boolean>): number {
     if (v === "100") return 100
     if (v === "1K") return 1000
     return 500
+}
+
+export function sanitizeTerminalTitle(rawTitle: string): string {
+    return rawTitle.replace(/[\x00-\x1F\x7F]/g, "").trim().slice(0, 120)
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null
@@ -755,6 +780,7 @@ export function createV2Store() {
         }
 
         const initialTheme = loadTheme()
+        const initialSettings = loadStoredSettings()
         applyThemeAttr(initialTheme)
 
         return {
@@ -770,7 +796,8 @@ export function createV2Store() {
             pal: { open: false, q: "" },
             stOpen: false,
             stSec: "general",
-            stVals: loadStoredSettings(),
+            stVals: initialSettings,
+            sidePanelWidth: sidePanelWidthFromSettings(initialSettings),
             toast: null,
             azWidth: 0,
             azColsOverride: null,
@@ -843,6 +870,12 @@ export function createV2Store() {
             },
 
             setPanelOpen: (open) => set({ panelOpen: open }),
+            setSidePanelWidth: (width) => set({ sidePanelWidth: clampSidePanelWidth(width) }),
+            persistSidePanelWidth: () => {
+                const width = String(get().sidePanelWidth)
+                set((s) => ({ stVals: { ...s.stVals, sidePanelWidth: width } }))
+                persistSettings(get().stVals)
+            },
             setAzWidth: (width) => {
                 if (Math.abs(width - get().azWidth) > 4) set({ azWidth: width })
             },
@@ -2252,6 +2285,47 @@ export function createV2Store() {
                 })
             },
 
+            applyOscTitle: (sessionId, rawTitle) => {
+                const title = sanitizeTerminalTitle(rawTitle)
+                if (!title) return
+                set((s) => {
+                    const nextUI = { ...s.ui }
+                    let changed = false
+
+                    for (const pid of Object.keys(nextUI)) {
+                        const p = nextUI[pid]
+                        const tabs = p.tabs.map((t) =>
+                            t.sessionId === sessionId && !t.titleLocked && t.title !== title ? { ...t, title } : t,
+                        )
+                        const wins = p.wins.map((w) =>
+                            w.sessionId === sessionId && !w.titleLocked && w.title !== title ? { ...w, title } : w,
+                        )
+                        const tabChanged = tabs.some((tab, idx) => tab !== p.tabs[idx])
+                        const winChanged = wins.some((win, idx) => win !== p.wins[idx])
+
+                        if (tabChanged || winChanged) {
+                            changed = true
+                            nextUI[pid] = { ...p, tabs, wins }
+                        }
+                    }
+
+                    return changed ? { ui: nextUI } : {}
+                })
+            },
+
+            renameTerminalTab: (tabId, nextTitle) => {
+                const title = nextTitle.trim()
+                upd((p) => {
+                    p.tabs = p.tabs.map((tab) =>
+                        tab.id === tabId
+                            ? title
+                                ? { ...tab, title, titleLocked: true }
+                                : { ...tab, titleLocked: false }
+                            : tab,
+                    )
+                })
+            },
+
             clearTerm: (tabId) => {
                 upd((p) => {
                     p.tabs = p.tabs.map((t) => (t.id === tabId ? { ...t, lines: [] } : t))
@@ -2446,6 +2520,19 @@ export function createV2Store() {
                         if (cmd === "clear") return { ...w, lines: [], buf: "" }
                         return { ...w, lines: [...w.lines, "❯ " + cmd, ...execOut(cmd, branch)], buf: "" }
                     })
+                })
+            },
+
+            renameAgentSession: (winId, nextTitle) => {
+                const title = nextTitle.trim()
+                upd((p) => {
+                    p.wins = p.wins.map((win) =>
+                        win.id === winId
+                            ? title
+                                ? { ...win, title, titleLocked: true }
+                                : { ...win, titleLocked: false }
+                            : win,
+                    )
                 })
             },
 

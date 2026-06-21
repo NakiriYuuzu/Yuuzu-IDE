@@ -664,6 +664,44 @@ async function ensureActiveProjectData(pid: string): Promise<void> {
 
 // ---------------------------------------------------------------- terminals
 
+const terminalOscTitleTails = new Map<string, string>()
+const terminalOscTitleMaxTail = 4096
+const terminalOscTitleSequence = /\x1b\](?:0|2);([\s\S]*?)(?:\x07|\x1b\\)/g
+const terminalOscTitleComplete = /^\x1b\](?:0|2);[\s\S]*(?:\x07|\x1b\\)$/
+
+export function extractTerminalOscTitles(sessionId: string, chunk: string): string[] {
+    const combined = (terminalOscTitleTails.get(sessionId) ?? "") + chunk
+    const titles: string[] = []
+    terminalOscTitleSequence.lastIndex = 0
+    let match: RegExpExecArray | null
+    let lastMatchEnd = 0
+
+    while ((match = terminalOscTitleSequence.exec(combined)) != null) {
+        titles.push(match[1] ?? "")
+        lastMatchEnd = terminalOscTitleSequence.lastIndex
+    }
+
+    const suffix = combined.slice(lastMatchEnd)
+    const lastOscStart = suffix.lastIndexOf("\x1b]")
+    let tail = ""
+    if (lastOscStart >= 0) {
+        const candidate = suffix.slice(lastOscStart)
+        if (candidate.startsWith("\x1b]0;") || candidate.startsWith("\x1b]2;")) {
+            if (!terminalOscTitleComplete.test(candidate)) tail = candidate
+        }
+    }
+
+    if (tail.length > terminalOscTitleMaxTail) tail = tail.slice(-terminalOscTitleMaxTail)
+    if (tail) terminalOscTitleTails.set(sessionId, tail)
+    else terminalOscTitleTails.delete(sessionId)
+
+    return titles
+}
+
+export function resetTerminalOscTitleParserForTests(): void {
+    terminalOscTitleTails.clear()
+}
+
 async function spawnSession(pid: string, name: string): Promise<{ sessionId: string } | null> {
     const root = rootOf(pid)
     if (!root) return null
@@ -689,6 +727,10 @@ export function writeToSession(sessionId: string, data: string): void {
 
 export function resizeSession(sessionId: string, rows: number, cols: number): void {
     void resizeTerminalSession(sessionId, rows, cols).catch(() => {})
+}
+
+export function applyOscTitle(sessionId: string, title: string): void {
+    store().applyOscTitle(sessionId, title)
 }
 
 function markSessionExited(sessionId: string): void {
@@ -2610,6 +2652,9 @@ export async function bootstrapV2(): Promise<void> {
     v2Store.setState({ mode: "real", order: [], active: "", meta: {}, ui: {} })
 
     void onTerminalOutput((event) => {
+        for (const title of extractTerminalOscTitles(event.session_id, event.chunk)) {
+            applyOscTitle(event.session_id, title)
+        }
         appendTerminalReplayOutput(event.session_id, event.chunk)
     })
     void onTerminalExit((event) => {

@@ -2,7 +2,16 @@
 
 import { afterEach, describe, expect, test } from "bun:test"
 
-import { createV2Store, emptyUI, registerRealDelegate, settingLimit } from "./v2-store"
+import {
+    SIDE_PANEL_MAX_WIDTH,
+    SIDE_PANEL_MIN_WIDTH,
+    clampSidePanelWidth,
+    createV2Store,
+    emptyUI,
+    sanitizeTerminalTitle,
+    registerRealDelegate,
+    settingLimit,
+} from "./v2-store"
 
 function freshStore() {
     return createV2Store()
@@ -446,6 +455,87 @@ describe("tabs", () => {
 })
 
 describe("terminal emulation", () => {
+    test("applyOscTitle updates only unlocked terminal surfaces", () => {
+        const store = freshStore()
+        store.setState((s) => ({
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    tabs: [
+                        ...s.ui.api.tabs,
+                        { id: 9001, type: "cmd", title: "zsh", sessionId: "term-a" },
+                        { id: 9002, type: "cmd", title: "manual", titleLocked: true, sessionId: "term-b" },
+                    ],
+                    wins: [
+                        ...s.ui.api.wins,
+                        {
+                            id: 9101,
+                            title: "agent",
+                            status: "shell",
+                            lines: [],
+                            buf: "",
+                            min: false,
+                            max: false,
+                            sessionId: "agent-a",
+                        },
+                        {
+                            id: 9102,
+                            title: "locked agent",
+                            status: "shell",
+                            lines: [],
+                            buf: "",
+                            min: false,
+                            max: false,
+                            titleLocked: true,
+                            sessionId: "agent-b",
+                        },
+                    ],
+                },
+            },
+        }))
+
+        store.getState().applyOscTitle("term-a", "  vim src/App.tsx  ")
+        store.getState().applyOscTitle("term-b", "should not apply")
+        store.getState().applyOscTitle("agent-a", "claude")
+        store.getState().applyOscTitle("agent-b", "should not apply")
+        store.getState().applyOscTitle("agent-a", "   ")
+
+        const state = store.getState().ui.api
+        expect(state.tabs.find((t) => t.id === 9001)?.title).toBe("vim src/App.tsx")
+        expect(state.tabs.find((t) => t.id === 9002)?.title).toBe("manual")
+        expect(state.wins.find((w) => w.id === 9101)?.title).toBe("claude")
+        expect(state.wins.find((w) => w.id === 9102)?.title).toBe("locked agent")
+    })
+
+    test("manual terminal rename locks and empty rename unlocks", () => {
+        const store = freshStore()
+        store.setState((s) => ({
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    tabs: [...s.ui.api.tabs, { id: 9001, type: "cmd", title: "zsh", sessionId: "term-a" }],
+                },
+            },
+        }))
+
+        store.getState().renameTerminalTab(9001, "  build logs  ")
+        expect(store.getState().ui.api.tabs.find((t) => t.id === 9001)).toMatchObject({
+            title: "build logs",
+            titleLocked: true,
+        })
+
+        store.getState().applyOscTitle("term-a", "ignored")
+        expect(store.getState().ui.api.tabs.find((t) => t.id === 9001)?.title).toBe("build logs")
+
+        store.getState().renameTerminalTab(9001, "")
+        expect(store.getState().ui.api.tabs.find((t) => t.id === 9001)?.titleLocked).toBe(false)
+
+        store.getState().applyOscTitle("term-a", "next osc")
+        expect(store.getState().ui.api.tabs.find((t) => t.id === 9001)?.title).toBe("next osc")
+    })
+
     test("typing into the buffer and running a command appends output", () => {
         const store = freshStore()
         store.getState().newTerm()
@@ -458,6 +548,37 @@ describe("terminal emulation", () => {
         expect(tab.lines?.some((l) => l.includes("package.json"))).toBe(true)
     })
 
+    test("manual agent rename locks and empty rename unlocks", () => {
+        const store = freshStore()
+        store.setState((s) => ({
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    wins: [...s.ui.api.wins, {
+                        id: 9101,
+                        title: "agent",
+                        status: "shell",
+                        lines: [],
+                        buf: "",
+                        min: false,
+                        max: false,
+                        sessionId: "agent-a",
+                    }],
+                },
+            },
+        }))
+
+        store.getState().renameAgentSession(9101, "  claude router  ")
+        expect(store.getState().ui.api.wins.find((w) => w.id === 9101)).toMatchObject({
+            title: "claude router",
+            titleLocked: true,
+        })
+
+        store.getState().renameAgentSession(9101, "")
+        expect(store.getState().ui.api.wins.find((w) => w.id === 9101)?.titleLocked).toBe(false)
+    })
+
     test("clear empties the scrollback", () => {
         const store = freshStore()
         store.getState().newTerm()
@@ -466,6 +587,12 @@ describe("terminal emulation", () => {
         store.getState().runTermCmd(tabId)
         const tab = store.getState().ui.api.tabs.find((t) => t.id === tabId)!
         expect(tab.lines).toHaveLength(0)
+    })
+
+    test("sanitizeTerminalTitle removes controls and limits long titles", () => {
+        expect(sanitizeTerminalTitle(" \u0000foo\nbar\u007f ")).toBe("foobar")
+        expect(sanitizeTerminalTitle("x".repeat(130))).toHaveLength(120)
+        expect(sanitizeTerminalTitle(" \n\t ")).toBe("")
     })
 })
 
@@ -1059,6 +1186,13 @@ describe("explorer mutations", () => {
 })
 
 describe("settings", () => {
+    test("clamps side panel width to the supported visual range", () => {
+        expect(clampSidePanelWidth(100)).toBe(SIDE_PANEL_MIN_WIDTH)
+        expect(clampSidePanelWidth(284)).toBe(284)
+        expect(clampSidePanelWidth(999)).toBe(SIDE_PANEL_MAX_WIDTH)
+        expect(clampSidePanelWidth(Number.NaN)).toBe(284)
+    })
+
     test("setSetting stores values and theme follows the choice row", () => {
         const store = freshStore()
         store.getState().setSetting("fontSize", "14")
@@ -1077,6 +1211,21 @@ describe("settings", () => {
         g.localStorage.removeItem("yuuzu-ide-v2-settings")
         freshStore().getState().setSetting("rowLimit", "1K")
         expect(freshStore().getState().stVals.rowLimit).toBe("1K")
+        g.localStorage.removeItem("yuuzu-ide-v2-settings")
+    })
+
+    test("persists side panel width across store instances", () => {
+        const g = globalThis as { localStorage?: Storage }
+        if (!g.localStorage) g.localStorage = window.localStorage
+        g.localStorage.removeItem("yuuzu-ide-v2-settings")
+
+        const store = freshStore()
+        store.getState().setSidePanelWidth(360)
+        expect(store.getState().sidePanelWidth).toBe(360)
+
+        store.getState().persistSidePanelWidth()
+        expect(freshStore().getState().sidePanelWidth).toBe(360)
+
         g.localStorage.removeItem("yuuzu-ide-v2-settings")
     })
 

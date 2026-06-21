@@ -73,6 +73,7 @@ export type Tab = {
     view?: "data" | "structure" | "sql" | "history"
     // real-backend fields
     sessionId?: string
+    titleLocked?: boolean
     realPath?: string
     content?: string | null
     contentLang?: string
@@ -112,6 +113,7 @@ export type Tab = {
 export type AzWindow = {
     id: number
     title: string
+    titleLocked?: boolean
     status: string
     lines: string[]
     buf: string

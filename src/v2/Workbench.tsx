@@ -47,6 +47,16 @@ function TitleBar() {
                     <span style={{ background: "#28c840" }} />
                 </div>
             )}
+            <button
+                type="button"
+                className={"yz2-iconbtn yz2-panel-toggle" + (panelOpen ? "" : " is-on")}
+                title="Toggle side panel"
+                aria-label="Toggle side panel"
+                aria-expanded={panelOpen}
+                onClick={() => setPanelOpen(!panelOpen)}
+            >
+                ▦
+            </button>
             <div className="yz2-brand">
                 <span className="yz2-logo">ゆ</span>
                 <span style={{ fontWeight: 700, fontSize: 13 }}>yuuzu</span>
@@ -74,14 +84,6 @@ function TitleBar() {
             )}
             <button type="button" className="yz2-iconbtn" title="Theme — dark / light" onClick={toggleTheme}>
                 ◐
-            </button>
-            <button
-                type="button"
-                className={"yz2-iconbtn" + (panelOpen ? "" : " is-on")}
-                title="Toggle side panel"
-                onClick={() => setPanelOpen(!panelOpen)}
-            >
-                ▦
             </button>
         </div>
     )

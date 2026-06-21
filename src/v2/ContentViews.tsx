@@ -8,7 +8,7 @@ import type { LspDiagnostic } from "../features/language/language-model"
 import { blameLineMap, ctxPct, diagLineSeverity, estTokens, fmtK, hlCode, hlLine, termSegs } from "./v2-model"
 import type { Seg, Tab } from "./v2-model"
 import { tokenChipFor, useV2Store } from "./v2-store"
-import { resizeSession, writeToSession } from "./controller"
+import { applyOscTitle, resizeSession, writeToSession } from "./controller"
 import { screenBoundsFromRect } from "./bridge"
 import { tabGlyph } from "./TabStrip"
 import { highlightContent } from "./hl-cache"
@@ -260,7 +260,12 @@ export function TerminalView({ tab }: { tab: Tab }) {
             <div className="yz2-view" key={tab.id}>
                 <div className="yz2-term">
                     <div className="yz2-xterm">
-                        <TerminalTab sessionId={tab.sessionId} onInput={writeToSession} onResize={resizeSession} />
+                        <TerminalTab
+                            sessionId={tab.sessionId}
+                            onInput={writeToSession}
+                            onResize={resizeSession}
+                            onTitleChange={applyOscTitle}
+                        />
                     </div>
                     <div className="yz2-term-foot">
                         {tab.exited ? "process exited — close this tab or open a new terminal (⌃`)" : "real shell — " + (tab.title ?? "zsh")}

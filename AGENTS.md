@@ -107,6 +107,10 @@ risk.
   Monaco may still exist in retired/support code, but it is not the shipping v2
   editor engine.
 - The terminal renderer is xterm.js through the reused `TerminalTab`.
+- For terminal title, PTY output, or xterm renderer behavior, verify both the
+  mounted `TerminalTab`/xterm path and the backend terminal-output event path;
+  inactive tabs and collapsed AgentZone sessions may not have a mounted
+  renderer.
 - Keep v2 store logic deterministic and testable. Put async orchestration in
   `controller.ts`; put payload mapping in `bridge.ts`.
 - For visual/theme changes, edit the actual rendered CSS variables in

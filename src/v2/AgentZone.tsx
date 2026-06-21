@@ -2,13 +2,13 @@
 // whose column count tracks the canvas width (1 / 2 / 3 / 4), each window
 // keeping a header with collapse (—), focus (⤢) and close (×) controls.
 
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import { TerminalTab } from "../features/terminal/TerminalTab"
 
 import { resolveAzCols, termSegs } from "./v2-model"
 import { useV2Store } from "./v2-store"
-import { resizeSession, writeToSession } from "./controller"
+import { applyOscTitle, resizeSession, writeToSession } from "./controller"
 import { Segs } from "./ContentViews"
 
 export function AgentZone() {
@@ -25,8 +25,13 @@ export function AgentZone() {
     const azMax = useV2Store((s) => s.azMax)
     const azFront = useV2Store((s) => s.azFront)
     const openCtx = useV2Store((s) => s.openCtx)
+    const renameAgentSession = useV2Store((s) => s.renameAgentSession)
 
     const canvasRef = useRef<HTMLDivElement | null>(null)
+    const [editingWin, setEditingWin] = useState<number | null>(null)
+    const [editingTitle, setEditingTitle] = useState("")
+    const renameCommitRef = useRef(true)
+    const renameInputRef = useRef<HTMLInputElement | null>(null)
 
     useEffect(() => {
         const el = canvasRef.current
@@ -37,6 +42,11 @@ export function AgentZone() {
         ro.observe(el)
         return () => ro.disconnect()
     }, [setAzWidth])
+
+    useEffect(() => {
+        if (editingWin == null) return
+        renameInputRef.current?.focus()
+    }, [editingWin])
 
     const cols = resolveAzCols(azColsOverride, azWidth)
     const anyMax = wins.some((w) => w.max)
@@ -97,6 +107,7 @@ export function AgentZone() {
                 <div className="yz2-az-grid" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
                     {wins.map((w) => {
                         const isActive = w.max || w.id === activeId
+                        const isEditing = editingWin === w.id
                         const cls =
                             "yz2-az-win" +
                             (isActive ? " is-active" : "") +
@@ -114,7 +125,57 @@ export function AgentZone() {
                                     }}
                                 >
                                     <span className="d" style={{ background: w.status === "running" ? "var(--yz-a8e23f)" : "var(--yz-3d4654)" }} />
-                                    <span className="tt">{w.title}</span>
+                                    {isEditing ? (
+                                        <input
+                                            ref={renameInputRef}
+                                            className="yz2-az-win-title"
+                                            type="text"
+                                            value={editingTitle}
+                                            onChange={(e) => setEditingTitle(e.target.value)}
+                                            onMouseDown={(e) => e.stopPropagation()}
+                                            onClick={(e) => e.stopPropagation()}
+                                            onDoubleClick={(e) => {
+                                                e.preventDefault()
+                                                e.stopPropagation()
+                                            }}
+                                            onContextMenu={(e) => {
+                                                e.preventDefault()
+                                                e.stopPropagation()
+                                            }}
+                                            onBlur={() => {
+                                                if (renameCommitRef.current) renameAgentSession(w.id, editingTitle)
+                                                setEditingWin(null)
+                                                setEditingTitle("")
+                                                renameCommitRef.current = true
+                                            }}
+                                            onKeyDown={(e) => {
+                                                if (e.key === "Enter") {
+                                                    e.preventDefault()
+                                                    e.stopPropagation()
+                                                    renameCommitRef.current = true
+                                                    e.currentTarget.blur()
+                                                } else if (e.key === "Escape") {
+                                                    e.preventDefault()
+                                                    e.stopPropagation()
+                                                    renameCommitRef.current = false
+                                                    e.currentTarget.blur()
+                                                }
+                                            }}
+                                            autoFocus
+                                        />
+                                    ) : (
+                                        <span
+                                            className="tt"
+                                            onDoubleClick={(e) => {
+                                                e.stopPropagation()
+                                                renameCommitRef.current = true
+                                                setEditingWin(w.id)
+                                                setEditingTitle(w.title)
+                                            }}
+                                        >
+                                            {w.title}
+                                        </span>
+                                    )}
                                     <span className="st">{w.status}</span>
                                     <button
                                         type="button"
@@ -155,7 +216,12 @@ export function AgentZone() {
                                 </div>
                                 {w.min ? null : w.sessionId ? (
                                     <div className="yz2-az-win-body real">
-                                        <TerminalTab sessionId={w.sessionId} onInput={writeToSession} onResize={resizeSession} />
+                                        <TerminalTab
+                                            sessionId={w.sessionId}
+                                            onInput={writeToSession}
+                                            onResize={resizeSession}
+                                            onTitleChange={applyOscTitle}
+                                        />
                                     </div>
                                 ) : (
                                     <div className="yz2-az-win-body">

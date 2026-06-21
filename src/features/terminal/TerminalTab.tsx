@@ -133,22 +133,31 @@ type TerminalTabProps = {
   sessionId: string;
   onInput: (sessionId: string, data: string) => void;
   onResize?: (sessionId: string, rows: number, cols: number) => void;
+  onTitleChange?: (sessionId: string, title: string) => void;
 };
 
-export function TerminalTab({ sessionId, onInput, onResize }: TerminalTabProps) {
+export function TerminalTab({
+  sessionId,
+  onInput,
+  onResize,
+  onTitleChange,
+}: TerminalTabProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onInputRef = useRef(onInput);
   const onResizeRef = useRef(onResize);
+  const onTitleChangeRef = useRef(onTitleChange);
   const [loadFailure, setLoadFailure] =
     useState<TerminalLoadFailureCopy | null>(null);
 
   onInputRef.current = onInput;
   onResizeRef.current = onResize;
+  onTitleChangeRef.current = onTitleChange;
 
   useEffect(() => {
     let disposed = false;
     let cleanup: (() => void) | undefined;
     let inputCleanup: (() => void) | undefined;
+    let titleCleanup: (() => void) | undefined;
     let unsubscribeChunks: (() => void) | undefined;
     let themeObserver: MutationObserver | undefined;
     let lastSentDimensions: TerminalDimensions | null = null;
@@ -208,6 +217,10 @@ export function TerminalTab({ sessionId, onInput, onResize }: TerminalTabProps) 
           onInputRef.current(sessionId, data);
         });
         inputCleanup = createTerminalInputCleanup(dataDisposable);
+        const titleDisposable = terminal.onTitleChange((title) => {
+          onTitleChangeRef.current?.(sessionId, title);
+        });
+        titleCleanup = () => titleDisposable.dispose();
 
         const replay = replayTerminalOutput(sessionId);
         if (replay) {
@@ -220,12 +233,22 @@ export function TerminalTab({ sessionId, onInput, onResize }: TerminalTabProps) 
         // 終端機無法區分 shift+enter 與 enter(兩者都送 CR),攔截後改送 LF
         // 讓 Claude Code 之類的 TUI 視為換行(等同預設的 ctrl+j),而非送出。
         terminal.attachCustomKeyEventHandler((event) => {
+          const isShiftEnter =
+            event.shiftKey &&
+            (event.key === "Enter" ||
+              event.keyCode === 13 ||
+              event.which === 13 ||
+              event.charCode === 13);
+
           if (
-            event.type === "keydown" &&
-            event.key === "Enter" &&
-            event.shiftKey
+            isShiftEnter &&
+            (event.type === "keydown" || event.type === "keypress")
           ) {
-            onInputRef.current(sessionId, "\n");
+            event.preventDefault?.();
+            event.stopPropagation?.();
+            if (event.type === "keydown") {
+              onInputRef.current(sessionId, "\n");
+            }
             return false;
           }
           return true;
@@ -267,6 +290,7 @@ export function TerminalTab({ sessionId, onInput, onResize }: TerminalTabProps) 
           themeObserver?.disconnect();
           unsubscribeChunks?.();
           inputCleanup?.();
+          titleCleanup?.();
           cleanup?.();
           setLoadFailure(terminalLoadFailureCopy(error));
         }
@@ -287,6 +311,7 @@ export function TerminalTab({ sessionId, onInput, onResize }: TerminalTabProps) 
       themeObserver?.disconnect();
       unsubscribeChunks?.();
       inputCleanup?.();
+      titleCleanup?.();
       cleanup?.();
     };
   }, [sessionId]);

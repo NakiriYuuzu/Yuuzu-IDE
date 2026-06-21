@@ -76,7 +76,9 @@ function buildCtxItems(ctx: CtxTarget, store: V2State): MenuEntry[] {
             ]
         case "tab": {
             const id = ctx.id ?? 0
+            const tab = p.tabs.find((t) => t.id === id)
             const isFile = ctx.type === "file"
+            const renameTerminal = tab?.type === "cmd"
             return [
                 { glyph: "×", label: "Close tab", run: () => store.closeTab(id) },
                 { glyph: "⊟", label: "Close others", run: () => store.closeOthers(id) },
@@ -84,6 +86,15 @@ function buildCtxItems(ctx: CtxTarget, store: V2State): MenuEntry[] {
                 { divider: true },
                 { glyph: "◫", label: isFile ? "Open to the side" : "Show in split", run: () =>
                     isFile && ctx.path ? store.openToSide(ctx.path) : store.setSplit(id) },
+                ...(renameTerminal ? [{
+                    glyph: "✎",
+                    label: "Rename terminal",
+                    run: () => {
+                        const next = prompt("Rename terminal:", tab?.title ?? "")
+                        if (next === null) return
+                        store.renameTerminalTab(id, next)
+                    },
+                }] : []),
             ]
         }
         case "project": {
@@ -271,6 +282,15 @@ function buildCtxItems(ctx: CtxTarget, store: V2State): MenuEntry[] {
                 { glyph: "⤢", label: "Focus session", run: () => store.azFocusFromPanel(winId) },
                 { glyph: "—", label: win?.min ? "Expand session" : "Collapse session", run: () => store.azCollapse(winId) },
                 { glyph: "+", label: "New session", run: () => store.azNew() },
+                ...(win ? [{
+                    glyph: "✎",
+                    label: "Rename session",
+                    run: () => {
+                        const next = prompt("Rename session:", win.title)
+                        if (next === null) return
+                        store.renameAgentSession(winId, next)
+                    },
+                }] : []),
                 { divider: true },
                 { glyph: "×", label: "Close session", danger: true, run: () => store.azClose(winId) },
             ]

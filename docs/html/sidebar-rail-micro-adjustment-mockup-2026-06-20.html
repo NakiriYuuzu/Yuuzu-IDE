@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Yuuzu-IDE Sidebar Rail Mockup</title>
+<style>
+:root {
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --bg: #0a0e15;
+    --surface: #0c1018;
+    --surface-2: #090c12;
+    --surface-3: #11161f;
+    --border: #1c2433;
+    --border-strong: #2b3547;
+    --text: #e6edf3;
+    --muted: #8b97a7;
+    --faint: #5a6675;
+    --accent: #a8e23f;
+    --accent-soft: #1b2410;
+    --accent-border: #45611a;
+    --blue: #82aaff;
+    --purple: #c792ea;
+    --orange: #f6a960;
+    --danger: #f07178;
+    --radius: 8px;
+    --shadow: 0 18px 60px rgba(0, 0, 0, 0.42);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body {
+    background: radial-gradient(circle at 20% 0%, #141a26 0, #0a0e15 34rem);
+    color: var(--text);
+    font-family: var(--font-mono);
+    padding: 28px;
+}
+button { font: inherit; color: inherit; }
+.page {
+    max-width: 1180px;
+    margin: 0 auto;
+}
+.page-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: flex-end;
+    margin-bottom: 18px;
+}
+.page-head h1 {
+    margin: 0 0 8px;
+    font-size: 20px;
+    letter-spacing: 0;
+}
+.page-head p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.7;
+}
+.actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.tool-btn {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--muted);
+    border-radius: var(--radius);
+    height: 32px;
+    padding: 0 11px;
+    cursor: pointer;
+}
+.tool-btn:hover { color: var(--text); border-color: var(--border-strong); }
+.tool-btn.primary {
+    background: var(--accent-soft);
+    border-color: var(--accent-border);
+    color: var(--accent);
+}
+.layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 280px;
+    gap: 18px;
+}
+.mock-card, .notes {
+    border: 1px solid var(--border);
+    background: rgba(12, 16, 24, 0.76);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+}
+.mock-card { overflow: hidden; }
+.mock-toolbar {
+    height: 38px;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 8px;
+    border-bottom: 1px solid var(--border);
+    background: #090c12;
+    color: var(--faint);
+    font-size: 11px;
+}
+.dot { width: 10px; height: 10px; border-radius: 50%; }
+.dot.red { background: #ff5f57; }
+.dot.yellow { background: #febc2e; }
+.dot.green { background: #28c840; }
+.frame {
+    width: 100%;
+    min-height: 620px;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.titlebar {
+    height: 40px;
+    flex: 0 0 40px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+}
+.icon-button {
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    border-radius: 7px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+}
+.icon-button:hover, .icon-button.active {
+    background: var(--surface-3);
+    border-color: var(--border);
+    color: var(--text);
+}
+.icon-button.panel-toggle {
+    flex: 0 0 28px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-color: var(--accent-border);
+}
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+}
+.logo {
+    width: 20px;
+    height: 20px;
+    display: grid;
+    place-items: center;
+    border-radius: 6px;
+    color: #0a0e15;
+    background: linear-gradient(135deg, #bdf04f, #a8e23f);
+    font-weight: 800;
+    font-size: 12px;
+}
+.brand-name { font-size: 13px; font-weight: 700; }
+.vsep { width: 1px; height: 18px; background: var(--border); }
+.chip {
+    height: 28px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 10px;
+    border-radius: 7px;
+    color: var(--muted);
+    font-size: 12px;
+}
+.search {
+    margin-left: auto;
+    width: min(340px, 34%);
+    min-width: 220px;
+    height: 28px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: #10151f;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    color: var(--faint);
+    font-size: 12px;
+}
+.main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+}
+.project-rail {
+    width: 58px;
+    flex: 0 0 58px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 9px;
+    padding: 10px 0 8px;
+    background: var(--surface-2);
+    border-right: 1px solid var(--border);
+}
+.project {
+    width: 42px;
+    height: 42px;
+    border-radius: 11px;
+    display: grid;
+    place-items: center;
+    border: 1px solid rgba(168, 226, 63, 0.55);
+    background: #1b2410;
+    color: var(--accent);
+    position: relative;
+    font-weight: 700;
+}
+.project:before {
+    content: "";
+    position: absolute;
+    left: -8px;
+    top: 10px;
+    bottom: 10px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--accent);
+}
+.project.dim { color: #82aaff; background: #10202e; border-color: #274968; opacity: 0.84; }
+.project.dim:before { display: none; }
+.project.add {
+    background: transparent;
+    color: var(--faint);
+    border: 1px dashed var(--border-strong);
+    font-size: 17px;
+}
+.side {
+    width: var(--side-width, 284px);
+    flex: 0 0 var(--side-width, 284px);
+    min-width: 220px;
+    max-width: 420px;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    position: relative;
+    transition: width 0.12s ease, flex-basis 0.12s ease;
+}
+.frame.collapsed .side {
+    width: 0;
+    min-width: 0;
+    flex-basis: 0;
+    border-right: 0;
+    overflow: hidden;
+}
+.activity-tabs {
+    height: 44px;
+    flex: 0 0 44px;
+    display: flex;
+    align-items: center;
+    padding: 0 8px;
+    gap: 6px;
+    border-bottom: 1px solid var(--border);
+    background: #0b0f16;
+}
+.activity-tabs .icon-button {
+    width: 34px;
+    height: 34px;
+    border-radius: 6px;
+    color: var(--muted);
+}
+.activity-tabs .icon-button.active {
+    color: var(--accent);
+    border-color: #34421d;
+    background: #15240b;
+}
+.activity-tabs .icon-button svg { width: 17px; height: 17px; }
+.panel-head {
+    height: 38px;
+    flex: 0 0 38px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--border);
+}
+.panel-title {
+    min-width: 0;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.path {
+    height: 32px;
+    flex: 0 0 32px;
+    display: flex;
+    align-items: center;
+    padding: 0 11px;
+    color: var(--faint);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.panel-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 8px 8px 14px;
+}
+.sec-label {
+    padding: 4px 8px 7px;
+    color: var(--faint);
+    font-size: 10px;
+    letter-spacing: 0;
+}
+.tree-row {
+    height: 25px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 0 8px;
+    border-radius: 5px;
+    color: var(--muted);
+    font-size: 12px;
+}
+.tree-row.active, .tree-row:hover { background: var(--surface-3); color: var(--text); }
+.chev { width: 13px; color: var(--faint); font-size: 10px; }
+.file-chip {
+    width: 22px;
+    height: 15px;
+    display: grid;
+    place-items: center;
+    border-radius: 3px;
+    background: #10202e;
+    color: var(--blue);
+    font-size: 9px;
+    font-weight: 700;
+}
+.file-chip.dir { background: #1b2410; color: var(--accent); }
+.name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.resize-handle {
+    position: absolute;
+    top: 0;
+    right: -4px;
+    width: 8px;
+    height: 100%;
+    cursor: ew-resize;
+    z-index: 3;
+}
+.resize-handle:after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 3px;
+    width: 1px;
+    background: transparent;
+}
+.resize-handle:hover:after, .resize-handle.dragging:after { background: var(--accent); }
+.content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    background: #0d1117;
+}
+.tabs {
+    height: 35px;
+    flex: 0 0 35px;
+    display: flex;
+    align-items: flex-end;
+    background: #0c1119;
+    border-bottom: 1px solid var(--border);
+}
+.tab {
+    height: 34px;
+    min-width: 152px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    border-right: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 12px;
+}
+.tab.active {
+    color: var(--text);
+    background: #0d1117;
+    box-shadow: inset 0 2px 0 var(--accent);
+}
+.editor {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr);
+    font-size: 12px;
+    line-height: 1.85;
+    color: #dbe4ec;
+}
+.gutter {
+    padding: 16px 10px;
+    color: var(--faint);
+    text-align: right;
+    background: #0c1118;
+    border-right: 1px solid var(--border);
+}
+.code { padding: 16px 18px; white-space: pre; overflow: hidden; }
+.kw { color: #ff7b72; }
+.fn { color: #d2a8ff; }
+.str { color: #a5d6ff; }
+.status {
+    height: 25px;
+    flex: 0 0 25px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 10px;
+    border-top: 1px solid var(--border);
+    background: #0c1018;
+    color: var(--muted);
+    font-size: 11px;
+}
+.notes {
+    padding: 16px;
+    align-self: start;
+}
+.notes h2 {
+    margin: 0 0 10px;
+    font-size: 14px;
+}
+.notes p, .notes li {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.7;
+}
+.notes ul {
+    margin: 8px 0 14px;
+    padding-left: 18px;
+}
+.control {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+}
+.control label {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 12px;
+    margin-bottom: 8px;
+}
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+.copy-output {
+    position: fixed;
+    left: -9999px;
+    top: -9999px;
+}
+@media (max-width: 980px) {
+    body { padding: 16px; }
+    .layout { grid-template-columns: 1fr; }
+    .page-head { align-items: flex-start; flex-direction: column; }
+    .frame { min-height: 560px; }
+    .search { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+    <div class="page-head">
+        <div>
+            <h1>Yuuzu-IDE 側欄微調 mockup</h1>
+            <p>先確認視覺方向：側欄開關移到最左、側欄寬度可調、Files/Git/Database/SSH-SFTP/AgentZone 改成上方 icon row。</p>
+        </div>
+        <div class="actions">
+            <button class="tool-btn" type="button" id="resetBtn">重設寬度</button>
+            <button class="tool-btn primary" type="button" id="copyBtn">Copy Implementation Prompt</button>
+        </div>
+    </div>
+
+    <div class="layout">
+        <section class="mock-card" aria-label="Yuuzu IDE mockup">
+            <div class="mock-toolbar">
+                <span class="dot red"></span>
+                <span class="dot yellow"></span>
+                <span class="dot green"></span>
+                <span style="margin-left: 8px;">visual draft only</span>
+            </div>
+
+            <div class="frame" id="frame" style="--side-width: 284px;">
+                <div class="titlebar">
+                    <button class="icon-button panel-toggle" type="button" id="panelToggle" title="Toggle side panel" aria-label="Toggle side panel">
+                        <svg viewBox="0 0 16 16" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.4">
+                            <rect x="2.5" y="2.5" width="11" height="11" rx="1.6"></rect>
+                            <path d="M6 3v10M3.2 5.6h2.1M3.2 8h2.1M3.2 10.4h2.1"></path>
+                        </svg>
+                    </button>
+                    <div class="brand">
+                        <span class="logo">ゆ</span>
+                        <span class="brand-name">Yuuzu-IDE</span>
+                    </div>
+                    <div class="vsep"></div>
+                    <div class="chip">
+                        <strong style="color: var(--text);">yuuzu-ide</strong>
+                        <span>⎇ main</span>
+                    </div>
+                    <div class="search">
+                        <span>⌕</span>
+                        <span>Search or run a command</span>
+                    </div>
+                    <button class="icon-button" type="button" title="Theme">◐</button>
+                </div>
+
+                <div class="main">
+                    <nav class="project-rail" aria-label="Projects">
+                        <div class="project">Y</div>
+                        <div class="project dim">AI</div>
+                        <div class="project add">+</div>
+                        <div style="flex: 1;"></div>
+                        <div class="icon-button" title="Settings">⚙</div>
+                    </nav>
+
+                    <aside class="side" id="side">
+                        <div class="activity-tabs" aria-label="Activity tabs">
+                            <button class="icon-button active" type="button" title="Files" data-title="檔案總管">
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                                    <path d="M2 4.4C2 3.6 2.6 3 3.4 3h2.8l1.7 1.8h4.7c.8 0 1.4.6 1.4 1.4v5.4c0 .8-.6 1.4-1.4 1.4H3.4c-.8 0-1.4-.6-1.4-1.4V4.4z"></path>
+                                </svg>
+                            </button>
+                            <button class="icon-button" type="button" title="Git" data-title="Git">
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                                    <circle cx="4.4" cy="4.2" r="1.6"></circle>
+                                    <circle cx="4.4" cy="11.8" r="1.6"></circle>
+                                    <circle cx="11.5" cy="5.8" r="1.6"></circle>
+                                    <path d="M4.4 5.8v4.4M11.5 7.4c0 2.5-3.1 2-7.1 3"></path>
+                                </svg>
+                            </button>
+                            <button class="icon-button" type="button" title="Database" data-title="Database">
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                                    <ellipse cx="8" cy="3.8" rx="5" ry="1.8"></ellipse>
+                                    <path d="M3 3.8v8.3c0 1 2.2 1.8 5 1.8s5-.8 5-1.8V3.8M3 8c0 1 2.2 1.8 5 1.8S13 9 13 8"></path>
+                                </svg>
+                            </button>
+                            <button class="icon-button" type="button" title="SSH-SFTP" data-title="SSH-SFTP">
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                                    <rect x="2.4" y="3" width="11.2" height="10" rx="1.4"></rect>
+                                    <path d="M4.6 6.2 6.7 8 4.6 9.8M8.4 10h3.2"></path>
+                                </svg>
+                            </button>
+                            <button class="icon-button" type="button" title="AgentZone" data-title="AgentZone">
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                                    <path d="M8 1.8 9.3 5.8 13.2 7.1 9.3 8.4 8 12.4 6.7 8.4 2.8 7.1 6.7 5.8z"></path>
+                                </svg>
+                            </button>
+                        </div>
+
+                        <div class="panel-head">
+                            <span class="panel-title" id="panelTitle">檔案總管</span>
+                            <span style="flex: 1;"></span>
+                            <button class="icon-button" type="button" title="Open folder">
+                                <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4">
+                                    <path d="M2 5.2h4.2l1.4-1.5h6.4v2.1M2.4 6h11.2l-1 6.4H3.4z"></path>
+                                </svg>
+                            </button>
+                            <button class="icon-button" type="button" title="Search">
+                                <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4">
+                                    <circle cx="7" cy="7" r="4"></circle>
+                                    <path d="M10.2 10.2 13.5 13.5"></path>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="path">/Users/yuuzu/HanaokaYuuzu/Ai/yuuzu-ide</div>
+                        <div class="panel-body">
+                            <div class="sec-label">EXPLORER</div>
+                            <div class="tree-row active"><span class="chev">▾</span><span class="file-chip dir">DIR</span><span class="name">src</span></div>
+                            <div class="tree-row" style="padding-left: 22px;"><span class="chev">▾</span><span class="file-chip dir">DIR</span><span class="name">v2</span></div>
+                            <div class="tree-row" style="padding-left: 36px;"><span class="chev"></span><span class="file-chip">TSX</span><span class="name">Workbench.tsx</span></div>
+                            <div class="tree-row" style="padding-left: 36px;"><span class="chev"></span><span class="file-chip">TSX</span><span class="name">SidePanel.tsx</span></div>
+                            <div class="tree-row" style="padding-left: 36px;"><span class="chev"></span><span class="file-chip">CSS</span><span class="name">yuzu.css</span></div>
+                            <div class="tree-row"><span class="chev">▾</span><span class="file-chip dir">DIR</span><span class="name">docs</span></div>
+                            <div class="tree-row" style="padding-left: 22px;"><span class="chev"></span><span class="file-chip">MD</span><span class="name">roadmap.md</span></div>
+                        </div>
+                        <div class="resize-handle" id="resizeHandle" title="Drag to resize"></div>
+                    </aside>
+
+                    <main class="content">
+                        <div class="tabs">
+                            <div class="tab active"><span class="file-chip">TSX</span><span>Workbench.tsx</span></div>
+                            <div class="tab"><span class="file-chip">CSS</span><span>yuzu.css</span></div>
+                        </div>
+                        <div class="editor">
+                            <div class="gutter">1<br>2<br>3<br>4<br>5<br>6<br>7<br>8<br>9<br>10<br>11</div>
+                            <div class="code"><span class="kw">export function</span> <span class="fn">WorkbenchV2</span>() {
+  <span class="kw">return</span> (
+    &lt;div className=<span class="str">"yz2"</span>&gt;
+      &lt;TitleBar /&gt;
+      &lt;div className=<span class="str">"yz2-main"</span>&gt;
+        &lt;ProjectRail /&gt;
+        {panelOpen ? &lt;SidePanel /&gt; : null}
+      &lt;/div&gt;
+    &lt;/div&gt;
+  )
+}</div>
+                        </div>
+                    </main>
+                </div>
+
+                <div class="status">
+                    <span>⎇ main</span>
+                    <span>✦ 2 agent sessions</span>
+                    <span style="margin-left: auto;">Spaces: 4</span>
+                    <span>UTF-8</span>
+                    <span>TypeScript React</span>
+                </div>
+            </div>
+        </section>
+
+        <aside class="notes">
+            <h2>這版視覺稿的假設</h2>
+            <ul>
+                <li>側欄開關成為 titlebar 最左側第一個 icon，位於 Yuuzu-IDE brand 前。</li>
+                <li>Project rail 保持在主內容列最左側，仍負責多 workspace 切換。</li>
+                <li>功能模式改成側欄頂部 icon row，不再占用直列文字清單。</li>
+                <li>側欄右緣有 8px 拖曳熱區，寬度限制先用 220-420px。</li>
+            </ul>
+            <div class="control">
+                <label for="widthRange"><span>側欄寬度</span><strong id="widthLabel">284px</strong></label>
+                <input id="widthRange" type="range" min="220" max="420" value="284">
+            </div>
+        </aside>
+    </div>
+</div>
+
+<textarea class="copy-output" id="promptText">請依照 docs/html/sidebar-rail-micro-adjustment-mockup-2026-06-20.html 的方向實作 Yuuzu-IDE v2 側欄微調：
+1. 將側欄開關按鈕移到 titlebar 最左側，放在 Yuuzu-IDE brand 左邊。
+2. 讓側欄可調整寬度，保留合理 min/max，並避免破壞 ProjectRail 與 Content layout。
+3. 將 Files、Git、Database、SSH-SFTP、AgentZone 從側欄文字列表調整成側欄頂部 icon row，風格接近參考圖。
+4. 保持 src/v2/Workbench.tsx、SidePanel.tsx、yuzu.css 的既有 v2 架構，避免觸碰舊 src/app shell。</textarea>
+
+<script>
+const frame = document.getElementById("frame");
+const side = document.getElementById("side");
+const resizeHandle = document.getElementById("resizeHandle");
+const widthRange = document.getElementById("widthRange");
+const widthLabel = document.getElementById("widthLabel");
+const resetBtn = document.getElementById("resetBtn");
+const panelToggle = document.getElementById("panelToggle");
+const copyBtn = document.getElementById("copyBtn");
+const panelTitle = document.getElementById("panelTitle");
+let isDragging = false;
+
+function setSideWidth(value) {
+    const width = Math.max(220, Math.min(420, Number(value)));
+    frame.style.setProperty("--side-width", width + "px");
+    widthRange.value = String(width);
+    widthLabel.textContent = width + "px";
+}
+
+resizeHandle.addEventListener("pointerdown", (event) => {
+    isDragging = true;
+    resizeHandle.classList.add("dragging");
+    resizeHandle.setPointerCapture(event.pointerId);
+});
+
+resizeHandle.addEventListener("pointermove", (event) => {
+    if (!isDragging || frame.classList.contains("collapsed")) return;
+    const left = side.getBoundingClientRect().left;
+    setSideWidth(event.clientX - left);
+});
+
+resizeHandle.addEventListener("pointerup", (event) => {
+    isDragging = false;
+    resizeHandle.classList.remove("dragging");
+    resizeHandle.releasePointerCapture(event.pointerId);
+});
+
+widthRange.addEventListener("input", (event) => {
+    frame.classList.remove("collapsed");
+    setSideWidth(event.target.value);
+});
+
+resetBtn.addEventListener("click", () => {
+    frame.classList.remove("collapsed");
+    setSideWidth(284);
+});
+
+panelToggle.addEventListener("click", () => {
+    frame.classList.toggle("collapsed");
+});
+
+document.querySelectorAll(".activity-tabs .icon-button").forEach((button) => {
+    button.addEventListener("click", () => {
+        document.querySelectorAll(".activity-tabs .icon-button").forEach((item) => item.classList.remove("active"));
+        button.classList.add("active");
+        panelTitle.textContent = button.dataset.title || button.title;
+    });
+});
+
+copyBtn.addEventListener("click", async () => {
+    await navigator.clipboard.writeText(document.getElementById("promptText").value);
+    const original = copyBtn.textContent;
+    copyBtn.textContent = "Copied";
+    setTimeout(() => { copyBtn.textContent = original; }, 1200);
+});
+</script>
+</body>
+</html>

@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from "react"
+
 import { chipFor } from "./v2-model"
 import type { Tab } from "./v2-model"
 import { useV2Store } from "./v2-store"
@@ -30,8 +32,59 @@ export function TabStrip() {
     const newBrowser = useV2Store((s) => s.newBrowser)
     const newQuery = useV2Store((s) => s.newQuery)
     const toggleSplit = useV2Store((s) => s.toggleSplit)
+    const renameTerminalTab = useV2Store((s) => s.renameTerminalTab)
+
+    const [renamingId, setRenamingId] = useState<number | null>(null)
+    const [renamingValue, setRenamingValue] = useState("")
+    const renameCommitRef = useRef(true)
+    const renameInputRef = useRef<HTMLInputElement>(null)
+    const titleActivateTimerRef = useRef<number | null>(null)
 
     const at = tabs.find((t) => t.id === activeTab) ?? tabs[0] ?? null
+
+    useEffect(() => {
+        if (renamingId == null) return
+        renameInputRef.current?.focus()
+    }, [renamingId])
+
+    useEffect(() => {
+        return () => {
+            if (titleActivateTimerRef.current != null) window.clearTimeout(titleActivateTimerRef.current)
+        }
+    }, [])
+
+    const clearTitleActivateTimer = () => {
+        if (titleActivateTimerRef.current == null) return
+        window.clearTimeout(titleActivateTimerRef.current)
+        titleActivateTimerRef.current = null
+    }
+
+    const activateFromTitleClick = (tab: Tab, e: React.MouseEvent<HTMLSpanElement>) => {
+        if (tab.type !== "cmd") return
+        e.stopPropagation()
+        clearTitleActivateTimer()
+        if (e.detail !== 1) return
+        titleActivateTimerRef.current = window.setTimeout(() => {
+            titleActivateTimerRef.current = null
+            activateTab(tab.id)
+        }, 220)
+    }
+
+    const startRename = (tab: Tab, e: React.MouseEvent<HTMLSpanElement>) => {
+        if (tab.type !== "cmd") return
+        e.preventDefault()
+        e.stopPropagation()
+        clearTitleActivateTimer()
+        renameCommitRef.current = true
+        setRenamingId(tab.id)
+        setRenamingValue(tab.title ?? "")
+    }
+
+    const finishRename = () => {
+        if (renamingId == null) return
+        if (renameCommitRef.current) renameTerminalTab(renamingId, renamingValue)
+        setRenamingId(null)
+    }
 
     return (
         <div className="yz2-tabs">
@@ -39,6 +92,7 @@ export function TabStrip() {
                 {tabs.map((t) => {
                     const g = tabGlyph(t)
                     const isActive = !!at && t.id === at.id
+                    const isRenaming = renamingId === t.id
                     return (
                         <div
                             key={t.id}
@@ -50,7 +104,54 @@ export function TabStrip() {
                             }}
                         >
                             <span className={g.isChip ? "yz2-chip" : undefined} style={g.style}>{g.glyph}</span>
-                            <span className="title">{t.type === "file" ? t.name : t.title}</span>
+                            {isRenaming ? (
+                                <input
+                                    ref={renamingId === t.id ? renameInputRef : null}
+                                    className="yz2-tab-input"
+                                    aria-label="Rename tab"
+                                    value={renamingValue}
+                                    onDoubleClick={(e) => {
+                                        e.preventDefault()
+                                        e.stopPropagation()
+                                    }}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onContextMenu={(e) => {
+                                        e.preventDefault()
+                                        e.stopPropagation()
+                                    }}
+                                    onChange={(e) => {
+                                        e.stopPropagation()
+                                        setRenamingValue(e.target.value)
+                                    }}
+                                    onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                            e.preventDefault()
+                                            e.stopPropagation()
+                                            renameCommitRef.current = true
+                                            renameInputRef.current?.blur()
+                                            return
+                                        }
+                                        if (e.key === "Escape") {
+                                            e.preventDefault()
+                                            e.stopPropagation()
+                                            renameCommitRef.current = false
+                                            renameInputRef.current?.blur()
+                                        }
+                                    }}
+                                    onBlur={() => {
+                                        finishRename()
+                                        renameCommitRef.current = true
+                                    }}
+                                />
+                            ) : (
+                                <span
+                                    className="title"
+                                    onClick={(e) => activateFromTitleClick(t, e)}
+                                    onDoubleClick={(e) => startRename(t, e)}
+                                >
+                                    {t.type === "file" ? t.name : t.title}
+                                </span>
+                            )}
                             {t.externalChange ? (
                                 <span className="external" title="Changed on disk" />
                             ) : t.dirty ? (

@@ -1,8 +1,8 @@
-import type { ReactNode } from "react"
+import { useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react"
 
-import { DIR_CHIP, chipFor, diagBadge, LANE_COLORS, normSeverity } from "./v2-model"
+import { DIR_CHIP, chipFor, LANE_COLORS, normSeverity } from "./v2-model"
 import type { FnMode, GitFile, TreeNode } from "./v2-model"
-import { useV2Store } from "./v2-store"
+import { SIDE_PANEL_MAX_WIDTH, SIDE_PANEL_MIN_WIDTH, useV2Store } from "./v2-store"
 
 function memoryLabel(bytes: number | null): string {
     if (bytes == null) return "not running"
@@ -20,47 +20,45 @@ function FnIcon({ children }: { children: ReactNode }) {
     )
 }
 
-function FunctionList() {
+function ActivityTabs() {
     const mode = useV2Store((s) => s.mode)
     const fn = useV2Store((s) => s.ui[s.active].fn)
     const wins = useV2Store((s) => s.ui[s.active].wins)
     const git = useV2Store((s) => s.ui[s.active].git)
     const dbs = useV2Store((s) => s.ui[s.active].dbConns)
     const hosts = useV2Store((s) => s.ui[s.active].sshHosts)
-    const diagnosticsByPath = useV2Store((s) => s.ui[s.active].diagnosticsByPath)
     const selectFn = useV2Store((s) => s.selectFn)
 
     const gitBadge = mode === "real" ? git.ahead + git.behind : git.ahead + git.behind + 2
-    const langBadge = diagBadge(diagnosticsByPath ?? {})
     const rows: { id: FnMode; label: string; icon: ReactNode; badge?: string }[] = [
         { id: "files", label: "Files", icon: <path d="M2 4.5C2 3.7 2.7 3 3.5 3h2.8l1.8 2h4.4c.8 0 1.5.7 1.5 1.5v5c0 .8-.7 1.5-1.5 1.5h-9C2.7 13 2 12.3 2 11.5V4.5z" /> },
         { id: "git", label: "Git", badge: gitBadge > 0 ? String(gitBadge) : undefined, icon: <><circle cx="4.5" cy="4.2" r="1.7" /><circle cx="4.5" cy="11.8" r="1.7" /><circle cx="11.5" cy="5.8" r="1.7" /><path d="M4.5 5.9v4.2 M11.5 7.5c0 2.6-3.2 2-7 3.2" /></> },
         { id: "db", label: "Database", badge: String(dbs.length), icon: <><ellipse cx="8" cy="3.8" rx="5" ry="1.9" /><path d="M3 3.8v8.4c0 1 2.2 1.9 5 1.9s5-.9 5-1.9V3.8 M3 8c0 1 2.2 1.9 5 1.9S13 9 13 8" /></> },
-        { id: "ssh", label: "SSH · SFTP", badge: String(hosts.length), icon: <><rect x="2" y="3" width="12" height="10" rx="1.5" /><path d="M4.5 6.2l2 1.8-2 1.8 M8.5 10h3" /></> },
-        { id: "lang", label: "Language", badge: langBadge ?? undefined, icon: <><path d="M3 3.5h6.5L13 7v5.5H3z" /><path d="M9.5 3.5V7H13 M5 9h6 M5 11h4" /></> },
+        { id: "ssh", label: "SSH-SFTP", badge: String(hosts.length), icon: <><rect x="2" y="3" width="12" height="10" rx="1.5" /><path d="M4.5 6.2l2 1.8-2 1.8 M8.5 10h3" /></> },
         { id: "agent", label: "AgentZone", icon: <path d="M8 1.8l1.3 4 4 1.3-4 1.3-1.3 4-1.3-4-4-1.3 4-1.3z" /> },
     ]
 
     return (
-        <div className="yz2-fnlist">
+        <div className="yz2-activity-tabs" aria-label="Side panel modes">
             {rows.map((row) => (
                 <button
                     type="button"
                     key={row.id}
-                    className={"yz2-fnrow" + (fn === row.id ? " is-active" : "")}
+                    className={"yz2-activity-tab" + (fn === row.id ? " is-active" : "")}
+                    aria-label={row.label}
+                    title={row.label}
                     onClick={() => selectFn(row.id)}
                 >
                     <FnIcon>{row.icon}</FnIcon>
-                    <span className="label">{row.label}</span>
                     {row.id === "agent" ? (
                         wins.length > 0 ? (
-                            <span className="yz2-fnbadge-live">
+                            <span className="yz2-activity-badge is-live">
                                 <span className="d" />
                                 <span>{wins.length}</span>
                             </span>
                         ) : null
                     ) : row.badge ? (
-                        <span className="yz2-fnbadge">{row.badge}</span>
+                        <span className="yz2-activity-badge">{row.badge}</span>
                     ) : null}
                 </button>
             ))}
@@ -369,14 +367,14 @@ function SshBody() {
     if (!hosts.length) {
         return (
             <>
-                <div className="yz2-sec-label">SSH HOSTS</div>
+                <div className="yz2-sec-label">SSH · SFTP</div>
                 <div className="yz2-panel-note">No SSH hosts saved for this project.</div>
             </>
         )
     }
     return (
         <>
-            <div className="yz2-sec-label">SSH HOSTS</div>
+            <div className="yz2-sec-label">SSH · SFTP</div>
             {hosts.map((h) => (
                 <div
                     key={h.label}
@@ -412,7 +410,7 @@ function AgentBody() {
 
     return (
         <>
-            <div className="yz2-sec-label">AGENT SESSIONS</div>
+            <div className="yz2-sec-label">AGENT ZONE</div>
             {wins.map((w) => (
                 <button
                     type="button"
@@ -534,16 +532,58 @@ export function SidePanel() {
     const meta = useV2Store((s) => s.meta[s.active])
     const fn = useV2Store((s) => s.ui[s.active].fn)
     const openCtx = useV2Store((s) => s.openCtx)
+    const sidePanelWidth = useV2Store((s) => s.sidePanelWidth)
+    const setSidePanelWidth = useV2Store((s) => s.setSidePanelWidth)
+    const persistSidePanelWidth = useV2Store((s) => s.persistSidePanelWidth)
+    const sideRef = useRef<HTMLDivElement | null>(null)
+    const [resizing, setResizing] = useState(false)
+
+    const startResize = (e: PointerEvent<HTMLDivElement>) => {
+        e.preventDefault()
+        setResizing(true)
+        e.currentTarget.classList.add("is-dragging")
+        e.currentTarget.setPointerCapture?.(e.pointerId)
+    }
+
+    const moveResize = (e: PointerEvent<HTMLDivElement>) => {
+        if (!resizing || !sideRef.current) return
+        const left = sideRef.current.getBoundingClientRect().left
+        setSidePanelWidth(e.clientX - left)
+    }
+
+    const stopResize = (e: PointerEvent<HTMLDivElement>) => {
+        if (!resizing) return
+        setResizing(false)
+        e.currentTarget.classList.remove("is-dragging")
+        e.currentTarget.releasePointerCapture?.(e.pointerId)
+        persistSidePanelWidth()
+    }
+
+    const keyResize = (e: KeyboardEvent<HTMLDivElement>) => {
+        let next: number | null = null
+        if (e.key === "ArrowLeft") next = sidePanelWidth - 16
+        if (e.key === "ArrowRight") next = sidePanelWidth + 16
+        if (e.key === "Home") next = SIDE_PANEL_MIN_WIDTH
+        if (e.key === "End") next = SIDE_PANEL_MAX_WIDTH
+        if (next == null) return
+        e.preventDefault()
+        setSidePanelWidth(next)
+        persistSidePanelWidth()
+    }
 
     return (
-        <div className="yz2-side">
+        <div
+            ref={sideRef}
+            className="yz2-side"
+            style={{ "--yz2-side-width": sidePanelWidth + "px" } as CSSProperties}
+        >
             <div className="yz2-side-head">
                 <span style={{ fontWeight: 700, fontSize: 12 }}>{meta.name}</span>
                 <span style={{ fontSize: 11, color: "var(--yz-5a6675)" }}>⎇ {meta.branch}</span>
                 <span className="yz2-spacer" />
                 <span className="yz2-side-refresh">⟳</span>
             </div>
-            <FunctionList />
+            <ActivityTabs />
             <div
                 className="yz2-panel-body"
                 onContextMenu={(e) => {
@@ -559,6 +599,21 @@ export function SidePanel() {
                 {fn === "lang" ? <LanguageBody /> : null}
                 {fn === "agent" ? <AgentBody /> : null}
             </div>
+            <div
+                className="yz2-side-resizer"
+                role="separator"
+                aria-label="Resize side panel"
+                aria-orientation="vertical"
+                aria-valuemin={SIDE_PANEL_MIN_WIDTH}
+                aria-valuemax={SIDE_PANEL_MAX_WIDTH}
+                aria-valuenow={sidePanelWidth}
+                tabIndex={0}
+                onKeyDown={keyResize}
+                onPointerDown={startResize}
+                onPointerMove={moveResize}
+                onPointerUp={stopResize}
+                onPointerCancel={stopResize}
+            />
         </div>
     )
 }

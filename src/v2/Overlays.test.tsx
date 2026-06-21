@@ -215,6 +215,118 @@ describe("ContextMenu", () => {
         }
     })
 
+    test("Rename terminal tab passes prompt value to store action", () => {
+        const previous = {
+            renameTerminalTab: v2Store.getState().renameTerminalTab,
+        }
+        const calls: Array<Parameters<typeof previous.renameTerminalTab>> = []
+        const prompt = globalThis.prompt
+        const promptCalls: Array<{ label: string | undefined; value: string | undefined }> = []
+        const tab = { id: 9901, type: "cmd" as const, title: "zsh", sessionId: "term-rename" }
+        act(() => v2Store.setState((s) => ({
+            ui: {
+                ...s.ui,
+                [s.active]: {
+                    ...s.ui[s.active],
+                    tabs: [tab],
+                    activeTab: tab.id,
+                },
+            },
+        })))
+        const title = tab.title ?? ""
+
+        const inputs = ["renamed terminal", "", null]
+        let cursor = 0
+        globalThis.prompt = (label?: string, value?: string) => {
+            promptCalls.push({ label, value })
+            return inputs[cursor++] ?? null
+        }
+
+        act(() => v2Store.setState({
+            renameTerminalTab: (tabId, nextTitle) => calls.push([tabId, nextTitle]),
+        }))
+
+        try {
+            v2Store.getState().openCtx({ kind: "tab", x: 12, y: 20, id: tab.id, type: "cmd" })
+            const view = render(<ContextMenu />)
+            fireEvent.click(view.getByRole("button", { name: /Rename terminal/ }))
+            view.unmount()
+
+            v2Store.getState().openCtx({ kind: "tab", x: 12, y: 20, id: tab.id, type: "cmd" })
+            const second = render(<ContextMenu />)
+            fireEvent.click(second.getByRole("button", { name: /Rename terminal/ }))
+            second.unmount()
+
+            v2Store.getState().openCtx({ kind: "tab", x: 12, y: 20, id: tab.id, type: "cmd" })
+            const third = render(<ContextMenu />)
+            fireEvent.click(third.getByRole("button", { name: /Rename terminal/ }))
+            third.unmount()
+
+            expect(calls).toEqual([
+                [tab.id, "renamed terminal"],
+                [tab.id, ""],
+            ])
+            expect(promptCalls[0]?.label).toBe("Rename terminal:")
+            expect(promptCalls[0]?.value).toBe(title)
+            expect(promptCalls).toHaveLength(3)
+        } finally {
+            globalThis.prompt = prompt
+            act(() => v2Store.setState(previous))
+        }
+    })
+
+    test("Rename session for agent passes prompt value to store action", () => {
+        const previous = {
+            renameAgentSession: v2Store.getState().renameAgentSession,
+        }
+        const calls: Array<Parameters<typeof previous.renameAgentSession>> = []
+        const prompt = globalThis.prompt
+        const promptCalls: Array<{ label: string | undefined; value: string | undefined }> = []
+        const win = {
+            id: 9902,
+            title: "agent session",
+            status: "shell",
+            lines: [],
+            buf: "",
+            min: false,
+            max: false,
+            sessionId: "agent-rename",
+        }
+        act(() => v2Store.setState((s) => ({
+            ui: {
+                ...s.ui,
+                [s.active]: {
+                    ...s.ui[s.active],
+                    wins: [win],
+                    azActive: win.id,
+                },
+            },
+        })))
+
+        globalThis.prompt = (label?: string, value?: string) => {
+            promptCalls.push({ label, value })
+            return "renamed session"
+        }
+
+        act(() => v2Store.setState({
+            renameAgentSession: (winId, nextTitle) => calls.push([winId, nextTitle]),
+        }))
+
+        try {
+            v2Store.getState().openCtx({ kind: "session", x: 12, y: 20, winId: win.id })
+            const view = render(<ContextMenu />)
+            fireEvent.click(view.getByRole("button", { name: /Rename session/ }))
+            view.unmount()
+
+            expect(calls).toEqual([[win.id, "renamed session"]])
+            expect(promptCalls[0]?.label).toBe("Rename session:")
+            expect(promptCalls[0]?.value).toBe(win.title)
+        } finally {
+            globalThis.prompt = prompt
+            act(() => v2Store.setState(previous))
+        }
+    })
+
     test("database connection menu exposes edit and confirmed delete actions", () => {
         const previous = {
             openDbConnDialog: v2Store.getState().openDbConnDialog,

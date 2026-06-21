@@ -415,13 +415,38 @@
 
 /* ============ side panel ============ */
 .yz2-side {
-    width: 260px;
-    flex: 0 0 260px;
+    width: var(--yz2-side-width, 284px);
+    flex: 0 0 var(--yz2-side-width, 284px);
+    min-width: 220px;
+    max-width: 420px;
     background: var(--yz-0c1018);
     border-right: 1px solid var(--yz-1c2433);
     display: flex;
     flex-direction: column;
     min-height: 0;
+    position: relative;
+}
+.yz2-side-resizer {
+    position: absolute;
+    top: 0;
+    right: -4px;
+    width: 8px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 6;
+}
+.yz2-side-resizer::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 3px;
+    width: 1px;
+    background: transparent;
+}
+.yz2-side-resizer:hover::after,
+.yz2-side-resizer.is-dragging::after {
+    background: var(--yz-a8e23f);
 }
 .yz2-side-head {
     height: 38px;
@@ -434,29 +459,40 @@
 }
 .yz2-side-refresh { color: var(--yz-5a6675); font-size: 11px; cursor: pointer; }
 .yz2-side-refresh:hover { color: var(--yz-e6edf3); }
-.yz2-fnlist {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 7px 8px;
-    border-bottom: 1px solid var(--yz-1c2433);
-}
-.yz2-fnrow {
+.yz2-activity-tabs {
     display: flex;
     align-items: center;
-    gap: 9px;
-    height: 30px;
-    padding: 0 9px;
+    gap: 6px;
+    height: 44px;
+    flex: 0 0 44px;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--yz-1c2433);
+}
+.yz2-activity-tab {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border: 1px solid transparent;
     border-radius: 6px;
     cursor: pointer;
     color: var(--yz-8b97a7);
-    font-size: 12px;
-    width: 100%;
 }
-.yz2-fnrow:hover { background: var(--yz-141a26); }
-.yz2-fnrow.is-active { background: var(--yz-1a2230); color: var(--yz-e6edf3); }
-.yz2-fnrow .label { flex: 1; }
-.yz2-fnbadge {
+.yz2-activity-tab:hover {
+    background: var(--yz-141a26);
+    color: var(--yz-e6edf3);
+}
+.yz2-activity-tab.is-active {
+    background: var(--yz-1b2410);
+    border-color: var(--yz-45611a);
+    color: var(--yz-a8e23f);
+}
+.yz2-activity-badge {
+    position: absolute;
+    top: -3px;
+    right: -3px;
     min-width: 17px;
     height: 16px;
     border-radius: 8px;
@@ -466,20 +502,17 @@
     display: grid;
     place-items: center;
     padding: 0 5px;
+    line-height: 1;
 }
-.yz2-fnbadge-live {
+.yz2-activity-badge.is-live {
     display: flex;
     align-items: center;
     gap: 4px;
-    height: 16px;
-    border-radius: 8px;
     background: var(--yz-1b2410);
     border: 1px solid var(--yz-45611a);
     color: var(--yz-a8e23f);
-    font-size: 10px;
-    padding: 0 6px;
 }
-.yz2-fnbadge-live .d { width: 5px; height: 5px; border-radius: 3px; background: var(--yz-a8e23f); }
+.yz2-activity-badge.is-live .d { width: 5px; height: 5px; border-radius: 3px; background: var(--yz-a8e23f); }
 .yz2-panel-body {
     flex: 1;
     min-height: 0;
@@ -894,6 +927,21 @@
     box-shadow: inset 0 2px 0 0 var(--yz-a8e23f);
 }
 .yz2-tab .title { white-space: nowrap; }
+.yz2-tab-input {
+    width: 140px;
+    max-width: 220px;
+    min-width: 0;
+    background: var(--yz-090c12);
+    border: 1px solid var(--yz-2b3547);
+    border-radius: 4px;
+    color: var(--yz-e6edf3);
+    font-size: 11px;
+    padding: 0 6px;
+    height: 20px;
+    box-sizing: border-box;
+    outline: none;
+}
+.yz2-tab-input:focus { border-color: var(--yz-45611a); }
 .yz2-tab .dirty { width: 7px; height: 7px; border-radius: 4px; background: var(--yz-a8e23f); }
 .yz2-tab .external { width: 7px; height: 7px; border-radius: 4px; background: #e0a93f; }
 .yz2-tab-close {
@@ -2340,6 +2388,19 @@
 }
 .yz2-az-win-head .d { width: 8px; height: 8px; border-radius: 4px; flex: 0 0 auto; }
 .yz2-az-win-head .tt { flex: 1; font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.yz2-az-win-title {
+    flex: 1;
+    min-width: 0;
+    height: 18px;
+    padding: 0 4px;
+    border: 1px solid var(--yz-1c2433);
+    border-radius: 4px;
+    background: var(--yz-090c12);
+    color: var(--yz-e6edf3);
+    font-size: 11px;
+    font-weight: 600;
+}
+.yz2-az-win-title:focus { outline: none; border-color: var(--yz-a8e23f); }
 .yz2-az-win-head .st { font-size: 10px; color: var(--yz-5a6675); }
 .yz2-az-win-btn {
     width: 20px;
