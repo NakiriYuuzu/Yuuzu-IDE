@@ -124,7 +124,7 @@ describe("language actions", () => {
         expect(store.getState().toast).toContain("needs a real workspace")
     })
 
-    test("real language actions delegate and editor changes notify LSP", () => {
+    test("real language actions delegate and editor changes backup without notifying LSP", () => {
         const store = freshStore()
         const calls: unknown[][] = []
         registerRealDelegate({
@@ -153,8 +153,24 @@ describe("language actions", () => {
             ["restart", "TypeScript"],
             ["reload"],
             ["backup", tabId, "updated"],
-            ["change", tabId],
         ])
+    })
+
+    test("hoverAt returns null in demo and delegates in real", async () => {
+        const store = freshStore()
+        expect(await store.getState().hoverAt("src/server.ts", 1, 1)).toBeNull()
+
+        const calls: unknown[][] = []
+        registerRealDelegate({
+            hoverAt: async (...args: unknown[]) => {
+                calls.push(["hover", ...args])
+                return { path: "src/server.ts", line: 1, character: 1, contents: "fn foo()" }
+            },
+        } as any)
+        store.setState({ mode: "real" })
+        const res = await store.getState().hoverAt("src/server.ts", 2, 3)
+        expect(calls).toEqual([["hover", "src/server.ts", 2, 3]])
+        expect(res).toEqual({ path: "src/server.ts", line: 1, character: 1, contents: "fn foo()" })
     })
 })
 
@@ -1334,5 +1350,46 @@ describe("sftp clipboard", () => {
         store.getState().sftpPaste()
         expect(store.getState().ui.api.sftp.clip).not.toBeNull()
         expect(store.getState().toast).toContain("other pane")
+    })
+})
+
+describe("openFile reveal", () => {
+    test("openFile threads reveal in demo and clearReveal removes it", () => {
+        const store = freshStore()
+        store.getState().openFile("src/server.ts", { line: 5, col: 3 })
+
+        const opened = store.getState().ui.api.tabs.find((tab) => tab.type === "file" && tab.path === "src/server.ts")
+        expect(opened?.reveal).toEqual({ line: 5, col: 3 })
+
+        store.getState().clearReveal(opened!.id)
+        expect(store.getState().ui.api.tabs.find((tab) => tab.id === opened!.id)?.reveal).toBeUndefined()
+    })
+
+    test("openFile creates a new demo file tab with reveal and activates it", () => {
+        const store = freshStore()
+        const p0 = store.getState().ui.api
+        expect(p0.tabs.some((tab) => tab.type === "file" && tab.path === "src/new-file.ts")).toBe(false)
+
+        store.getState().openFile("src/new-file.ts", { line: 7, col: 2 })
+
+        const p1 = store.getState().ui.api
+        const opened = p1.tabs.find((tab) => tab.type === "file" && tab.path === "src/new-file.ts")
+        expect(opened).toBeDefined()
+        expect(opened?.reveal).toEqual({ line: 7, col: 2 })
+        expect(p1.activeTab).toBe(opened!.id)
+        expect(p1.tabs.length).toBe(p0.tabs.length + 1)
+    })
+
+    test("openFile forwards path and reveal to the real delegate", () => {
+        const store = freshStore()
+        const calls: unknown[][] = []
+        registerRealDelegate({
+            openFile: (...args: unknown[]) => calls.push(["open", ...args]),
+        } as any)
+
+        store.setState({ mode: "real" })
+        ;(store.getState() as any).openFile("src/server.ts", { line: 2, col: 4 })
+
+        expect(calls).toEqual([["open", "src/server.ts", { line: 2, col: 4 }]])
     })
 })

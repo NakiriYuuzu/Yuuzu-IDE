@@ -9,6 +9,7 @@ import type { GitExportFormat, GitExportScope, GitResetMode } from "../features/
 import type { BrowserPreviewBounds } from "../features/browser/browser-model"
 import type { FileVersion } from "../features/files/file-model"
 import type { ConnectionTestResult, DatabaseProfile, DatabaseProfileInput } from "../features/database/database-model"
+import type { LanguageHover } from "../features/language/language-model"
 import { evictHlCache } from "./hl-cache"
 import { externallyChangedTabIds } from "./file-watch"
 import { dbProfileToDialog, defaultDbDialogState, newDbDialogState } from "./db-dialog"
@@ -70,7 +71,7 @@ export type RealDelegate = {
     closeProject: (pid: string) => void
     selectFn: (fn: FnMode) => void
     toggleDir: (displayPath: string) => void
-    openFile: (displayPath: string) => void
+    openFile: (displayPath: string, reveal?: { line: number; col: number }) => void
     newTerm: () => void
     closeTab: (tab: Tab) => void
     azNew: () => void
@@ -148,6 +149,7 @@ export type RealDelegate = {
     gotoDefinition: (path: string, line: number, col: number) => void
     findReferences: (path: string, line: number, col: number) => void
     renameSymbol: (path: string, line: number, col: number, newName: string) => void
+    hoverAt: (path: string, line: number, col: number) => Promise<LanguageHover | null>
     restartLspServer: (language: string) => void
     reloadLang: () => void
     lspChange: (tabId: number) => void
@@ -369,7 +371,7 @@ export type V2State = {
     // function list / panel
     selectFn: (fn: FnMode) => void
     toggleDir: (path: string) => void
-    openFile: (path: string) => void
+    openFile: (path: string, reveal?: { line: number; col: number }) => void
     openToSide: (path: string) => void
     addNode: (dirPath: string, kind: "file" | "dir") => void
     deleteNode: (path: string) => void
@@ -400,9 +402,11 @@ export type V2State = {
     reloadTab: (tabId: number) => void
     overwriteTab: (tabId: number) => void
     setCursor: (cursor: { ln: number; col: number } | null) => void
+    clearReveal: (tabId: number) => void
     gotoDefinition: (path: string, line: number, col: number) => void
     findReferences: (path: string, line: number, col: number) => void
     renameSymbol: (path: string, line: number, col: number, newName: string) => void
+    hoverAt: (path: string, line: number, col: number) => Promise<LanguageHover | null>
     restartLspServer: (language: string) => void
     closeRefs: () => void
     reloadLang: () => void
@@ -905,14 +909,30 @@ export function createV2Store() {
                 if (get().mode === "real") realDelegate?.toggleDir(path)
             },
 
-            openFile: (path) => {
+            openFile: (path, reveal) => {
                 if (get().mode === "real") {
-                    realDelegate?.openFile(path)
+                    realDelegate?.openFile(path, reveal)
                     return
                 }
                 const name = path.split("/").pop() ?? path
                 upd((p) => {
-                    ensureTab(p, (t) => t.type === "file" && t.path === path, () => ({ type: "file", name, path }))
+                    const existing = p.tabs.find((t) => t.type === "file" && t.path === path)
+                    if (existing) {
+                        p.activeTab = existing.id
+                        if (reveal) {
+                            p.tabs = p.tabs.map((t) => (t.id === existing.id ? { ...t, reveal } : t))
+                        }
+                        return
+                    }
+                    const nt: Omit<Tab, "id"> = {
+                        type: "file",
+                        name,
+                        path,
+                        ...(reveal ? { reveal } : {}),
+                    }
+                    const tab: Tab = { id: nextId(), ...nt }
+                    p.tabs = [...p.tabs, tab]
+                    p.activeTab = tab.id
                 })
             },
 
@@ -1234,7 +1254,6 @@ export function createV2Store() {
                 })
                 if (get().mode === "real") {
                     realDelegate?.backupTab(tabId, content)
-                    realDelegate?.lspChange(tabId)
                 }
             },
 
@@ -1284,12 +1303,27 @@ export function createV2Store() {
                 set({ cursor })
             },
 
+            clearReveal: (tabId) => {
+                upd((p) => {
+                    const target = p.tabs.find((t) => t.id === tabId)
+                    if (!target?.reveal) return
+                    p.tabs = p.tabs.map((t) => (t.id === tabId ? { ...t, reveal: undefined } : t))
+                })
+            },
+
             gotoDefinition: (path, line, col) => {
                 if (get().mode === "real") {
                     realDelegate?.gotoDefinition(path, line, col)
                     return
                 }
                 get().showToast("Language service needs a real workspace")
+            },
+
+            hoverAt: async (path, line, col) => {
+                if (get().mode === "real") {
+                    return (await realDelegate?.hoverAt(path, line, col)) ?? null
+                }
+                return null
             },
 
             findReferences: (path, line, col) => {

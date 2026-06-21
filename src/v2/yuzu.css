@@ -1151,6 +1151,48 @@
     white-space: pre;
 }
 .yz2-ed-input::selection { background: rgba(130, 170, 255, 0.28); color: transparent; }
+.yz2-ed-hover {
+    position: fixed;
+    z-index: 430;
+    box-sizing: border-box;
+    max-width: min(460px, calc(100vw - 24px));
+    max-height: min(320px, calc(100vh - 24px));
+    overflow: auto;
+    background: var(--yz-141a26);
+    border: 1px solid var(--yz-2b3547);
+    border-radius: 8px;
+    padding: 8px 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    font-size: 12px;
+    pointer-events: none;
+}
+.yz2-ed-hover-diag {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    margin-bottom: 6px;
+}
+.yz2-ed-hover-diag .sev {
+    text-transform: uppercase;
+    font-size: 10px;
+    font-weight: 700;
+}
+.yz2-ed-hover-diag.is-error .sev {
+    color: var(--yz-f07178);
+}
+.yz2-ed-hover-diag.is-warning .sev {
+    color: var(--yz-ffcb6b);
+}
+.yz2-ed-hover-diag.is-info .sev,
+.yz2-ed-hover-diag.is-hint .sev {
+    color: var(--yz-82aaff);
+}
+.yz2-ed-hover-doc {
+    margin: 4px 0 0;
+    white-space: pre-wrap;
+    color: var(--yz-e6edf3);
+    font-family: inherit;
+}
 .yz2-refs {
     position: fixed;
     z-index: 420;

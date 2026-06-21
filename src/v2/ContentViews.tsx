@@ -1,11 +1,13 @@
 // Main-group content views: empty state, editor, terminal, browser and the
 // split pane. Git graph / DB / SFTP views live in their own files.
 
-import { useRef } from "react"
+import { useEffect, useRef, useState } from "react"
+import type { MouseEvent as ReactMouseEvent } from "react"
 import { TerminalTab } from "../features/terminal/TerminalTab"
+import { isLspSupportedDocumentPath } from "../features/language/language-model"
 import type { LspDiagnostic } from "../features/language/language-model"
 
-import { blameLineMap, ctxPct, diagLineSeverity, estTokens, fmtK, hlCode, hlLine, termSegs } from "./v2-model"
+import { blameLineMap, ctxPct, diagLineSeverity, estTokens, fmtK, hlCode, hlLine, normSeverity, termSegs } from "./v2-model"
 import type { Seg, Tab } from "./v2-model"
 import { tokenChipFor, useV2Store } from "./v2-store"
 import { applyOscTitle, resizeSession, writeToSession } from "./controller"
@@ -27,6 +29,93 @@ function cursorFromEventTarget(target: EventTarget | null): { ln: number; col: n
 }
 
 const EMPTY_DIAGNOSTICS: LspDiagnostic[] = []
+
+const HOVER_MAX_W = 460
+const HOVER_MAX_H = 320
+const HOVER_AXIS_GAP = 12
+const HOVER_VIEWPORT_GUTTER = 24
+
+function clampNum(value: number, min: number, max: number): number {
+    return Math.min(Math.max(value, min), Math.max(min, max))
+}
+
+function focusWithoutScroll(el: HTMLTextAreaElement): void {
+    try {
+        el.focus({ preventScroll: true })
+    } catch {
+        el.focus()
+    }
+}
+
+let cwCache = { key: "", w: 0 }
+function measureCharWidth(el: HTMLElement): number {
+    const docView = el.ownerDocument?.defaultView
+    if (!docView || typeof docView.getComputedStyle !== "function") return 7.8
+    const cs = docView.getComputedStyle(el)
+    const key = cs.fontSize + "|" + cs.fontFamily
+    if (cwCache.key === key && cwCache.w) return cwCache.w
+
+    const doc = el.ownerDocument ?? (typeof document === "undefined" ? null : document)
+    const ctx = doc?.createElement?.("canvas")?.getContext?.("2d")
+    let w = 7.8
+    if (ctx) {
+        ctx.font = cs.fontSize + " " + cs.fontFamily
+        w = ctx.measureText("M").width || 7.8
+    }
+    cwCache = { key, w }
+    return w
+}
+
+function clampRevealIndex(content: string, line: number, col: number): number {
+    const lines = content.split("\n")
+    const idx = Math.max(1, Math.min(line, Math.max(1, lines.length))) - 1
+    const lineText = lines[idx] ?? ""
+    const clampedCol = Math.min(Math.max(1, col), Math.max(1, lineText.length + 1))
+
+    let off = 0
+    for (let i = 0; i < idx; i++) off += lines[i].length + 1
+    off += clampedCol - 1
+    return off
+}
+
+function clampRevealCol(content: string, line: number, col: number): number {
+    const lines = content.split("\n")
+    const idx = Math.max(1, Math.min(line, Math.max(1, lines.length))) - 1
+    const lineText = lines[idx] ?? ""
+    return Math.min(Math.max(1, col), Math.max(1, lineText.length + 1))
+}
+
+function diagMatchesPosition(d: LspDiagnostic, line: number, col: number): boolean {
+    const startLine = d.range.start_line + 1
+    const endLine = d.range.end_line + 1
+    const startCol = d.range.start_character + 1
+    const endCol = d.range.end_character + 1
+
+    if (startLine === endLine) {
+        return line === startLine && col >= startCol && col < endCol
+    }
+
+    if (line < startLine || line > endLine) return false
+    if (line === startLine && col < startCol) return false
+    if (line === endLine && col >= endCol) return false
+    return true
+}
+
+function clampHoverPos(x: number, y: number): { x: number; y: number } {
+    const width = window.innerWidth || 0
+    const height = window.innerHeight || 0
+    const cardW = Math.min(HOVER_MAX_W, Math.max(0, width - HOVER_VIEWPORT_GUTTER))
+    const cardH = Math.min(HOVER_MAX_H, Math.max(0, height - HOVER_VIEWPORT_GUTTER))
+    const maxX = Math.max(0, width - Math.max(0, cardW) - HOVER_AXIS_GAP)
+    const maxY = Math.max(0, height - Math.max(0, cardH) - HOVER_AXIS_GAP)
+    const minX = Math.max(0, Math.min(HOVER_AXIS_GAP, maxX))
+    const minY = Math.max(0, Math.min(HOVER_AXIS_GAP, maxY))
+
+    return {
+        x: clampNum(x, minX, maxX),
+        y: clampNum(y, minY, maxY),
+    }
+}
 
 export function Segs({ segs }: { segs: Seg[] }) {
     return (
@@ -64,13 +153,95 @@ export function EmptyView() {
 function EditableBody({ tab }: { tab: Tab }) {
     const setTabContent = useV2Store((s) => s.setTabContent)
     const saveTab = useV2Store((s) => s.saveTab)
+    const gotoDefinition = useV2Store((s) => s.gotoDefinition)
+    const hoverAt = useV2Store((s) => s.hoverAt)
+    const clearReveal = useV2Store((s) => s.clearReveal)
     const setCursor = useV2Store((s) => s.setCursor)
     const tabSize = useV2Store((s) => (s.stVals.tabSize === "4" ? 4 : 2))
     const diagnostics = useV2Store((s) => s.ui[s.active].diagnosticsByPath[tab.path ?? ""] ?? EMPTY_DIAGNOSTICS)
     const content = tab.content ?? ""
+    const taRef = useRef<HTMLTextAreaElement>(null)
+    const supported = isLspSupportedDocumentPath(tab.path ?? "")
+    const [hover, setHover] = useState<{ x: number; y: number; diags: LspDiagnostic[]; doc: string | null } | null>(
+        null,
+    )
+    const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+    const hoverSeq = useRef(0)
     const lines = highlightContent(tab.id, content, tab.contentLang ?? "md")
     const blameByLine = blameLineMap(tab.blame)
     const sevByLine = diagLineSeverity(diagnostics)
+
+    function clearHover() {
+        if (hoverTimer.current) clearTimeout(hoverTimer.current)
+        hoverSeq.current += 1
+        setHover(null)
+    }
+
+    function onAreaMouseMove(e: ReactMouseEvent<HTMLTextAreaElement>) {
+        const el = taRef.current
+        if (!el) return
+
+        const cx = e.clientX
+        const cy = e.clientY
+
+        if (hoverTimer.current) clearTimeout(hoverTimer.current)
+        hoverTimer.current = setTimeout(() => {
+            const area = el.closest(".yz2-ed-area")
+            if (!area) return
+
+            const r = area.getBoundingClientRect()
+            const line = Math.floor((cy - r.top) / 21) + 1
+            const col = Math.floor((cx - r.left) / measureCharWidth(el)) + 1
+
+            if (line < 1 || col < 1) {
+                setHover(null)
+                return
+            }
+
+            const diags = diagnostics.filter((d) => diagMatchesPosition(d, line, col))
+            const seq = ++hoverSeq.current
+            void Promise.resolve(supported ? hoverAt(tab.path ?? "", line, col) : null).then((h) => {
+                if (seq !== hoverSeq.current) return
+                const doc = h?.contents?.trim() ? h.contents.trim() : null
+                if (!doc && diags.length === 0) {
+                    setHover(null)
+                    return
+                }
+                const { x, y } = clampHoverPos(cx + 12, cy + 16)
+                setHover({ x, y, diags, doc })
+            })
+        }, 320)
+    }
+
+    useEffect(() => {
+        const reveal = tab.reveal
+        const el = taRef.current
+        if (!reveal || !el || typeof tab.content !== "string") return
+
+        const off = clampRevealIndex(tab.content, reveal.line, reveal.col)
+        const col = clampRevealCol(tab.content, reveal.line, reveal.col)
+
+        focusWithoutScroll(el)
+
+        el.selectionStart = el.selectionEnd = off
+        const body = el.closest(".yz2-ed-body") as HTMLElement | null
+        const targetX = Math.max(0, (col - 1) * measureCharWidth(el) - 12)
+        if (body) {
+            body.scrollLeft = targetX
+            body.scrollTop = Math.max(0, 10 + (reveal.line - 1) * 21 - body.clientHeight / 2)
+        }
+        clearReveal(tab.id)
+    }, [tab.reveal, tab.content, clearReveal, tab.id])
+
+    useEffect(() => {
+        setHover(null)
+        hoverSeq.current += 1
+
+        return () => {
+            if (hoverTimer.current) clearTimeout(hoverTimer.current)
+            hoverSeq.current += 1
+        }
+    }, [tab.path, diagnostics])
 
     return (
         <div className="yz2-ed-edit">
@@ -113,13 +284,24 @@ function EditableBody({ tab }: { tab: Tab }) {
                     })}
                 </div>
                 <textarea
+                    ref={taRef}
                     className="yz2-ed-input"
                     value={content}
                     spellCheck={false}
                     wrap="off"
                     autoCapitalize="off"
                     autoCorrect="off"
+                    onMouseMove={onAreaMouseMove}
+                    onMouseLeave={clearHover}
+                    onClick={(e) => {
+                        if ((e.metaKey || e.ctrlKey) && supported) {
+                            e.preventDefault()
+                            const { ln, col } = cursorFrom(e.currentTarget)
+                            gotoDefinition(tab.path ?? "", ln, col)
+                        }
+                    }}
                     onChange={(e) => {
+                        clearHover()
                         setTabContent(tab.id, e.target.value)
                         setCursor(cursorFrom(e.target))
                     }}
@@ -143,6 +325,17 @@ function EditableBody({ tab }: { tab: Tab }) {
                         }
                     }}
                 />
+                {hover ? (
+                    <div className="yz2-ed-hover" style={{ left: hover.x, top: hover.y }}>
+                        {hover.diags.map((diag, i) => (
+                            <div key={i} className={"yz2-ed-hover-diag is-" + normSeverity(diag.severity)}>
+                                <span className="sev">{normSeverity(diag.severity)}</span>
+                                <span className="msg">{diag.message}</span>
+                            </div>
+                        ))}
+                        {hover.doc ? <pre className="yz2-ed-hover-doc">{hover.doc}</pre> : null}
+                    </div>
+                ) : null}
             </div>
         </div>
     )

@@ -1,16 +1,8 @@
 import { useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react"
 
-import { DIR_CHIP, chipFor, LANE_COLORS, normSeverity } from "./v2-model"
+import { DIR_CHIP, chipFor, LANE_COLORS } from "./v2-model"
 import type { FnMode, GitFile, TreeNode } from "./v2-model"
 import { SIDE_PANEL_MAX_WIDTH, SIDE_PANEL_MIN_WIDTH, useV2Store } from "./v2-store"
-
-function memoryLabel(bytes: number | null): string {
-    if (bytes == null) return "not running"
-    if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + " GB"
-    if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB"
-    if (bytes >= 1024) return (bytes / 1024).toFixed(1) + " KB"
-    return bytes + " B"
-}
 
 function FnIcon({ children }: { children: ReactNode }) {
     return (
@@ -435,99 +427,6 @@ function AgentBody() {
     )
 }
 
-function LanguageBody() {
-    const mode = useV2Store((s) => s.mode)
-    const project = useV2Store((s) => s.ui[s.active])
-    const reloadLang = useV2Store((s) => s.reloadLang)
-    const restartLspServer = useV2Store((s) => s.restartLspServer)
-    const openFile = useV2Store((s) => s.openFile)
-    const diagnostics = Object.entries(project.diagnosticsByPath).flatMap(([path, byPath]) =>
-        byPath.map((diagnostic, index) => ({ ...diagnostic, path, index })),
-    )
-
-    return (
-        <>
-            <div className="yz2-sec-label yz2-lang-title">
-                <span>LANGUAGE</span>
-                <button type="button" className="yz2-lang-iconbtn" aria-label="Refresh language data" onClick={reloadLang}>⟳</button>
-            </div>
-            {mode === "real" && !project.lspLoaded ? (
-                <div className="yz2-panel-note">Loading language servers...</div>
-            ) : null}
-            {mode !== "real" && !project.lspServers.length && !diagnostics.length ? (
-                <div className="yz2-panel-note">Language services are not connected in demo mode.</div>
-            ) : null}
-            <div className="yz2-lang-section">
-                <div className="yz2-lang-section-head">
-                    <span>LANGUAGE SERVERS</span>
-                    <span>{project.lspServers.length}</span>
-                </div>
-                {project.lspServers.length ? (
-                    project.lspServers.map((server) => (
-                        <div className="yz2-lang-server" key={`${server.workspace_id}:${server.workspace_root}:${server.language}`}>
-                            <span className="ic">◇</span>
-                            <div className="main">
-                                <span className="name">{server.display_name}</span>
-                                <span className="meta">{server.state} · pid {server.pid ?? "n/a"}</span>
-                                <span className="meta">open {server.open_documents} · mem {memoryLabel(server.memory_bytes)}</span>
-                            </div>
-                            <span className={"yz2-lang-state is-" + String(server.state).toLowerCase()}>{server.state}</span>
-                            <button
-                                type="button"
-                                className="yz2-lang-iconbtn"
-                                aria-label={`Restart ${server.display_name}`}
-                                onClick={() => restartLspServer(server.language)}
-                            >
-                                ↻
-                            </button>
-                        </div>
-                    ))
-                ) : (
-                    <div className="yz2-sc-empty">No language servers detected</div>
-                )}
-            </div>
-            <div className="yz2-lang-section">
-                <div className="yz2-lang-section-head">
-                    <span>DIAGNOSTICS</span>
-                    <span>{diagnostics.length}</span>
-                </div>
-                {diagnostics.length ? (
-                    diagnostics.map((diagnostic) => {
-                        const sev = normSeverity(diagnostic.severity)
-                        const line = diagnostic.range.start_line + 1
-                        return (
-                            <button
-                                type="button"
-                                key={`${diagnostic.path}:${line}:${diagnostic.index}`}
-                                className="yz2-lang-diag"
-                                aria-label={`Open ${diagnostic.path}`}
-                                title={`Open ${diagnostic.path}`}
-                                onClick={() => openFile(diagnostic.path)}
-                            >
-                                <span className={"yz2-lang-sev is-" + sev}>{sev}</span>
-                                <span className="main">
-                                    <span className="name">{diagnostic.path}:{line}</span>
-                                    <span className="meta">{diagnostic.source ?? "unknown"}</span>
-                                    <span className="meta">{diagnostic.message}</span>
-                                </span>
-                            </button>
-                        )
-                    })
-                ) : (
-                    <div className="yz2-sc-empty">No diagnostics</div>
-                )}
-            </div>
-            <div className="yz2-lang-section">
-                <div className="yz2-lang-section-head">
-                    <span>SERVER LOGS</span>
-                    <span>{project.lspLogs.length}</span>
-                </div>
-                <pre className="yz2-lang-log">{project.lspLogs.length ? project.lspLogs.join("\n") : "none"}</pre>
-            </div>
-        </>
-    )
-}
-
 export function SidePanel() {
     const meta = useV2Store((s) => s.meta[s.active])
     const fn = useV2Store((s) => s.ui[s.active].fn)
@@ -596,7 +495,6 @@ export function SidePanel() {
                 {fn === "git" ? <GitBody /> : null}
                 {fn === "db" ? <DbBody /> : null}
                 {fn === "ssh" ? <SshBody /> : null}
-                {fn === "lang" ? <LanguageBody /> : null}
                 {fn === "agent" ? <AgentBody /> : null}
             </div>
             <div

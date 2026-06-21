@@ -126,10 +126,13 @@ describe("lsp coordinate helpers", () => {
     test("maps file URIs back to workspace relative paths", () => {
         expect(relativePathFromUri("/root", "file:///root/src/a.ts")).toBe("src/a.ts")
         expect(relativePathFromUri("/root/", "file:///root/a%20b.ts")).toBe("a b.ts")
+        expect(relativePathFromUri("C:\\workspace\\app", "file:///C:/workspace/app/src/a.ts")).toBe("src/a.ts")
+        expect(relativePathFromUri("C:\\workspace\\app", "file:///c:/workspace/app/src/a.ts")).toBe("src/a.ts")
         expect(relativePathFromUri("/root", "file:///other/src/a.ts")).toBeNull()
         expect(relativePathFromUri("/root", "file:///root")).toBeNull()
         expect(relativePathFromUri("/root", "file:///root/../other/a.ts")).toBeNull()
         expect(relativePathFromUri("/root", "file:///root/%2e%2e/other/a.ts")).toBeNull()
+        expect(relativePathFromUri("C:\\workspace\\app", "file:///C:/workspace/other/a.ts")).toBeNull()
         expect(relativePathFromUri("/root", "/root/src/a.ts")).toBeNull()
         expect(relativePathFromUri("/root", "file:///root/%ZZ.ts")).toBeNull()
         expect(relativePathFromUri("/root", "file:///root2/src/a.ts")).toBeNull()
@@ -170,6 +173,16 @@ describe("lsp mapping helpers", () => {
                 end: { line: 0, character: 1 },
             },
         }, "/root")).toEqual([{ path: "src/a.ts", line: 1, col: 1 }])
+    })
+
+    test("maps Windows LSP file URIs to workspace-relative paths", () => {
+        expect(mapLspLocations({
+            uri: "file:///C:/workspace/app/src/a.ts",
+            range: {
+                start: { line: 0, character: 0 },
+                end: { line: 0, character: 1 },
+            },
+        }, "C:\\workspace\\app")).toEqual([{ path: "src/a.ts", line: 1, col: 1 }])
     })
 
     test("skips malformed LSP locations", () => {

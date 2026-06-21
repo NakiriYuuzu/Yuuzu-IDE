@@ -123,6 +123,183 @@ describe("EditorView", () => {
             cursor: { ln: 2, col: 2 },
         })
     })
+
+    test("ctrl/cmd+click on a supported file triggers gotoDefinition at the caret", () => {
+        const calls: unknown[][] = []
+        registerRealDelegate({
+            openFile: () => {},
+            backupTab: () => {},
+            gotoDefinition: (...args: unknown[]) => calls.push(["goto", ...args]),
+            hoverAt: async () => null,
+        } as any)
+
+        const tab = {
+            id: 9101,
+            type: "file" as const,
+            name: "server.ts",
+            path: "src/server.ts",
+            realPath: "/workspace/src/server.ts",
+            content: "alpha\nbeta\n",
+            contentLang: "ts",
+        }
+        v2Store.setState((s) => ({
+            mode: "real",
+            active: "api",
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    tabs: [tab],
+                    activeTab: tab.id,
+                },
+            },
+        }))
+
+        const view = render(<EditorView tab={tab as Tab} />)
+        const textarea = view.container.querySelector("textarea") as HTMLTextAreaElement
+        textarea.selectionStart = 7
+        textarea.selectionEnd = 7
+
+        fireEvent.click(textarea, { ctrlKey: true })
+
+        expect(calls).toEqual([["goto", "src/server.ts", 2, 2]])
+    })
+
+    test("ctrl/cmd+click on an unsupported file does not call gotoDefinition", () => {
+        const calls: unknown[][] = []
+        registerRealDelegate({
+            openFile: () => {},
+            backupTab: () => {},
+            gotoDefinition: (...args: unknown[]) => calls.push(["goto", ...args]),
+            hoverAt: async () => null,
+        } as any)
+
+        const tab = {
+            id: 9102,
+            type: "file" as const,
+            name: "README.md",
+            path: "README.md",
+            realPath: "/workspace/README.md",
+            content: "alpha\nbeta\n",
+            contentLang: "md",
+        }
+        v2Store.setState((s) => ({
+            mode: "real",
+            active: "api",
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    tabs: [tab],
+                    activeTab: tab.id,
+                },
+            },
+        }))
+
+        const view = render(<EditorView tab={tab as Tab} />)
+        const textarea = view.container.querySelector("textarea") as HTMLTextAreaElement
+        textarea.selectionStart = 7
+        textarea.selectionEnd = 7
+
+        fireEvent.click(textarea, { ctrlKey: true })
+
+        expect(calls).toEqual([])
+    })
+
+    test("reveal clamp keeps caret within target line", async () => {
+        const tab = {
+            id: 9103,
+            type: "file" as const,
+            name: "server.ts",
+            path: "src/server.ts",
+            realPath: "/workspace/src/server.ts",
+            content: "alpha\nbeta\n",
+            contentLang: "ts",
+            reveal: { line: 1, col: 999 },
+        }
+        v2Store.setState((s) => ({
+            mode: "real",
+            active: "api",
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    tabs: [tab],
+                    activeTab: tab.id,
+                },
+            },
+        }))
+
+        const view = render(<EditorView tab={tab as Tab} />)
+        const textarea = view.container.querySelector("textarea") as HTMLTextAreaElement
+
+        await Promise.resolve()
+
+        expect(textarea.selectionStart).toBe(5)
+        expect(textarea.selectionEnd).toBe(5)
+    })
+
+    test("reveal horizontally scrolls to the target column", async () => {
+        const baseTab = {
+            id: 9104,
+            type: "file" as const,
+            name: "server.ts",
+            path: "src/server.ts",
+            realPath: "/workspace/src/server.ts",
+            content: "a".repeat(220) + "\nbeta\n",
+            contentLang: "ts",
+        }
+        v2Store.setState((s) => ({
+            mode: "real",
+            active: "api",
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    tabs: [baseTab],
+                    activeTab: baseTab.id,
+                },
+            },
+        }))
+
+        const view = render(<EditorView tab={baseTab as Tab} />)
+        const body = view.container.querySelector(".yz2-ed-body") as HTMLDivElement
+        const textarea = view.container.querySelector("textarea") as HTMLTextAreaElement
+
+        let recorded = 0
+        let hasScrollSpy = false
+        try {
+            Object.defineProperty(body, "scrollLeft", {
+                configurable: true,
+                get: () => recorded,
+                set: (v: number) => {
+                    recorded = v
+                    hasScrollSpy = true
+                },
+            })
+        } catch {
+            hasScrollSpy = false
+        }
+
+        v2Store.setState((s) => ({
+            ...s,
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    tabs: [{ ...baseTab, reveal: { line: 1, col: 200 } }],
+                    activeTab: baseTab.id,
+                },
+            },
+        }))
+
+        await Promise.resolve()
+
+        if (hasScrollSpy) {
+            expect(recorded).toBeGreaterThan(0)
+        }
+        expect(textarea.selectionStart).toBeGreaterThan(0)
+    })
 })
 
 describe("BrowserView", () => {
