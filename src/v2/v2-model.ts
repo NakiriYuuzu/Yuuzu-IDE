@@ -4,7 +4,7 @@
 
 import type { GitBlameFile, GitBranchFull, GitChangeKind, GitConflictFile, GitStashEntry } from "../features/git/git-model"
 import type { GitDiffHunks } from "../features/git/git-diff-model"
-import type { LanguageServerStatus, LspDiagnostic } from "../features/language/language-model"
+import type { LanguageCodeAction, LanguageServerStatus, LspDiagnostic } from "../features/language/language-model"
 import type { DatabaseProfile, QueryKind } from "../features/database/database-model"
 import type { DbDialogState } from "./db-dialog"
 
@@ -268,6 +268,7 @@ export type ProjectUI = {
     lspServers: LanguageServerStatus[]
     lspLogs: string[]
     lspRefs: { path: string; line: number; col: number; preview: string }[] | null
+    lspActions: LanguageCodeAction[] | null
     lspLoaded: boolean
 }
 
@@ -521,6 +522,8 @@ const KEYWORDS: Record<string, string> = {
     js: "import,from,const,let,var,return,async,await,function,export,default,if,else,new,try,catch,throw,class,extends",
     json: "",
     py: "and,as,assert,async,await,break,class,continue,def,elif,else,except,False,finally,for,from,if,import,in,is,lambda,None,not,or,pass,raise,return,True,try,while,with,yield",
+    cs: "abstract,as,async,await,break,case,catch,class,const,continue,default,delegate,do,else,enum,event,false,finally,for,foreach,if,interface,internal,is,namespace,new,null,private,protected,public,readonly,return,sealed,static,string,switch,throw,true,try,using,var,virtual,void,while",
+    kt: "as,break,class,continue,data,do,else,false,for,fun,if,import,in,interface,is,null,object,override,package,private,protected,public,return,sealed,true,typealias,val,var,when,while",
     sql: "CREATE,TABLE,SELECT,FROM,WHERE,ORDER,BY,LIMIT,DESC,ASC,AND,OR,INTEGER,TEXT,NOT,NULL,PRIMARY,KEY,REFERENCES,INSERT,INTO,VALUES",
     html: "",
     css: "animation,from,to,@media,@keyframes",
@@ -533,6 +536,8 @@ const TYPE_KEYWORDS: Record<string, string> = {
     ts: "interface,type,class,enum",
     js: "class",
     py: "class",
+    cs: "class,interface,enum,struct,record,namespace",
+    kt: "class,interface,object,typealias",
 }
 
 const HL_COLORS = {
@@ -554,7 +559,7 @@ export function hlLine(line: string, lang: string): Seg[] {
     const comRe =
         lang === "sql" ? "--"
             : lang === "sh" || lang === "py" ? "#"
-                : lang === "ts" || lang === "js" || lang === "rust" ? "//"
+                : lang === "ts" || lang === "js" || lang === "rust" || lang === "cs" || lang === "kt" ? "//"
                     : null
     const C = HL_COLORS
     const trimmed = line.trimStart()
@@ -647,6 +652,8 @@ const LANG_LABELS: Record<string, string> = {
     js: "JavaScript",
     json: "JSON",
     py: "Python",
+    cs: "C#",
+    kt: "Kotlin",
     html: "HTML",
     sql: "SQL",
     css: "CSS",
@@ -724,6 +731,9 @@ export function chipFor(name: string): ChipColors {
         py: ["py", "var(--yz-15240b)", "var(--yz-9ccc65)"],
         pyw: ["py", "var(--yz-15240b)", "var(--yz-9ccc65)"],
         pyi: ["py", "var(--yz-15240b)", "var(--yz-9ccc65)"],
+        cs: ["cs", "var(--yz-221530)", "var(--yz-c792ea)"],
+        kt: ["kt", "var(--yz-2a1218)", "var(--yz-f07178)"],
+        kts: ["kt", "var(--yz-2a1218)", "var(--yz-f07178)"],
         sh: ["sh", "var(--yz-15240b)", "var(--yz-9ccc65)"],
         yml: ["yml", "var(--yz-221530)", "var(--yz-c792ea)"],
         svg: ["svg", "var(--yz-2a2210)", "var(--yz-ffcb6b)"],

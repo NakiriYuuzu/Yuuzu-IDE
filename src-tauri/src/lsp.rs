@@ -38,7 +38,18 @@ pub enum LanguageId {
     TypeScript,
     JavaScript,
     Python,
+    CSharp,
+    Kotlin,
 }
+
+const ALL_LANGUAGES: [LanguageId; 6] = [
+    LanguageId::Rust,
+    LanguageId::TypeScript,
+    LanguageId::JavaScript,
+    LanguageId::Python,
+    LanguageId::CSharp,
+    LanguageId::Kotlin,
+];
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct LanguageServerProfile {
@@ -56,6 +67,8 @@ pub fn detect_language(path: &str) -> Option<LanguageId> {
         "ts" | "tsx" | "mts" | "cts" => Some(LanguageId::TypeScript),
         "js" | "jsx" | "mjs" | "cjs" => Some(LanguageId::JavaScript),
         "py" | "pyw" | "pyi" => Some(LanguageId::Python),
+        "cs" => Some(LanguageId::CSharp),
+        "kt" | "kts" => Some(LanguageId::Kotlin),
         _ => None,
     }
 }
@@ -103,7 +116,7 @@ fn detect_workspace_languages(workspace_root: &str) -> Vec<LanguageId> {
 
         if let Some(language) = detect_language(&path) {
             languages.insert(language);
-            if languages.len() == 4 {
+            if languages.len() == ALL_LANGUAGES.len() {
                 break;
             }
         }
@@ -148,6 +161,18 @@ pub fn server_profile(language: LanguageId) -> LanguageServerProfile {
             language,
             display_name: "Python LSP Server".to_string(),
             command: "pylsp".to_string(),
+            args: Vec::new(),
+        },
+        LanguageId::CSharp => LanguageServerProfile {
+            language,
+            display_name: "C# Language Server".to_string(),
+            command: "csharp-ls".to_string(),
+            args: Vec::new(),
+        },
+        LanguageId::Kotlin => LanguageServerProfile {
+            language,
+            display_name: "Kotlin Language Server".to_string(),
+            command: "kotlin-language-server".to_string(),
             args: Vec::new(),
         },
     }
@@ -343,6 +368,8 @@ fn language_id_for_lsp(language: LanguageId) -> &'static str {
         LanguageId::TypeScript => "typescript",
         LanguageId::JavaScript => "javascript",
         LanguageId::Python => "python",
+        LanguageId::CSharp => "csharp",
+        LanguageId::Kotlin => "kotlin",
     }
 }
 
@@ -936,6 +963,8 @@ impl Default for LanguageServerManager {
                 TestServerProfile::available(LanguageId::TypeScript),
                 TestServerProfile::available(LanguageId::JavaScript),
                 TestServerProfile::available(LanguageId::Python),
+                TestServerProfile::available(LanguageId::CSharp),
+                TestServerProfile::available(LanguageId::Kotlin),
             ],
             real_transport_factory,
         )
@@ -953,6 +982,8 @@ impl LanguageServerManager {
             TestServerProfile::available(LanguageId::TypeScript),
             TestServerProfile::available(LanguageId::JavaScript),
             TestServerProfile::available(LanguageId::Python),
+            TestServerProfile::available(LanguageId::CSharp),
+            TestServerProfile::available(LanguageId::Kotlin),
         ])
     }
 
@@ -968,12 +999,7 @@ impl LanguageServerManager {
             + 'static,
     ) -> Self {
         let mut available = HashMap::new();
-        for language in [
-            LanguageId::Rust,
-            LanguageId::TypeScript,
-            LanguageId::JavaScript,
-            LanguageId::Python,
-        ] {
+        for language in ALL_LANGUAGES {
             available.insert(
                 language,
                 TestServerProfile {
@@ -1523,7 +1549,12 @@ impl LanguageServerManager {
         })
     }
 
-    pub fn symbols(&self, workspace_id: &str, workspace_root: &str) -> Result<Vec<Value>, String> {
+    pub fn symbols(
+        &self,
+        workspace_id: &str,
+        workspace_root: &str,
+        query: &str,
+    ) -> Result<Vec<Value>, String> {
         let mut state = self.state.lock().map_err(|err| err.to_string())?;
 
         let mut symbols = Vec::new();
@@ -1561,7 +1592,7 @@ impl LanguageServerManager {
                     "",
                     "workspace/symbol",
                     serde_json::json!({
-                        "query": "",
+                        "query": query,
                     }),
                     record,
                 )?
@@ -2361,9 +2392,10 @@ impl LspState {
         &self,
         workspace_id: String,
         workspace_root: String,
+        query: String,
     ) -> Result<Vec<serde_json::Value>, String> {
         let manager = self.manager.lock().map_err(|err| err.to_string())?;
-        manager.symbols(&workspace_id, &workspace_root)
+        manager.symbols(&workspace_id, &workspace_root, &query)
     }
 
     pub fn rename(
@@ -2524,6 +2556,12 @@ mod tests {
             detect_language("typings/build.pyi"),
             Some(LanguageId::Python)
         );
+        assert_eq!(detect_language("src/Program.cs"), Some(LanguageId::CSharp));
+        assert_eq!(detect_language("src/Main.kt"), Some(LanguageId::Kotlin));
+        assert_eq!(
+            detect_language("build.gradle.kts"),
+            Some(LanguageId::Kotlin)
+        );
         assert_eq!(detect_language("README.md"), None);
     }
 
@@ -2539,10 +2577,17 @@ mod tests {
             "typescript-language-server"
         );
         assert_eq!(server_profile(LanguageId::Python).command, "pylsp");
+        assert_eq!(server_profile(LanguageId::CSharp).command, "csharp-ls");
+        assert_eq!(
+            server_profile(LanguageId::Kotlin).command,
+            "kotlin-language-server"
+        );
         assert_eq!(
             server_profile(LanguageId::TypeScript).args,
             vec!["--stdio".to_string()]
         );
+        assert!(server_profile(LanguageId::CSharp).args.is_empty());
+        assert!(server_profile(LanguageId::Kotlin).args.is_empty());
     }
 
     #[test]
@@ -3554,10 +3599,16 @@ mod tests {
                 "fn main() {}".to_string(),
             )
             .expect("open");
-        manager.symbols("workspace", "/workspace").expect("symbols");
+        manager
+            .symbols("workspace", "/workspace", "User")
+            .expect("symbols");
 
         assert!(transport.sent_messages().iter().any(|message| {
             message.get("method").and_then(serde_json::Value::as_str) == Some("workspace/symbol")
+                && message
+                    .pointer("/params/query")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("User")
         }));
     }
 
@@ -3608,10 +3659,16 @@ mod tests {
             record.initialized = false;
         }
 
-        let symbols = manager.symbols("workspace", "/workspace").expect("symbols");
+        let symbols = manager
+            .symbols("workspace", "/workspace", "main")
+            .expect("symbols");
 
         assert!(transport.sent_messages().iter().any(|message| {
             message.get("method").and_then(serde_json::Value::as_str) == Some("workspace/symbol")
+                && message
+                    .pointer("/params/query")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("main")
         }));
         assert!(symbols.is_empty());
     }

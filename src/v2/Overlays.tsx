@@ -141,6 +141,8 @@ function buildCtxItems(ctx: CtxTarget, store: V2State): MenuEntry[] {
                         const next = prompt("Rename symbol to:")
                         if (next?.trim()) store.renameSymbol(path, ln, col, next.trim())
                     }) },
+                { glyph: "✦", label: "Code Actions", disabled: !cursor, run: () =>
+                    symbolAction((path, ln, col) => store.codeActionsAt(path, ln, col)) },
                 { divider: true },
                 { glyph: "Σ", label: "Count tokens (Claude)", run: countTokens },
             ]
@@ -388,6 +390,44 @@ export function ReferencesOverlay() {
     )
 }
 
+export function CodeActionsOverlay() {
+    const actions = useV2Store((s) => s.ui[s.active]?.lspActions ?? null)
+    const applyCodeAction = useV2Store((s) => s.applyCodeAction)
+    const closeCodeActions = useV2Store((s) => s.closeCodeActions)
+
+    if (!actions) return null
+
+    return (
+        <>
+            <div className="yz2-modal-backdrop" style={{ zIndex: 390 }} onClick={closeCodeActions} />
+            <div className="yz2-code-actions" role="dialog" aria-label="Code actions">
+                <div className="yz2-refs-head">
+                    <span>CODE ACTIONS</span>
+                    <span className="yz2-spacer" />
+                    <span>{actions.length}</span>
+                    <button type="button" className="yz2-modal-close" onClick={closeCodeActions}>
+                        ×
+                    </button>
+                </div>
+                <div className="yz2-refs-list">
+                    {actions.map((action, index) => (
+                        <button
+                            type="button"
+                            key={action.title + ":" + index}
+                            className="yz2-refs-row"
+                            aria-label={"Apply code action " + action.title}
+                            onClick={() => applyCodeAction(index)}
+                        >
+                            <span className="loc">{action.kind ?? "action"}</span>
+                            <span className="preview">{action.title}</span>
+                        </button>
+                    ))}
+                </div>
+            </div>
+        </>
+    )
+}
+
 export function runPaletteAction(action: string, store: V2State): void {
     if (action === "split") store.toggleSplit()
     else if (action === "git") store.selectFn("git")
@@ -526,12 +566,25 @@ function LanguageSection() {
     const project = useV2Store((s) => s.ui[active])
     const reloadLang = useV2Store((s) => s.reloadLang)
     const restartLspServer = useV2Store((s) => s.restartLspServer)
+    const workspaceSymbols = useV2Store((s) => s.workspaceSymbols)
     const openFile = useV2Store((s) => s.openFile)
     const closeSettings = useV2Store((s) => s.closeSettings)
+    const [symbolQuery, setSymbolQuery] = useState("")
+    const [symbolLoading, setSymbolLoading] = useState(false)
+    const [symbols, setSymbols] = useState<Awaited<ReturnType<typeof workspaceSymbols>>>([])
 
     useEffect(() => {
         if (mode === "real" && project && !project.lspLoaded) reloadLang()
     }, [mode, active, project?.lspLoaded, reloadLang])
+
+    async function searchSymbols() {
+        setSymbolLoading(true)
+        try {
+            setSymbols(await workspaceSymbols(symbolQuery))
+        } finally {
+            setSymbolLoading(false)
+        }
+    }
 
     if (!project) {
         return (
@@ -622,6 +675,56 @@ function LanguageSection() {
                     })
                 ) : (
                     <div className="yz2-sc-empty">No diagnostics</div>
+                )}
+            </div>
+            <div className="yz2-lang-section">
+                <div className="yz2-lang-section-head">
+                    <span>WORKSPACE SYMBOLS</span>
+                    <span>{symbols.length}</span>
+                </div>
+                <div className="yz2-lang-symbol-search">
+                    <input
+                        aria-label="Workspace symbol query"
+                        value={symbolQuery}
+                        onChange={(event) => setSymbolQuery(event.currentTarget.value)}
+                        onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                                event.preventDefault()
+                                void searchSymbols()
+                            }
+                        }}
+                    />
+                    <button
+                        type="button"
+                        className="yz2-btn-ghost"
+                        aria-label="Search workspace symbols"
+                        disabled={symbolLoading}
+                        onClick={() => void searchSymbols()}
+                    >
+                        ⌕ Search
+                    </button>
+                </div>
+                {symbols.length ? (
+                    <div className="yz2-lang-symbols">
+                        {symbols.map((symbol, index) => (
+                            <button
+                                type="button"
+                                key={`${symbol.path}:${symbol.line}:${symbol.col}:${symbol.name}:${index}`}
+                                className="yz2-lang-symbol"
+                                aria-label={`Open symbol ${symbol.name} at ${symbol.path}:${symbol.line}`}
+                                onClick={() => {
+                                    openFile(symbol.path, { line: symbol.line, col: symbol.col })
+                                    closeSettings()
+                                }}
+                            >
+                                <span className="name">{symbol.name}</span>
+                                <span className="meta">{symbol.kind ?? "Symbol"} · {symbol.path}:{symbol.line}</span>
+                                {symbol.containerName ? <span className="meta">{symbol.containerName}</span> : null}
+                            </button>
+                        ))}
+                    </div>
+                ) : (
+                    <div className="yz2-sc-empty">{symbolLoading ? "Searching..." : "No symbols"}</div>
                 )}
             </div>
             <div className="yz2-lang-section">

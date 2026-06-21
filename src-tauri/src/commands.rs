@@ -2445,6 +2445,8 @@ fn lsp_language_from_command_arg(language: &str) -> Result<crate::lsp::LanguageI
         "TypeScript" | "typescript" | "ts" => Ok(crate::lsp::LanguageId::TypeScript),
         "JavaScript" | "javascript" | "js" => Ok(crate::lsp::LanguageId::JavaScript),
         "Python" | "python" | "py" => Ok(crate::lsp::LanguageId::Python),
+        "CSharp" | "C#" | "csharp" | "cs" => Ok(crate::lsp::LanguageId::CSharp),
+        "Kotlin" | "kotlin" | "kt" | "kts" => Ok(crate::lsp::LanguageId::Kotlin),
         "" => Err("unsupported language server: empty".to_string()),
         value => Err(format!("unsupported language server: {value}")),
     }
@@ -2615,11 +2617,13 @@ pub async fn lsp_symbols(
     lsp_state: State<'_, crate::lsp::LspState>,
     workspace_root: String,
     workspace_id: String,
+    query: Option<String>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let _ = workspace_id;
     let (workspace_id, workspace_root) = state.lsp_workspace_identity(&workspace_root)?;
+    let query = query.unwrap_or_default();
     let lsp = lsp_state.inner().clone();
-    run_blocking(move || lsp.symbols(workspace_id, workspace_root)).await
+    run_blocking(move || lsp.symbols(workspace_id, workspace_root, query)).await
 }
 
 #[tauri::command]
@@ -4300,6 +4304,14 @@ mod tests {
         assert_eq!(
             lsp_language_from_command_arg("Rust").expect("rust"),
             crate::lsp::LanguageId::Rust
+        );
+        assert_eq!(
+            lsp_language_from_command_arg("C#").expect("csharp"),
+            crate::lsp::LanguageId::CSharp
+        );
+        assert_eq!(
+            lsp_language_from_command_arg("kts").expect("kotlin"),
+            crate::lsp::LanguageId::Kotlin
         );
         assert!(lsp_language_from_command_arg("")
             .expect_err("empty language should be rejected")

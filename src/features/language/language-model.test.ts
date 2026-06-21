@@ -90,6 +90,9 @@ describe("language model", () => {
     expect(isLspSupportedDocumentPath("/workspace/src/app.cjs")).toBe(true);
     expect(isLspSupportedDocumentPath("/workspace/src/app.pyw")).toBe(true);
     expect(isLspSupportedDocumentPath("/workspace/src/types.pyi")).toBe(true);
+    expect(isLspSupportedDocumentPath("/workspace/src/Program.cs")).toBe(true);
+    expect(isLspSupportedDocumentPath("/workspace/src/Main.kt")).toBe(true);
+    expect(isLspSupportedDocumentPath("/workspace/build.gradle.kts")).toBe(true);
     expect(isLspSupportedDocumentPath("/workspace/README.md")).toBe(false);
   });
 

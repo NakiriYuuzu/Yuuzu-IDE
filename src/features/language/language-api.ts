@@ -134,6 +134,14 @@ export function requestLanguageCodeActions(args: {
   return call<unknown>("lsp_code_actions", args);
 }
 
+export function requestLanguageSymbols(args: {
+  workspaceId: string;
+  workspaceRoot: string;
+  query?: string;
+}): Promise<unknown> {
+  return call<unknown>("lsp_symbols", args);
+}
+
 export function requestLanguageRename(args: {
   workspaceId: string;
   workspaceRoot: string;

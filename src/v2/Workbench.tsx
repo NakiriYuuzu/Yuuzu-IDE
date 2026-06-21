@@ -25,7 +25,7 @@ import { DbTableView } from "./DbTableView"
 import { DbConnDialog } from "./DbConnDialog"
 import { SftpView } from "./SftpView"
 import { AgentZone } from "./AgentZone"
-import { CommandPalette, ConfirmModal, ContextMenu, ReferencesOverlay, SettingsModal, Toast, runPaletteAction } from "./Overlays"
+import { CodeActionsOverlay, CommandPalette, ConfirmModal, ContextMenu, ReferencesOverlay, SettingsModal, Toast, runPaletteAction } from "./Overlays"
 
 function TitleBar() {
     const meta = useV2Store((s) => s.meta[s.active] as typeof s.meta[string] | undefined)
@@ -433,6 +433,7 @@ export function WorkbenchV2() {
             <ContextMenu />
             <DbConnDialog />
             <ReferencesOverlay />
+            <CodeActionsOverlay />
             <CommandPalette />
             <SettingsModal />
             <ConfirmModal />

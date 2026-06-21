@@ -98,13 +98,16 @@ import {
     getLanguageServerStatus,
     getWorkspaceDiagnostics,
     openLanguageDocument,
+    requestLanguageCodeActions,
+    requestLanguageCompletion,
     requestLanguageDefinition,
     requestLanguageHover,
     requestLanguageReferences,
     requestLanguageRename,
+    requestLanguageSymbols,
     restartLanguageServer,
 } from "../features/language/language-api"
-import { isLspSupportedDocumentPath, lspDocumentPathForWorkspace } from "../features/language/language-model"
+import { isLspSupportedDocumentPath, lspDocumentPathForWorkspace, normalizeLanguageCodeActions, normalizeLanguageCompletionItems } from "../features/language/language-model"
 import type { LanguageHover, LanguageServerStatus } from "../features/language/language-model"
 
 import {
@@ -127,6 +130,7 @@ import {
     mapMetric,
     mapLspDiagnostics,
     mapLspLocations,
+    mapLspSymbols,
     mapLocalEntries,
     mapDbHistory,
     mapQueryResult,
@@ -435,7 +439,7 @@ function closeLspDocument(pid: string, tab: Tab): void {
     }).then((status) => patchLspServer(pid, status)).catch(() => {})
 }
 
-async function applyRenameEdits(pid: string, groups: ReturnType<typeof flattenWorkspaceEdit>, newName: string): Promise<void> {
+async function applyWorkspaceEditGroups(pid: string, groups: ReturnType<typeof flattenWorkspaceEdit>, label: string): Promise<void> {
     const root = rootOf(pid)
     if (!root) return
     const failed: string[] = []
@@ -471,10 +475,10 @@ async function applyRenameEdits(pid: string, groups: ReturnType<typeof flattenWo
     }
     await pollWorkspaceDiag(pid).catch(() => {})
     if (failed.length) {
-        store().showToast("Rename applied with " + failed.length + " failed file" + (failed.length === 1 ? "" : "s"))
+        store().showToast(label + " applied with " + failed.length + " failed file" + (failed.length === 1 ? "" : "s"))
         return
     }
-    store().showToast("Renamed symbol to " + newName + " · " + groups.length + " file" + (groups.length === 1 ? "" : "s"))
+    store().showToast(label + " · " + groups.length + " file" + (groups.length === 1 ? "" : "s"))
 }
 
 // ---------------------------------------------------------------- loading
@@ -2488,6 +2492,26 @@ const delegate = {
         }
     },
 
+    async completeAt(path: string, line: number, col: number) {
+        const pid = store().active
+        const root = rootOf(pid)
+        if (!root || !isLspSupportedDocumentPath(path)) return []
+        try {
+            const pos = cursorToLsp({ ln: line, col })
+            const res = await requestLanguageCompletion({
+                workspaceId: pid,
+                workspaceRoot: root,
+                path: lspPath(root, path),
+                line: pos.line,
+                character: pos.character,
+            })
+            return normalizeLanguageCompletionItems(res)
+        } catch (error) {
+            store().showToast("Completion: " + errMsg(error))
+            return []
+        }
+    },
+
     findReferences(path: string, line: number, col: number) {
         const pid = store().active
         const root = rootOf(pid)
@@ -2522,6 +2546,62 @@ const delegate = {
         })()
     },
 
+    codeActionsAt(path: string, line: number, col: number) {
+        const pid = store().active
+        const root = rootOf(pid)
+        if (!root || !isLspSupportedDocumentPath(path)) return
+        void (async () => {
+            try {
+                const pos = cursorToLsp({ ln: line, col })
+                const res = await requestLanguageCodeActions({
+                    workspaceId: pid,
+                    workspaceRoot: root,
+                    path: lspPath(root, path),
+                    line: pos.line,
+                    character: pos.character,
+                })
+                const actions = normalizeLanguageCodeActions(res)
+                if (!actions.length) {
+                    store().showToast("No code actions found")
+                    return
+                }
+                patchProject(pid, (p) => {
+                    p.lspActions = actions
+                })
+                logDiag("info", "language", "code actions " + path)
+            } catch (error) {
+                store().showToast("Code actions: " + errMsg(error))
+            }
+        })()
+    },
+
+    applyCodeAction(index: number) {
+        const pid = store().active
+        const root = rootOf(pid)
+        const action = store().ui[pid]?.lspActions?.[index]
+        if (!root || !action) return
+        patchProject(pid, (p) => {
+            p.lspActions = null
+        })
+        if (!action.edit) {
+            store().showToast("Code action has no workspace edit")
+            return
+        }
+        const groups = flattenWorkspaceEdit(action.edit, root)
+        if (!groups.length) {
+            store().showToast("Code action produced no changes")
+            return
+        }
+        store().openConfirm({
+            title: "Code Action",
+            body: "Apply \"" + action.title + "\" to " + groups.length + " file" + (groups.length === 1 ? "" : "s") + ".",
+            label: "Apply",
+            action: () => {
+                void applyWorkspaceEditGroups(pid, groups, "Applied code action")
+            },
+        })
+    },
+
     renameSymbol(path: string, line: number, col: number, newName: string) {
         const pid = store().active
         const root = rootOf(pid)
@@ -2547,7 +2627,7 @@ const delegate = {
                     body: "Apply rename to " + groups.length + " file" + (groups.length === 1 ? "" : "s") + ".",
                     label: "Rename",
                     action: () => {
-                        void applyRenameEdits(pid, groups, newName)
+                        void applyWorkspaceEditGroups(pid, groups, "Renamed symbol to " + newName)
                     },
                 })
                 logDiag("info", "language", "rename requested " + path)
@@ -2584,6 +2664,32 @@ const delegate = {
             p.lspLoaded = false
         })
         void ensureLang(pid, true)
+    },
+
+    async workspaceSymbols(query: string) {
+        const pid = store().active
+        const root = rootOf(pid)
+        if (!root) return []
+        try {
+            const res = await requestLanguageSymbols({
+                workspaceId: pid,
+                workspaceRoot: root,
+                query,
+            })
+            const symbols = mapLspSymbols(res, root)
+            const needle = query.trim().toLowerCase()
+            if (!needle) return symbols.slice(0, 80)
+            return symbols
+                .filter((symbol) =>
+                    symbol.name.toLowerCase().includes(needle) ||
+                    symbol.path.toLowerCase().includes(needle) ||
+                    (symbol.containerName ?? "").toLowerCase().includes(needle)
+                )
+                .slice(0, 80)
+        } catch (error) {
+            store().showToast("Workspace symbols: " + errMsg(error))
+            return []
+        }
     },
 
     lspChange(tabId: number) {

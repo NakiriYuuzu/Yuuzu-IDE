@@ -14,6 +14,7 @@ import {
     lspRangeToCursor,
     mapLspDiagnostics,
     mapLspLocations,
+    mapLspSymbols,
     mapDbProfiles,
     mapDbHistory,
     mapDbProfilesPreservingState,
@@ -99,6 +100,9 @@ describe("langForPath", () => {
         expect(langForPath("package.json")).toBe("json")
         expect(langForPath("scripts/build.py")).toBe("py")
         expect(langForPath("typings/build.pyi")).toBe("py")
+        expect(langForPath("src/Program.cs")).toBe("cs")
+        expect(langForPath("src/Main.kt")).toBe("kt")
+        expect(langForPath("build.gradle.kts")).toBe("kt")
         expect(langForPath("index.html")).toBe("html")
         expect(langForPath("templates/page.htm")).toBe("html")
         expect(langForPath("x.sql")).toBe("sql")
@@ -220,6 +224,41 @@ describe("lsp mapping helpers", () => {
             "src/a.ts": [one, two],
             "src/b.ts": [three],
         })
+    })
+
+    test("maps workspace symbols to workspace-relative editor locations", () => {
+        expect(mapLspSymbols([
+            {
+                name: "UserService",
+                kind: 5,
+                containerName: "App.Services",
+                location: {
+                    uri: "file:///root/src/UserService.cs",
+                    range: {
+                        start: { line: 7, character: 4 },
+                        end: { line: 7, character: 15 },
+                    },
+                },
+            },
+            {
+                name: "Ignored",
+                kind: 12,
+                location: {
+                    uri: "file:///other/Ignored.kt",
+                    range: {
+                        start: { line: 1, character: 1 },
+                        end: { line: 1, character: 8 },
+                    },
+                },
+            },
+        ], "/root")).toEqual([{
+            name: "UserService",
+            kind: "Class",
+            path: "src/UserService.cs",
+            line: 8,
+            col: 5,
+            containerName: "App.Services",
+        }])
     })
 })
 

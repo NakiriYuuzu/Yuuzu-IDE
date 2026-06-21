@@ -300,6 +300,54 @@ describe("EditorView", () => {
         }
         expect(textarea.selectionStart).toBeGreaterThan(0)
     })
+
+    test("ctrl+space requests completions and inserts a selected item", async () => {
+        const calls: unknown[][] = []
+        registerRealDelegate({
+            completeAt: async (...args: unknown[]) => {
+                calls.push(args)
+                return [{ label: "console", detail: "global", insertText: "console" }]
+            },
+            openFile: () => {},
+            backupTab: () => {},
+            hoverAt: async () => null,
+        } as any)
+
+        const tab = {
+            id: 9105,
+            type: "file" as const,
+            name: "server.ts",
+            path: "src/server.ts",
+            realPath: "/workspace/src/server.ts",
+            content: "con",
+            contentLang: "ts",
+        }
+        v2Store.setState((s) => ({
+            mode: "real",
+            active: "api",
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    tabs: [tab],
+                    activeTab: tab.id,
+                },
+            },
+        }))
+
+        const view = render(<EditorView tab={tab as Tab} />)
+        const textarea = view.container.querySelector("textarea") as HTMLTextAreaElement
+        textarea.selectionStart = 3
+        textarea.selectionEnd = 3
+
+        fireEvent.keyDown(textarea, { key: " ", code: "Space", ctrlKey: true })
+
+        const option = await view.findByRole("button", { name: /console/ })
+        fireEvent.click(option)
+
+        expect(calls).toEqual([["src/server.ts", 1, 4]])
+        expect(v2Store.getState().ui.api.tabs[0].content).toBe("console")
+    })
 })
 
 describe("BrowserView", () => {
