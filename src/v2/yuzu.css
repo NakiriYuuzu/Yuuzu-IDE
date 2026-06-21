@@ -1070,6 +1070,11 @@
     background: var(--yz-18220d);
 }
 .yz2-ed-body { flex: 1; overflow: auto; padding: 10px 0 30px; }
+.yz2-ed-body.is-codemirror {
+    min-height: 0;
+    overflow: hidden;
+    padding: 0;
+}
 .yz2-ed-line { display: flex; min-height: 21px; line-height: 21px; }
 .yz2-ed-line:hover { background: var(--yz-0d1320); }
 .yz2-ed-ln {
@@ -1240,6 +1245,57 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+.yz2-cm-host {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    background: var(--yz-0a0e15);
+    color: var(--yz-e6edf3);
+    overflow: hidden;
+}
+.yz2-cm-host .cm-editor {
+    height: 100%;
+    min-height: 0;
+    background: var(--yz-0a0e15);
+    color: var(--yz-e6edf3);
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: var(--yz2-ed-fs, 13px);
+    outline: none;
+}
+.yz2-cm-host .cm-scroller {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    line-height: 21px;
+    overflow: auto;
+}
+.yz2-cm-host .cm-content {
+    padding: 0 32px 0 0;
+}
+.yz2-cm-host .cm-gutters {
+    background: var(--yz-0a0e15);
+    color: var(--yz-3d4654);
+    border-right: 1px solid var(--yz-1c2433);
+}
+.yz2-cm-host .cm-lineNumbers .cm-gutterElement {
+    min-width: 52px;
+    padding: 0 18px 0 0;
+}
+.yz2-cm-host .cm-activeLine,
+.yz2-cm-host .cm-activeLineGutter {
+    background: color-mix(in srgb, var(--yz-a8e23f) 8%, transparent);
+}
+.yz2-cm-host .cm-selectionBackground,
+.yz2-cm-host.cm-focused .cm-selectionBackground {
+    background: rgba(130, 170, 255, 0.28);
+}
+.yz2-cm-host .cm-tooltip,
+.yz2-cm-host .cm-tooltip-autocomplete {
+    background: var(--yz-141a26);
+    color: var(--yz-e6edf3);
+    border: 1px solid var(--yz-2b3547);
+    border-radius: 8px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
 }
 .yz2-refs {
     position: fixed;

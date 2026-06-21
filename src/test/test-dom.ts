@@ -24,6 +24,11 @@ export function ensureTestDom(): void {
       });
     }
 
+    const existingWindow = sharedHappyWindow as { MutationObserver?: typeof MutationObserver } | null;
+    if (!globalThis.MutationObserver && existingWindow?.MutationObserver) {
+      globalThis.MutationObserver = existingWindow.MutationObserver;
+    }
+
     return;
   }
 
@@ -39,6 +44,8 @@ export function ensureTestDom(): void {
   globalThis.MouseEvent = testWindow.MouseEvent as unknown as typeof MouseEvent;
   globalThis.KeyboardEvent = testWindow.KeyboardEvent as unknown as typeof KeyboardEvent;
   globalThis.PointerEvent = testWindow.PointerEvent as unknown as typeof PointerEvent;
+  globalThis.MutationObserver =
+    testWindow.MutationObserver as unknown as typeof MutationObserver;
 
   Object.defineProperty(globalThis, "navigator", {
     value: testWindow.navigator,

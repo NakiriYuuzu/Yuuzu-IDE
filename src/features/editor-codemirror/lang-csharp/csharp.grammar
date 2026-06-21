@@ -1,0 +1,159 @@
+@precedence {
+  else @right
+}
+
+@top CompilationUnit { TopItem* }
+
+@skip { whitespace | LineComment | BlockComment }
+
+TopItem {
+  UsingDirective |
+  NamespaceDeclaration |
+  TypeDeclaration |
+  PreprocessorDirective
+}
+
+BlockItem {
+  TypeDeclaration |
+  MemberDeclaration |
+  PreprocessorDirective
+}
+
+UsingDirective { kw<"using"> IdentifierPath ";" }
+
+NamespaceDeclaration {
+  kw<"namespace"> IdentifierPath (";" | Block)
+}
+
+TypeDeclaration {
+  AttributeList*
+  Modifier*
+  TypeBody
+}
+
+TypeBody {
+  ClassDeclaration |
+  InterfaceDeclaration |
+  RecordDeclaration |
+  EnumDeclaration |
+  StructDeclaration
+}
+
+ClassDeclaration { kw<"class"> identifier TypeParameters? BaseList? TypeBlock }
+InterfaceDeclaration { kw<"interface"> identifier TypeParameters? BaseList? InterfaceBody }
+RecordDeclaration { kw<"record"> (kw<"class"> | kw<"struct">)? identifier TypeParameters? PrimaryConstructor? BaseList? (";" | Block) }
+StructDeclaration { kw<"struct"> identifier TypeParameters? BaseList? TypeBlock }
+EnumDeclaration { kw<"enum"> identifier BaseList? EnumBody }
+
+MemberDeclaration {
+  AttributeList*
+  Modifier+
+  (MethodDeclaration | PropertyDeclaration | FieldDeclaration)
+}
+
+InterfaceBody { "{" InterfaceMember* "}" }
+InterfaceMember {
+  AttributeList*
+  Modifier*
+  (MethodDeclaration | PropertyDeclaration)
+}
+
+MethodDeclaration { TypeName identifier TypeParameters? ParameterList (Block | ";") }
+PropertyDeclaration { TypeName identifier AccessorBlock }
+FieldDeclaration { TypeName VariableDeclarator ("," VariableDeclarator)* ";" }
+VariableDeclarator { identifier ("=" Expression)? }
+
+AccessorBlock { "{" Accessor* "}" }
+Accessor { Modifier* (kw<"get"> | kw<"set"> | kw<"init">) (";" | Block) }
+
+PrimaryConstructor { ParameterList }
+ParameterList { "(" (Parameter ("," Parameter)*)? ")" }
+Parameter { AttributeList* Modifier* TypeName identifier? ("=" Expression)? }
+
+TypeBlock { "{" BlockItem* "}" }
+Block { "{" Statement* "}" }
+EnumBody { "{" (identifier ("=" Expression)? ("," identifier ("=" Expression)?)*)? ","? "}" }
+
+Statement {
+  Block |
+  IfStatement |
+  ForStatement |
+  ForeachStatement |
+  WhileStatement |
+  SwitchStatement |
+  ReturnStatement |
+  ExpressionStatement
+}
+
+IfStatement { kw<"if"> ParenthesizedExpression Statement (!else kw<"else"> Statement)? }
+ForStatement { kw<"for"> "(" Expression? ";" Expression? ";" Expression? ")" Statement }
+ForeachStatement { kw<"foreach"> "(" TypeName identifier kw<"in"> Expression ")" Statement }
+WhileStatement { kw<"while"> ParenthesizedExpression Statement }
+SwitchStatement { kw<"switch"> ParenthesizedExpression "{" SwitchSection* "}" }
+SwitchSection { (kw<"case"> Pattern ":" | kw<"default"> ":") Statement* }
+ReturnStatement { kw<"return"> Expression? ";" }
+ExpressionStatement { Expression ";" }
+
+Expression { AssignmentExpression }
+
+AssignmentExpression { BinaryExpression (("=" | "+=" | "-=" | "*=" | "/=" | "??=") AssignmentExpression)? }
+BinaryExpression { PostfixExpression (BinaryOp PostfixExpression)* }
+PostfixExpression { PrimaryExpression (MemberAccess | Invocation | ElementAccess)* }
+PrimaryExpression {
+  Literal |
+  identifier |
+  ParenthesizedExpression |
+  CollectionExpression
+}
+
+CollectionExpression { "[" (Expression ("," Expression)*)? ","? "]" }
+ParenthesizedExpression { "(" Expression? ")" }
+Invocation { ArgumentList }
+ArgumentList { "(" (Argument ("," Argument)*)? ")" }
+Argument { identifier ":" Expression | Expression }
+ElementAccess { "[" Expression "]" }
+MemberAccess { "." identifier }
+
+Pattern { identifier | Literal }
+BaseList { ":" TypeName ("," TypeName)* }
+TypeParameters { "<" identifier ("," identifier)* ">" }
+TypeName { IdentifierPath TypeParameters? ("?" | "[]")* }
+IdentifierPath { identifier ("." identifier)* }
+AttributeList { "[" IdentifierPath (ArgumentList)? "]" }
+Modifier {
+  kw<"public"> |
+  kw<"private"> |
+  kw<"protected"> |
+  kw<"internal"> |
+  kw<"static"> |
+  kw<"readonly"> |
+  kw<"sealed"> |
+  kw<"abstract"> |
+  kw<"virtual"> |
+  kw<"override"> |
+  kw<"async"> |
+  kw<"partial"> |
+  kw<"extern"> |
+  kw<"unsafe"> |
+  kw<"ref"> |
+  kw<"out"> |
+  kw<"in"> |
+  kw<"required">
+}
+Literal { number | string | character | kw<"true"> | kw<"false"> | kw<"null"> }
+BinaryOp { "==" | "!=" | "&&" | "||" | "??" | "+" | "-" | "*" | "/" | "%" | kw<"is"> | kw<"as"> }
+PreprocessorDirective { preproc }
+
+kw<term> { @specialize[@name={term}]<identifier, term> }
+
+@tokens {
+  @precedence { LineComment, BlockComment, "/" }
+  whitespace { $[ \t\r\n]+ }
+  LineComment { "//" ![\n]* }
+  BlockComment { "/*" (![*] | "*" ![/])* "*/" }
+  preproc { "#" ![\n]* }
+  identifier { $[A-Za-z_] $[A-Za-z0-9_]* }
+  number { $[0-9]+ ("." $[0-9]+)? }
+  string { "\"" (!["\\\n] | "\\" _)* "\"" | "$\"" (!["\\\n] | "\\" _ | "{" ![}]* "}")* "\"" | "@\"" (!["] | "\"\"")* "\"" }
+  character { "'" (!['\\\n] | "\\" _) "'" }
+}

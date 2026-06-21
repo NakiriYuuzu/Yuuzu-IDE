@@ -31,6 +31,7 @@ import {
     refChipStyle,
     resolveAzCols,
     SETTINGS_CONFIG,
+    settingDefault,
     sizeLabel,
     tsLabel,
     termSegs,
@@ -368,6 +369,12 @@ describe("lsp diagnostic helpers", () => {
 })
 
 describe("stability helpers", () => {
+    test("defaults the editable editor engine to CodeMirror", () => {
+        const editorEngineRow = SETTINGS_CONFIG.flatMap((section) => section.rows).find((row) => row.k === "editorEngine")
+        expect(settingDefault("editorEngine")).toBe("codemirror")
+        expect(editorEngineRow?.choice?.[0]).toBe("codemirror")
+    })
+
     test("formats metric and backup values for settings panels", () => {
         expect(fmtBytes(null)).toBe("—")
         expect(fmtBytes(0)).toBe("0 B")

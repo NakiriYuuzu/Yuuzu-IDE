@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Yuuzu-IDE 使用者視角深度測試報告</title>
+<style>
+:root {
+    --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --font-mono: "SFMono-Regular", "JetBrains Mono", Consolas, monospace;
+    --bg: #0d1117;
+    --surface: #111821;
+    --surface-2: #172131;
+    --text: #e6edf3;
+    --muted: #9aa7b5;
+    --border: #2b3547;
+    --accent: #a8e23f;
+    --accent-soft: rgba(168, 226, 63, 0.12);
+    --ok: #5bd489;
+    --warn: #f5c451;
+    --bad: #ff6b6b;
+    --info: #75b7ff;
+    --radius: 8px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: var(--font-sans); line-height: 1.6; padding: 2rem; }
+.container { max-width: 1180px; margin: 0 auto; }
+header { margin-bottom: 1.5rem; }
+.eyebrow { color: var(--accent); font-size: 0.75rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
+h1 { font-size: 2rem; margin: 0.25rem 0; letter-spacing: 0; }
+h2 { font-size: 1.25rem; margin-bottom: 0.9rem; }
+h3 { font-size: 1rem; margin-bottom: 0.45rem; }
+.meta, .muted { color: var(--muted); }
+.tldr { background: var(--accent-soft); border-left: 4px solid var(--accent); border-radius: var(--radius); margin: 1rem 0 1.5rem; padding: 1rem 1.2rem; }
+.metrics { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-bottom: 1.5rem; }
+.metric { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; }
+.metric strong { display: block; font-size: 1.9rem; line-height: 1.1; }
+.metric span { color: var(--muted); display: block; font-size: 0.85rem; margin-top: 0.3rem; }
+.tabs { border-bottom: 2px solid var(--border); display: flex; gap: 0; margin-bottom: 1.5rem; overflow-x: auto; }
+.tab { background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--muted); cursor: pointer; font-weight: 800; margin-bottom: -2px; padding: 0.75rem 1rem; white-space: nowrap; }
+.tab.active { border-bottom-color: var(--accent); color: var(--accent); }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+section { margin-bottom: 1.75rem; }
+.grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+.panel, details { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.panel { padding: 1rem; }
+details { margin-bottom: 0.85rem; }
+summary { cursor: pointer; font-weight: 800; padding: 0.85rem 1rem; }
+.body { background: var(--surface-2); border-top: 1px solid var(--border); padding: 1rem; }
+.badge { border-radius: 999px; display: inline-block; font-size: 0.72rem; font-weight: 900; margin-right: 0.45rem; padding: 0.12rem 0.5rem; }
+.pass { background: var(--ok); color: #06120b; }
+.fail { background: var(--bad); color: #160606; }
+.warn { background: var(--warn); color: #181104; }
+.info { background: var(--info); color: #06101b; }
+table { border-collapse: collapse; font-size: 0.9rem; width: 100%; }
+th, td { border-bottom: 1px solid var(--border); padding: 0.7rem; text-align: left; vertical-align: top; }
+th { color: var(--muted); font-size: 0.78rem; letter-spacing: 0.04em; text-transform: uppercase; }
+code, pre { font-family: var(--font-mono); }
+code { background: rgba(255, 255, 255, 0.07); border-radius: 5px; padding: 0.1rem 0.32rem; }
+pre { background: #080c12; border: 1px solid var(--border); border-radius: var(--radius); margin-top: 0.65rem; overflow: auto; padding: 0.8rem; }
+ul, ol { padding-left: 1.25rem; }
+li { margin: 0.25rem 0; }
+.flow { align-items: stretch; display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-top: 0.8rem; }
+.step { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.8rem; }
+.step b { color: var(--accent); display: block; font-size: 0.8rem; margin-bottom: 0.25rem; }
+.scenario { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 1rem; overflow: hidden; }
+.scenario-head { align-items: center; display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: space-between; padding: 0.85rem 1rem; }
+.scenario-head h3 { margin: 0; }
+.scenario-body { background: var(--surface-2); border-top: 1px solid var(--border); padding: 1rem; }
+.scenario-body ol { margin: 0.4rem 0 0.85rem; }
+.scenario-body li { margin-bottom: 0.3rem; }
+.result-grid { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top: 0.8rem; }
+.result-cell { background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.75rem; }
+.result-cell b { color: var(--accent); display: block; font-size: 0.78rem; margin-bottom: 0.25rem; text-transform: uppercase; }
+.actions { margin-top: 1.5rem; }
+.btn { background: var(--surface); border: 2px solid var(--border); border-radius: var(--radius); color: var(--text); cursor: pointer; font-weight: 800; padding: 0.55rem 1rem; }
+.btn:hover { border-color: var(--accent); }
+@media print {
+    body { background: #fff; color: #111; }
+    .tabs, .actions { display: none; }
+    .tab-content { display: block !important; }
+    .panel, details, .body, .metric, .step { background: #fff; color: #111; }
+}
+@media (max-width: 760px) {
+    body { padding: 1rem; }
+    .metrics { grid-template-columns: 1fr 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+    <header>
+        <div class="eyebrow">Deep User Journey Report</div>
+        <h1>Yuuzu-IDE 使用者視角深度測試報告</h1>
+        <p class="meta">Codex / Computer Use 驗證 · 2026-06-22 · 測試 repo: <code>/Users/yuuzu/HanaokaYuuzu/Ai/yuuzu-ide</code> · 臨時 workspace: <code>/tmp/yuuzu-ide-user-smoke.nVqass</code></p>
+    </header>
+
+    <div class="tldr">
+        <h3>結論</h3>
+        <p>建置、Rust/TS 測試、SQLite、Terminal、LSP、外部檔案偵測、Agent-Zone 基本操作與大檔案捲動都可用；但仍不能判定「所有 IDE 功能正常」。最影響使用者的是 Explorer 無法真正建立資料夾、建立檔案只能產生固定 <code>untitled.ts</code> 命名、CodeMirror 逐字輸入會掉焦、<code>Ctrl-Space</code> autocomplete 沒有彈出選單、Source Control 需要 Git 操作後才刷新、Browser screenshot capture 失敗、editor 語法色彩沒有接上 dark/light syntax token，以及右鍵測試期間 app 進入 process 存活但無可恢復視窗的狀態。</p>
+    </div>
+
+    <div class="metrics">
+        <div class="metric"><strong>7/7</strong><span>自動化驗證通過</span></div>
+        <div class="metric"><strong>53</strong><span>使用者流程 / menu action 實測</span></div>
+        <div class="metric"><strong>9</strong><span>已確認問題</span></div>
+        <div class="metric"><strong>7</strong><span>UX / safety 觀察事項</span></div>
+    </div>
+
+    <div class="tabs">
+        <button class="tab active" onclick="showTab('overview', event)">Overview</button>
+        <button class="tab" onclick="showTab('functional-order', event)">Functional Order</button>
+        <button class="tab" onclick="showTab('open', event)">Open IDE</button>
+        <button class="tab" onclick="showTab('findings', event)">Findings</button>
+        <button class="tab" onclick="showTab('git-agent', event)">Git / Agent</button>
+        <button class="tab" onclick="showTab('context-menus', event)">Context Menus</button>
+        <button class="tab" onclick="showTab('external', event)">External Sync</button>
+        <button class="tab" onclick="showTab('matrix', event)">Matrix</button>
+        <button class="tab" onclick="showTab('evidence', event)">Evidence</button>
+    </div>
+
+    <div id="overview" class="tab-content active">
+        <section>
+            <h2>測試覆蓋</h2>
+            <div class="grid">
+                <div class="panel"><h3><span class="badge pass">PASS</span>Build / tests</h3><p>Bun tests/build、Cargo tests/fmt/clippy、large-file verifier、debug app bundle 全通過。</p></div>
+                <div class="panel"><h3><span class="badge warn">PARTIAL</span>Workspace / files</h3><p>開檔、儲存、外部新增/修改、刪除檔案可用；新增檔案命名與新增資料夾流程不合格。</p></div>
+                <div class="panel"><h3><span class="badge warn">PARTIAL</span>Source Control</h3><p>Git panel 初始沒有即時顯示 CLI 變更；點 Fetch 後才刷新出 5 個 changes。</p></div>
+                <div class="panel"><h3><span class="badge fail">FAIL</span>Browser screenshot</h3><p>Browser preview 能載入 loopback page，但 screenshot capture 傳入 <code>screencapture -R</code> 的 rect 不在 display 內。</p></div>
+                <div class="panel"><h3><span class="badge pass">PASS</span>Terminal / LSP</h3><p>Terminal cwd 正確；<code>bun run test</code> 成功；TypeScript Language Server running，workspace symbol 搜尋可找到 <code>greet</code>。</p></div>
+                <div class="panel"><h3><span class="badge fail">FAIL</span>Editor input</h3><p>剪貼簿貼上與儲存可用，但逐字輸入後 focus 會掉到 WebView，連續手動輸入、換行、數字與標點都必須反覆重新聚焦。</p></div>
+                <div class="panel"><h3><span class="badge pass">PASS</span>SQLite database</h3><p>新增 SQLite connection、測試連線、儲存 profile、展開 schema、開 table、執行 SQL 查詢皆成功。</p></div>
+                <div class="panel"><h3><span class="badge pass">PASS</span>Agent-Zone</h3><p>可建立 real shell session、輸入命令、切 2/3/4/Auto layout、focus、collapse、close，最後計數回到 0。</p></div>
+                <div class="panel"><h3><span class="badge warn">PARTIAL</span>Right-click menus</h3><p>手動點測 file/dir/root 右鍵；app window 隨後無法恢復。14 種 context menu 的 action wiring 另以 component-level smoke test 全部 render/click 通過。</p></div>
+            </div>
+        </section>
+    </div>
+
+    <div id="functional-order" class="tab-content">
+        <section>
+            <h2>依功能順序排列的完整測試步驟</h2>
+            <p class="muted">順序依一般使用者從啟動 IDE、選 workspace、操作檔案、編輯程式、同步外部變更、使用終端/LSP/Git/DB/Browser/Agent-Zone 到最後清理的流程排列。每個區塊都列出實際操作步驟、預期、實際結果與證據。</p>
+
+            <div class="scenario">
+                <div class="scenario-head"><h3>0. 自動化基準驗證</h3><span class="badge pass">PASS</span></div>
+                <div class="scenario-body">
+                    <ol>
+                        <li>執行 <code>bun test</code> 確認前端單元/整合測試。</li>
+                        <li>執行 <code>bun run build</code> 確認 Vite build。</li>
+                        <li>執行 <code>cargo test --manifest-path src-tauri/Cargo.toml</code>、<code>cargo fmt --check</code>、<code>cargo clippy -- -D warnings</code>。</li>
+                        <li>執行 <code>bun run verify:editor-large-file</code> 驗證 CodeMirror 大檔案捲動。</li>
+                        <li>執行 <code>bun run tauri build --debug --bundles app</code> 確認 debug app bundle 可建置。</li>
+                    </ol>
+                    <div class="result-grid">
+                        <div class="result-cell"><b>Expected</b><p>所有基準 gate 必須通過，才開始 UI 深測。</p></div>
+                        <div class="result-cell"><b>Actual</b><p>7/7 通過；Vite 只有 chunk-size warning。</p></div>
+                        <div class="result-cell"><b>Evidence</b><p><code>673 pass</code>、<code>355 passed</code>、large-file verifier 到 line 10000、debug app bundle built。</p></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="scenario">
+                <div class="scenario-head"><h3>1. 啟動 IDE / Workspace 選擇 / 新增 Project</h3><span class="badge warn">PARTIAL</span></div>
+                <div class="scenario-body">
+                    <ol>
+                        <li>開啟 debug app bundle。</li>
+                        <li>確認頂部 title 與左側 project chip 顯示目前 active workspace。</li>
+                        <li>點左側 <code>+</code> 新增資料夾；第一次單擊沒有明顯反應，第二次/雙擊才出現 macOS Open panel。</li>
+                        <li>選擇臨時專案 <code>/tmp/yuuzu-ide-user-smoke.nVqass</code>。</li>
+                        <li>新增後手動點新的 project chip，切換 active workspace。</li>
+                        <li>後續右鍵測試期間，app 進入 process 存活但沒有可恢復視窗的狀態；嘗試 <code>open -a</code>、AppleScript <code>reopen</code>、直接 binary、<code>bun run tauri dev</code> 都無法恢復視窗。</li>
+                    </ol>
+                    <div class="result-grid">
+                        <div class="result-cell"><b>Expected</b><p>新增 project 後流程清楚，且 app 視窗可正常 reopen。</p></div>
+                        <div class="result-cell"><b>Actual</b><p>新增與切換可完成，但不自動切換 workspace；視窗 lifecycle 出現 P1 問題。</p></div>
+                        <div class="result-cell"><b>Evidence</b><p>Computer Use 後段回報 <code>noWindowsAvailable</code> / <code>cgWindowNotFound</code>；最後 kill 無視窗 process。</p></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="scenario">
+                <div class="scenario-head"><h3>2. Explorer：檔案、資料夾、Root 與右鍵選單</h3><span class="badge warn">PARTIAL</span></div>
+                <div class="scenario-body">
+                    <ol>
+                        <li>從外部建立 <code>context-menu-dir/</code>、<code>context-menu-root.txt</code>，確認 Explorer 即時顯示。</li>
+                        <li>右鍵檔案：測 <code>Open</code>、<code>Open to the side</code>、<code>Git history</code>、<code>Count tokens</code>、<code>New file</code>、<code>New folder</code>、<code>Delete</code>。</li>
+                        <li>右鍵資料夾：測 <code>New file</code>、<code>New folder</code>、<code>Delete</code>。</li>
+                        <li>右鍵 Explorer 空白/root：測 <code>New file</code>、<code>New folder</code>。</li>
+                        <li>建立檔案多次，觀察命名；刪除檔案與資料夾，觀察 tree/tab 是否同步。</li>
+                    </ol>
+                    <div class="result-grid">
+                        <div class="result-cell"><b>Expected</b><p>可命名建立檔案/資料夾，刪除有確認，檔案樹和 tab 同步。</p></div>
+                        <div class="result-cell"><b>Actual</b><p>Open/Open side/history/token/delete 可用；New file 固定 <code>untitled.ts</code>；New folder 只 toast 不建立；Delete 無確認。</p></div>
+                        <div class="result-cell"><b>Evidence</b><p><code>Created file context-menu-dir/untitled.ts</code>、<code>New folder - create a file inside it...</code>、<code>Deleted context-menu-dir</code>。</p></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="scenario">
+                <div class="scenario-head"><h3>3. Tabs / Split Editor</h3><span class="badge pass">PASS</span></div>
+                <div class="scenario-body">
+                    <ol>
+                        <li>右鍵檔案選 <code>Open to the side</code>。</li>
+                        <li>確認右側 split 顯示同一檔案內容，並出現 Close split control。</li>
+                        <li>Component-level 補測 tab context menu：<code>Close tab</code>、<code>Close others</code>、<code>Close all tabs</code>、<code>Show in split</code>、terminal tab <code>Rename terminal</code>。</li>
+                    </ol>
+                    <div class="result-grid">
+                        <div class="result-cell"><b>Expected</b><p>tab/split 操作不破壞主 editor 狀態。</p></div>
+                        <div class="result-cell"><b>Actual</b><p>檔案 split 手動通過；tab context menu wiring 由 smoke test 通過。</p></div>
+                        <div class="result-cell"><b>Evidence</b><p>右側 split 顯示 <code>context-menu-root.txt</code>；<code>Overlays.test.tsx</code> 覆蓋 terminal rename。</p></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="scenario">
+                <div class="scenario-head"><h3>4. Editor：開檔、輸入、貼上、儲存、Autocomplete、Theme</h3><span class="badge fail">FAIL</span></div>
+                <div class="scenario-body">
+                    <ol>
+                        <li>開啟 <code>src/main.ts</code>、<code>src/untitled.ts</code>、<code>src/untitled-2.ts</code>。</li>
+                        <li>使用 accessibility set-value 嘗試直接寫 editor buffer。</li>
+                        <li>手動輸入字母、Enter、數字、標點：<code>a</code>、<code>Return</code>、<code>1</code>、<code>,</code>。</li>
+                        <li>使用剪貼簿貼上 <code>const alphaValue = 1;</code> 與 <code>al</code>，再按 <code>Ctrl-Space</code> 測 autocomplete。</li>
+                        <li>使用 <code>Cmd+S</code> 儲存，並從 shell 檢查檔案內容。</li>
+                        <li>切換 dark/light theme，觀察 editor chrome 與 syntax token。</li>
+                        <li>右鍵 editor context menu 的 Copy/Format/Ask Claude/Go to Definition/Find References/Rename Symbol/Code Actions/Count tokens 由 component-level smoke test 和既有測試補足。</li>
+                    </ol>
+                    <div class="result-grid">
+                        <div class="result-cell"><b>Expected</b><p>可連續輸入、換行、數字、標點；autocomplete popup 出現；theme 語法色彩跟隨 dark/light。</p></div>
+                        <div class="result-cell"><b>Actual</b><p>貼上與儲存可用；逐字輸入每鍵後掉焦；<code>Ctrl-Space</code> 無 popup；syntax tokens 仍使用 CodeMirror defaultHighlightStyle。</p></div>
+                        <div class="result-cell"><b>Evidence</b><p>直接輸入整段只留下 <code>e</code>；手動鍵需要每次 refocus；<code>syntaxHighlighting(defaultHighlightStyle)</code>。</p></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="scenario">
+                <div class="scenario-head"><h3>5. 外部檔案同步 / changed-on-disk 保護</h3><span class="badge pass">PASS</span></div>
+                <div class="scenario-body">
+                    <ol>
+                        <li>在 IDE 外部建立 <code>src/external-added.ts</code>。</li>
+                        <li>在 IDE 外部修改已開啟且沒有本地未儲存變更的 <code>src/main.ts</code>。</li>
+                        <li>製造本地未儲存變更，再從 IDE 外部修改同一檔案。</li>
+                        <li>觀察 header 是否出現 <code>changed on disk</code>，並測 <code>Reload</code>。</li>
+                    </ol>
+                    <div class="result-grid">
+                        <div class="result-cell"><b>Expected</b><p>外部新增/修改即時感應，衝突時保護本地未儲存內容。</p></div>
+                        <div class="result-cell"><b>Actual</b><p>Explorer/editor 都感應外部變更；衝突時出現 Reload/Overwrite；Reload 成功。</p></div>
+                        <div class="result-cell"><b>Evidence</b><p><code>externalAdded</code>、<code>externalEdit</code>、<code>externalConflict</code> 三條路徑均測過。</p></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="scenario">
+                <div class="scenario-head"><h3>6. Terminal</h3><span class="badge pass">PASS</span></div>
+                <div class="scenario-body">
+                    <ol>
+                        <li>開啟 terminal tab。</li>
+                        <li>執行 <code>pwd</code> 確認 cwd。</li>
+                        <li>執行 <code>bun run test</code> 確認臨時專案 script。</li>
+                        <li>Terminal context menu 的 Clear/Copy last output/Explain/Kill process 由 smoke test 補足。</li>
+                    </ol>
+                    <div class="result-grid">
+                        <div class="result-cell"><b>Expected</b><p>terminal cwd 應為 active workspace，可執行專案命令。</p></div>
+                        <div class="result-cell"><b>Actual</b><p>cwd 正確；測試 script 輸出成功。</p></div>
+                        <div class="result-cell"><b>Evidence</b><p><code>/private/tmp/yuuzu-ide-user-smoke.nVqass</code>；<code>smoke-test-ok</code>。</p></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="scenario">
+                <div class="scenario-head"><h3>7. LSP / Language 功能</h3><span class="badge pass">PASS</span></div>
+                <div class="scenario-body">
+                    <ol>
+                        <li>開啟 Language Servers 面板，確認 TypeScript Language Server running。</li>
+                        <li>用 workspace symbol 搜尋 <code>greet</code>。</li>
+                        <li>透過測試覆蓋 hover/reveal/goto/references/code actions routing。</li>
+                    </ol>
+                    <div class="result-grid">
+                        <div class="result-cell"><b>Expected</b><p>TypeScript 專案內 LSP 可啟動，能定位 symbol。</p></div>
+                        <div class="result-cell"><b>Actual</b><p>server running，symbol 搜尋命中。</p></div>
+                        <div class="result-cell"><b>Evidence</b><p><code>greet</code> returned <code>src/main.ts:1</code>；<code>Overlays.test.tsx</code> / <code>ContentViews.test.tsx</code> 相關測試通過。</p></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="scenario">
+                <div class="scenario-head"><h3>8. Git / Source Control / Git Graph</h3><span class="badge warn">PARTIAL</span></div>
+                <div class="scenario-body">
+                    <ol>
+                        <li>用 CLI 檢查臨時 repo status。</li>
+                        <li>切到 Source Control，比對 IDE 顯示與 CLI。</li>
+                        <li>開 Git Graph，檢查 commit list、commit detail、changed files、message。</li>
+                        <li>點 changed file 開 diff。</li>
+                        <li>測 filter：<code>All</code>、<code>yuuzu</code>、<code>claude</code>。</li>
+                        <li>測 Copy hash 並用 <code>pbpaste</code> 驗證 clipboard。</li>
+                        <li>測 Fetch/Pull/Push 在無 remote repo 下的回饋。</li>
+                        <li>測 Checkout dialog、Cherry-pick current commit error、Revert dirty tree confirmation + Git abort。</li>
+                        <li>Commit context menu 的 reset/rebase/export/compare 等由 smoke test 與 <code>Overlays.test.tsx</code> 補足。</li>
+                    </ol>
+                    <div class="result-grid">
+                        <div class="result-cell"><b>Expected</b><p>Source Control live 反映 working tree；Git Graph 行為和 clipboard 正確。</p></div>
+                        <div class="result-cell"><b>Actual</b><p>Fetch 後才刷新；diff/Fetch/Pull/Push/checkout/revert/cherry-pick 路徑可用或有錯誤保護；Copy hash 未更新 clipboard。</p></div>
+                        <div class="result-cell"><b>Evidence</b><p>CLI status 有 <code>M</code>/<code>??</code>；IDE 初始 <code>0 No changes</code>，Fetch 後 <code>CHANGES · 5</code>；<code>pbpaste</code> 未變 hash。</p></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="scenario">
+                <div class="scenario-head"><h3>9. Database / SQLite</h3><span class="badge pass">PASS</span></div>
+                <div class="scenario-body">
+                    <ol>
+                        <li>用 <code>uv run python</code> 在臨時 workspace 建立 <code>smoke.sqlite</code>。</li>
+                        <li>在 IDE Database panel 新增 SQLite connection。</li>
+                        <li>填入 connection name 與 SQLite file path。</li>
+                        <li>點 test connection。</li>
+                        <li>儲存 profile，展開 connection schema。</li>
+                        <li>開 <code>people</code> table，確認 rows。</li>
+                        <li>開 SQL console，執行 <code>SELECT count(*) AS total FROM people;</code>。</li>
+                        <li>DB connection/table context menu 由 smoke test 與 <code>Overlays.test.tsx</code> 補足。</li>
+                    </ol>
+                    <div class="result-grid">
+                        <div class="result-cell"><b>Expected</b><p>SQLite profile 可新增、測試、保存、查 schema、查詢。</p></div>
+                        <div class="result-cell"><b>Actual</b><p>全部通過。</p></div>
+                        <div class="result-cell"><b>Evidence</b><p><code>連線成功 SQLite 3.53.2</code>；<code>people 2</code>；query result <code>total = 2</code>。</p></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="scenario">
+                <div class="scenario-head"><h3>10. Browser Preview</h3><span class="badge fail">FAIL</span></div>
+                <div class="scenario-body">
+                    <ol>
+                        <li>啟動 loopback 測試頁。</li>
+                        <li>在 Browser tab 載入 <code>http://127.0.0.1:8765</code>。</li>
+                        <li>點 screenshot capture。</li>
+                        <li>Browser context menu 的 Reload/Copy URL/Open in split 由 smoke test 補足。</li>
+                    </ol>
+                    <div class="result-grid">
+                        <div class="result-cell"><b>Expected</b><p>Browser 可載入頁面並成功截圖。</p></div>
+                        <div class="result-cell"><b>Actual</b><p>頁面可載入；screenshot capture 失敗。</p></div>
+                        <div class="result-cell"><b>Evidence</b><p><code>rect (337.0, 1554.0, 863.0, 661.0) does not intersect any displays</code>。</p></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="scenario">
+                <div class="scenario-head"><h3>11. Agent-Zone</h3><span class="badge pass">PASS</span></div>
+                <div class="scenario-body">
+                    <ol>
+                        <li>切到 AgentZone panel，確認空狀態。</li>
+                        <li>點 <code>Start a session</code> 建立 <code>zsh · session 1</code>。</li>
+                        <li>在 session terminal 輸入 <code>echo agent-zone-123 && pwd</code>。</li>
+                        <li>切 layout：<code>2</code>、<code>3</code>、<code>4</code>、<code>Auto</code>。</li>
+                        <li>建立第二個 session，測 focus / 解除 focus / 雙 session 同屏 / splitter。</li>
+                        <li>測 collapse 與 close，最後 session count 回到 0。</li>
+                        <li>Session context menu 的 Focus/Collapse/New/Rename/Close 由 smoke test 與 <code>AgentZone.test.tsx</code> 補足。</li>
+                    </ol>
+                    <div class="result-grid">
+                        <div class="result-cell"><b>Expected</b><p>多 session 管理與 terminal input 穩定。</p></div>
+                        <div class="result-cell"><b>Actual</b><p>全部手動通過。</p></div>
+                        <div class="result-cell"><b>Evidence</b><p><code>agent-zone-123</code>；cwd <code>/private/tmp/yuuzu-ide-user-smoke.nVqass</code>；session count <code>0 -> 1 -> 2 -> 1 -> 0</code>。</p></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="scenario">
+                <div class="scenario-head"><h3>12. SSH / SFTP</h3><span class="badge warn">COMPONENT ONLY</span></div>
+                <div class="scenario-body">
+                    <ol>
+                        <li>檢查 SSH-SFTP panel 與 host/sftp context menu 實作。</li>
+                        <li>沒有使用真實遠端 host，避免建立未授權連線。</li>
+                        <li>用 component-level smoke test 點擊 host/sftp context menu enabled items。</li>
+                        <li>跑 <code>SftpView.test.tsx</code> 覆蓋 disconnect/reconnect/run command。</li>
+                    </ol>
+                    <div class="result-grid">
+                        <div class="result-cell"><b>Expected</b><p>host/sftp menu 不崩潰，真遠端需另有安全測資。</p></div>
+                        <div class="result-cell"><b>Actual</b><p>component-level pass；沒有做真 SSH/SFTP 端到端。</p></div>
+                        <div class="result-cell"><b>Evidence</b><p>context smoke 包含 <code>host</code>、<code>sftp</code>；<code>SftpView.test.tsx</code> pass。</p></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="scenario">
+                <div class="scenario-head"><h3>13. 所有右鍵 Context Menu 補測</h3><span class="badge pass">PASS</span></div>
+                <div class="scenario-body">
+                    <ol>
+                        <li>從 <code>src/v2/Overlays.tsx</code> 列出 14 種 target：file、dir、root、tab、project、editor、term、browser、dbconn、dbtable、host、sftp、commit、session。</li>
+                        <li>已手動 UI 點測 file/dir/root。</li>
+                        <li>因 app 進入無視窗狀態，新增臨時 <code>output/context-menu-smoke.test.tsx</code>，逐一 render/click 每個 target 的 enabled item。</li>
+                        <li>執行 smoke test 後刪除臨時測試檔。</li>
+                        <li>執行既有 <code>Overlays.test.tsx</code>、<code>AgentZone.test.tsx</code>、<code>SftpView.test.tsx</code>、<code>ContentViews.test.tsx</code> 補強 coverage。</li>
+                    </ol>
+                    <div class="result-grid">
+                        <div class="result-cell"><b>Expected</b><p>所有 menu 至少 render 並點擊 enabled item，不拋錯。</p></div>
+                        <div class="result-cell"><b>Actual</b><p>14/14 target pass；有 React <code>act(...)</code> warning，但無 failed test。</p></div>
+                        <div class="result-cell"><b>Evidence</b><p><code>14 pass, 0 fail</code>；臨時 test 已刪除；HTML 報告保留結果。</p></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="scenario">
+                <div class="scenario-head"><h3>14. 清理 / 結束狀態</h3><span class="badge pass">PASS</span></div>
+                <div class="scenario-body">
+                    <ol>
+                        <li>停止無視窗 Yuuzu-IDE process。</li>
+                        <li>確認沒有 <code>tauri dev</code>、Vite、Cargo Tauri dev process 殘留。</li>
+                        <li>確認臨時 context-menu smoke test 檔已刪除。</li>
+                        <li>確認 HTML parser 可讀取報告。</li>
+                        <li>確認主 repo 中只新增/更新 HTML 報告，沒有把臨時測試檔留下。</li>
+                    </ol>
+                    <div class="result-grid">
+                        <div class="result-cell"><b>Expected</b><p>測試不留下 dev process 或臨時測試檔。</p></div>
+                        <div class="result-cell"><b>Actual</b><p>無 Yuuzu-IDE/Tauri dev/Vite 殘留；只剩 Codex broker。</p></div>
+                        <div class="result-cell"><b>Evidence</b><p><code>html-ok 38732</code>；<code>temp-test-removed</code>；<code>pgrep</code> 只剩 Codex broker。</p></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <div id="open" class="tab-content">
+        <section>
+            <h2>打開 IDE 後使用者需要先做什麼</h2>
+            <p>深測顯示開啟 IDE 後最重要的是先確認 active workspace，因為 app 會保留多 project 狀態，而且新增 project 後不會自動切換到新 project。</p>
+            <div class="flow">
+                <div class="step"><b>1. 看 title / 左側 chip</b><p>確認畫面頂部與左側 active chip 是要工作的 workspace。</p></div>
+                <div class="step"><b>2. 不對就切 project</b><p>點左側 project chip；本次從 <code>yuuzu-ide</code> 切到 temp project 可正常切換。</p></div>
+                <div class="step"><b>3. 沒有就 Add folder</b><p>使用 <code>+</code> 加專案資料夾。實測第一次單擊沒有明顯反應，雙擊才開啟 macOS Open panel。</p></div>
+                <div class="step"><b>4. 新增後再點新 chip</b><p>新增 temp folder 成功後，active workspace 仍停在舊 repo；必須再點新 project chip。</p></div>
+                <div class="step"><b>5. 驗證 cwd / Git</b><p>Terminal cwd 正確；Git panel 要用 Fetch 或其他 Git 操作才看到最新 changes。</p></div>
+            </div>
+        </section>
+        <details open><summary><span class="badge warn">UX</span> Add project flow 需要更明確</summary><div class="body">
+            <p>從使用者角度，新增 folder 後預期可能會自動切到新 workspace，或至少有明顯提示「已加入，請點 project chip 切換」。目前 toast 有顯示 <code>state of other projects is kept</code>，但沒有直接引導下一步。</p>
+        </div></details>
+    </div>
+
+    <div id="findings" class="tab-content">
+        <section>
+            <h2>已確認問題</h2>
+            <details open><summary><span class="badge fail">P1</span> Explorer 建立資料夾沒有真的建立資料夾</summary><div class="body">
+                <p><strong>重現：</strong>Explorer 右鍵 <code>src</code> -> <code>New folder</code>。</p>
+                <p><strong>結果：</strong>只顯示 <code>New folder - create a file inside it to materialise the folder</code> toast，沒有命名輸入、沒有資料夾節點、磁碟也沒有新資料夾。</p>
+                <p><strong>影響：</strong>使用者無法從 IDE 建立空資料夾；這是核心 file explorer 功能缺口。</p>
+            </div></details>
+
+            <details open><summary><span class="badge fail">P1</span> Editor 逐字輸入會掉焦，無法正常連續打字</summary><div class="body">
+                <p><strong>重現：</strong>在新建 <code>src/untitled-2.ts</code> 中手動輸入字母、Enter、數字與標點。</p>
+                <p><strong>結果：</strong>每次按鍵後 focus 會掉到 WebView；<code>a</code> 可輸入，之後要重新點 editor 才能輸入 <code>Return</code>、<code>1</code>、<code>,</code>。直接 type 一整段 <code>export const directEditor = 42;</code> 時只進入第一個字元 <code>e</code>。</p>
+                <p><strong>影響：</strong>剪貼簿貼上可救急，但以使用者角度，手動輸入、換行、數字、標點都是 IDE 最基本工作流，這目前不合格。</p>
+            </div></details>
+
+            <details open><summary><span class="badge fail">P1</span> Browser screenshot capture bounds 超出 macOS display</summary><div class="body">
+                <p><strong>重現：</strong>開 Browser tab，載入 <code>http://127.0.0.1:8765</code> 成功後點 screenshot capture。</p>
+                <pre>Screenshot: screencapture command failed: rect (337.0, 1554.0, 863.0, 661.0) does not intersect any displays</pre>
+                <p><strong>影響：</strong>Browser preview 可瀏覽，但無法截圖，也無法把 browser screenshot 放入 agent context。</p>
+            </div></details>
+
+            <details open><summary><span class="badge fail">P1</span> App window lifecycle 可進入無視窗且無法 reopen 的狀態</summary><div class="body">
+                <p><strong>重現：</strong>右鍵 tab strip 補測期間，Computer Use 回報 <code>noWindowsAvailable</code> / <code>cgWindowNotFound</code>；macOS process 仍存在，但 <code>open -a</code>、AppleScript <code>reopen</code>、直接執行 app binary、以及 <code>bun run tauri dev</code> 都無法恢復可見視窗。</p>
+                <p><strong>處理：</strong>最後手動 kill 無視窗的 <code>yuuzu-ide</code> process，避免背景殘留。</p>
+                <p><strong>影響：</strong>這是 IDE 級別的 lifecycle 問題；使用者關掉或失去主視窗後，app 可能只剩背景 process，無法繼續操作。</p>
+            </div></details>
+
+            <details><summary><span class="badge warn">P2</span> 建立檔案只能建立固定 <code>untitled.ts</code> 命名</summary><div class="body">
+                <p><strong>重現：</strong>Explorer 右鍵 <code>src</code> -> <code>New file</code> 兩次。</p>
+                <p><strong>結果：</strong>第一次建立 <code>src/untitled.ts</code>，第二次建立 <code>src/untitled-2.ts</code>；沒有命名 prompt、沒有副檔名選擇、也沒有 rename 流程。</p>
+                <p><strong>程式碼證據：</strong><code>src/v2/controller.ts</code> 的 <code>addNode()</code> 對 file hardcode <code>untitled.ts</code>，重複時遞增 <code>untitled-2.ts</code>。</p>
+            </div></details>
+
+            <details><summary><span class="badge warn">P2</span> Autocomplete 沒有以 <code>Ctrl-Space</code> 彈出</summary><div class="body">
+                <p><strong>重現：</strong>在 <code>src/untitled-2.ts</code> 貼上 <code>const alphaValue = 1;</code>，第二行輸入 <code>al</code>，聚焦 editor 後按 <code>Ctrl-Space</code>。</p>
+                <p><strong>結果：</strong>畫面沒有 completion popup，也沒有插入 <code>alphaValue</code>；同一份程式碼設定中可看到 CodeMirror extension 有 <code>autocompletion()</code> 與 <code>Ctrl-Space</code> keymap。</p>
+            </div></details>
+
+            <details><summary><span class="badge warn">P2</span> Source Control / Git Graph freshness 需要手動 Git 操作才刷新</summary><div class="body">
+                <p><strong>現象：</strong>CLI 顯示 <code>M src/main.ts</code>、<code>?? smoke.sqlite</code>、<code>?? src/external-added.ts</code>、<code>?? src/untitled.ts</code> 等變更時，IDE Source Control 仍顯示 <code>0 No changes</code>；點 Git Graph 的 <code>Fetch</code> 後才刷新成 <code>CHANGES · 5</code>。</p>
+                <p><strong>影響：</strong>Git 狀態不是 live；使用者容易在 commit 前誤判沒有變更。</p>
+            </div></details>
+
+            <details><summary><span class="badge warn">P2</span> CodeMirror 語法色彩未接上 dark/light syntax theme token</summary><div class="body">
+                <p><strong>現象：</strong>切換 light theme 後 editor 容器、gutter 與背景會變亮；但 CodeMirror token 高亮仍來自 <code>defaultHighlightStyle</code>，沒有使用 <code>src/v2/yuzu.css</code> 內定義的 <code>--yz-syntax-*</code> dark/light 變數。</p>
+                <p><strong>程式碼證據：</strong><code>src/v2/editor/CodeMirrorEditorSurface.tsx</code> 使用 <code>syntaxHighlighting(defaultHighlightStyle, { fallback: true })</code>；<code>.yz2-cm-host</code> 只覆蓋 editor chrome。</p>
+            </div></details>
+
+            <details><summary><span class="badge warn">P2</span> Git Graph Copy hash 沒有更新 macOS clipboard</summary><div class="body">
+                <p><strong>重現：</strong>在 Git Graph 點選 commit hash 旁的 copy icon，再執行 <code>pbpaste</code>。</p>
+                <p><strong>結果：</strong>clipboard 仍是 autocomplete 測試文字 <code>const alphaValue = 1; al</code>，沒有變成 commit hash。</p>
+            </div></details>
+
+            <details><summary><span class="badge warn">P3</span> Explorer Delete 直接刪除，沒有二次確認</summary><div class="body">
+                <p><strong>現象：</strong>右鍵 <code>src/untitled-2.ts</code> 選 <code>Delete</code> 後立即刪除檔案，toast 顯示 <code>Deleted src/untitled-2.ts</code>，tab 同步關閉。</p>
+                <p><strong>結果：</strong>刪除功能本身通過；但沒有 confirm dialog 或 typed confirmation，容易誤刪。</p>
+            </div></details>
+        </section>
+    </div>
+
+    <div id="external" class="tab-content">
+        <section>
+            <h2>外部新增 / 編輯感應結果</h2>
+            <table>
+                <thead><tr><th>情境</th><th>結果</th><th>證據</th></tr></thead>
+                <tbody>
+                    <tr><td>外部新增檔案</td><td><span class="badge pass">PASS</span></td><td><code>src/external-added.ts</code> 出現在 Explorer，命令面板也列出，editor 可開啟並讀到 <code>export const externalAdded = true;</code>。</td></tr>
+                    <tr><td>開啟中、無本地未儲存編輯時外部修改</td><td><span class="badge pass">PASS</span></td><td><code>src/main.ts</code> 外部追加 <code>externalEdit</code> 後，editor 內容更新。</td></tr>
+                    <tr><td>本地未儲存編輯 + 外部修改同檔</td><td><span class="badge pass">PASS</span></td><td>Header 顯示 <code>changed on disk</code>，出現 <code>Reload</code> 與 <code>Overwrite</code>；點 <code>Reload</code> 後恢復磁碟版本。</td></tr>
+                    <tr><td>外部變更在 Git panel 中自動反映</td><td><span class="badge warn">PARTIAL</span></td><td>初始仍為 <code>0 No changes</code>；點 <code>Fetch</code> 後刷新成 <code>CHANGES · 5</code>。</td></tr>
+                </tbody>
+            </table>
+        </section>
+    </div>
+
+    <div id="git-agent" class="tab-content">
+        <section>
+            <h2>Git Graph / Agent-Zone</h2>
+            <table>
+                <thead><tr><th>Area</th><th>Check</th><th>Result</th><th>Evidence</th></tr></thead>
+                <tbody>
+                    <tr><td>Git Graph</td><td>Commit list / details</td><td><span class="badge pass">PASS</span></td><td>顯示 <code>initial smoke project</code>、author、hash、changed files 與 commit message。</td></tr>
+                    <tr><td>Git Graph</td><td>Changed file diff</td><td><span class="badge pass">PASS</span></td><td>點檔案列開啟 <code>Diff src/main.ts</code>，顯示 CURRENT / SELECTED 兩欄。</td></tr>
+                    <tr><td>Git Graph</td><td>Fetch</td><td><span class="badge pass">PASS</span></td><td>toast 顯示 fetched，並刷新 Source Control changes。</td></tr>
+                    <tr><td>Git Graph</td><td>Pull / Push without remote</td><td><span class="badge pass">PASS</span></td><td>Pull 顯示無 tracking branch；Push 顯示未設定 remote destination，錯誤清楚。</td></tr>
+                    <tr><td>Git Graph</td><td>Checkout</td><td><span class="badge pass">PASS</span></td><td>跳出確認 dialog，說明會進 detached HEAD；測試中取消。</td></tr>
+                    <tr><td>Git Graph</td><td>Cherry-pick current commit</td><td><span class="badge pass">PASS</span></td><td>顯示 empty cherry-pick / abort 相關錯誤，沒有破壞 repo。</td></tr>
+                    <tr><td>Git Graph</td><td>Revert dirty working tree</td><td><span class="badge pass">PASS</span></td><td>先跳確認；確認後 Git 因 local changes 會被覆蓋而 abort。</td></tr>
+                    <tr><td>Git Graph</td><td>Author filters</td><td><span class="badge warn">UNCLEAR</span></td><td><code>All</code>、<code>yuuzu</code>、<code>claude</code> 可點，但在單一 commit 測資下視覺狀態/結果變化不明顯。</td></tr>
+                    <tr><td>Git Graph</td><td>Copy hash</td><td><span class="badge fail">FAIL</span></td><td>點 copy icon 後 <code>pbpaste</code> 仍是舊 clipboard 內容。</td></tr>
+                    <tr><td>Agent-Zone</td><td>New session</td><td><span class="badge pass">PASS</span></td><td>建立 <code>zsh · session 1</code>，top project chip session count 更新。</td></tr>
+                    <tr><td>Agent-Zone</td><td>Terminal input</td><td><span class="badge pass">PASS</span></td><td><code>echo agent-zone-123 && pwd</code> 輸出 <code>agent-zone-123</code> 與 <code>/private/tmp/yuuzu-ide-user-smoke.nVqass</code>。</td></tr>
+                    <tr><td>Agent-Zone</td><td>Layout</td><td><span class="badge pass">PASS</span></td><td><code>2</code>、<code>3</code>、<code>4</code>、<code>Auto</code> 都會即時改變終端卡片寬度。</td></tr>
+                    <tr><td>Agent-Zone</td><td>Focus / multi-session</td><td><span class="badge pass">PASS</span></td><td>第二個 session 建立後，focused session 只顯示單卡；解除 focus 後兩個 session 同屏並有可拖曳分隔線。</td></tr>
+                    <tr><td>Agent-Zone</td><td>Collapse / close</td><td><span class="badge pass">PASS</span></td><td>Collapse 收起 terminal content；close session 後 session count 更新，最後回到 0。</td></tr>
+                </tbody>
+            </table>
+        </section>
+    </div>
+
+    <div id="context-menus" class="tab-content">
+        <section>
+            <h2>右鍵選單覆蓋</h2>
+            <p>右鍵選單共有 14 種 target。手動 UI 點測已完成 Explorer file / dir / root 的完整可見項目；後續 tab-strip 右鍵補測時 app 進入無視窗狀態，因此其餘 target 改用 component-level smoke test 補足 action wiring。臨時測試檔已刪除。</p>
+            <table>
+                <thead><tr><th>Target</th><th>Menu items</th><th>Result</th><th>Evidence</th></tr></thead>
+                <tbody>
+                    <tr><td>file</td><td>Open, Open to side, Git history, Count tokens, New file, New folder, Delete</td><td><span class="badge warn">PARTIAL</span></td><td>手動：Open/Open side/Git history/Count tokens pass；New folder 只 toast；Delete pass 但無確認。</td></tr>
+                    <tr><td>dir</td><td>New file, New folder, Delete</td><td><span class="badge warn">PARTIAL</span></td><td>手動：New file pass 且固定命名；New folder 只 toast；Delete 遞迴刪除測試資料夾並關閉子 tab，但無確認。</td></tr>
+                    <tr><td>root</td><td>New file, New folder</td><td><span class="badge warn">PARTIAL</span></td><td>手動：New file pass 且固定建立 root <code>untitled.ts</code>；New folder 只 toast。</td></tr>
+                    <tr><td>tab</td><td>Close tab, Close others, Close all tabs, Open to side / Show in split, Rename terminal</td><td><span class="badge pass">COMPONENT</span></td><td><code>output/context-menu-smoke.test.tsx</code> 臨時測試 render/click pass；現有 <code>Overlays.test.tsx</code> 覆蓋 Rename terminal prompt。</td></tr>
+                    <tr><td>project</td><td>New agent session, New terminal here, Copy path, Close project folder</td><td><span class="badge pass">COMPONENT</span></td><td>臨時 context-menu smoke test render/click pass。需注意 Copy path 目前是 toast 模擬，非真 clipboard 驗證。</td></tr>
+                    <tr><td>editor</td><td>Copy, Format document, Ask Claude, Go to Definition, Find References, Rename Symbol, Code Actions, Count tokens</td><td><span class="badge pass">COMPONENT</span></td><td>臨時 smoke test pass；<code>Overlays.test.tsx</code> 覆蓋 language action routing 與無 cursor 時 disabled。</td></tr>
+                    <tr><td>term</td><td>Clear terminal, Copy last output, Explain last error, Kill process</td><td><span class="badge pass">COMPONENT</span></td><td>臨時 smoke test pass。Copy/Explain 是 toast-only 行為，仍需後續真 terminal scrollback clipboard 驗證。</td></tr>
+                    <tr><td>browser</td><td>Reload, Copy URL, Open in split</td><td><span class="badge pass">COMPONENT</span></td><td>臨時 smoke test pass。Browser screenshot 另有實機 fail。</td></tr>
+                    <tr><td>dbconn</td><td>Edit, Refresh schemas, New query console, Copy connection string, Delete connection, Connect/Disconnect</td><td><span class="badge pass">COMPONENT</span></td><td>臨時 smoke test pass；<code>Overlays.test.tsx</code> 覆蓋 edit 與 confirmed delete action。</td></tr>
+                    <tr><td>dbtable</td><td>Open table, New query console, View structure, Copy table name, Truncate, Drop</td><td><span class="badge pass">COMPONENT</span></td><td>臨時 smoke test pass；Truncate/Drop 目前只 toast「requires confirmation」，未執行資料庫 DDL。</td></tr>
+                    <tr><td>host</td><td>Open shell, Open SFTP, Copy address, Forget host</td><td><span class="badge pass">COMPONENT</span></td><td>臨時 smoke test pass。實機沒有安全 SSH host 測資，因此未連真遠端。</td></tr>
+                    <tr><td>sftp</td><td>Transfer, Copy, Rename, Download/Reveal, Properties, Delete</td><td><span class="badge pass">COMPONENT</span></td><td>臨時 smoke test pass；<code>SftpView.test.tsx</code> 覆蓋 disconnect/reconnect/run command。實機 SFTP 仍需安全 host 才能端到端驗證。</td></tr>
+                    <tr><td>commit</td><td>Checkout, New branch, Cherry-pick, Revert, Reset soft/mixed/hard, Reset working tree hard, Rebase, Export variants, Copy hash, Compare</td><td><span class="badge warn">PARTIAL</span></td><td>手動：checkout/revert confirmation、cherry-pick error、pull/push/fetch 已測；臨時 smoke test 點完所有 item；copy hash 實機 clipboard fail。</td></tr>
+                    <tr><td>session</td><td>Focus, Collapse/Expand, New session, Rename session, Close session</td><td><span class="badge pass">COMPONENT</span></td><td>Agent-Zone 主功能已手動測；右鍵 session menu 由臨時 smoke test 與 <code>AgentZone.test.tsx</code> rename/layout 測試補足。</td></tr>
+                </tbody>
+            </table>
+        </section>
+    </div>
+
+    <div id="matrix" class="tab-content">
+        <section>
+            <h2>Verification Matrix</h2>
+            <table>
+                <thead><tr><th>Area</th><th>Check</th><th>Result</th><th>Evidence</th></tr></thead>
+                <tbody>
+                    <tr><td>Frontend tests</td><td><code>bun test</code></td><td><span class="badge pass">PASS</span></td><td>673 pass, 0 fail, 77 files</td></tr>
+                    <tr><td>Frontend build</td><td><code>bun run build</code></td><td><span class="badge pass">PASS</span></td><td>Vite build complete; chunk-size warning only</td></tr>
+                    <tr><td>Rust tests</td><td><code>cargo test --manifest-path src-tauri/Cargo.toml</code></td><td><span class="badge pass">PASS</span></td><td>355 passed, 0 failed, 4 ignored</td></tr>
+                    <tr><td>Rust format</td><td><code>cargo fmt --manifest-path src-tauri/Cargo.toml --check</code></td><td><span class="badge pass">PASS</span></td><td>Exit 0</td></tr>
+                    <tr><td>Rust lint</td><td><code>cargo clippy --all-targets --all-features -- -D warnings</code></td><td><span class="badge pass">PASS</span></td><td>Exit 0</td></tr>
+                    <tr><td>Editor large file</td><td><code>bun run verify:editor-large-file</code></td><td><span class="badge pass">PASS</span></td><td>CodeMirror active; scroll reached line 10000</td></tr>
+                    <tr><td>Packaged app</td><td><code>bun run tauri build --debug --bundles app</code></td><td><span class="badge pass">PASS</span></td><td>Built debug macOS app bundle</td></tr>
+                    <tr><td>Add project folder</td><td>macOS folder picker + project chip</td><td><span class="badge warn">PARTIAL</span></td><td>Folder added; active workspace did not auto-switch; first click did not visibly open picker, double-click did.</td></tr>
+                    <tr><td>File create</td><td>Explorer right-click <code>src</code> -> New file twice</td><td><span class="badge warn">PARTIAL</span></td><td>Created <code>untitled.ts</code> and <code>untitled-2.ts</code>; no naming prompt.</td></tr>
+                    <tr><td>Folder create</td><td>Explorer right-click <code>src</code> -> New folder</td><td><span class="badge fail">FAIL</span></td><td>Toast only; no folder created.</td></tr>
+                    <tr><td>File delete</td><td>Explorer right-click file -> Delete</td><td><span class="badge warn">PASS / RISK</span></td><td>File removed and tab closed; no confirmation shown.</td></tr>
+                    <tr><td>Editor manual input</td><td>Letters, Enter, numbers, punctuation</td><td><span class="badge fail">FAIL</span></td><td>Each key requires refocus; continuous input fails.</td></tr>
+                    <tr><td>Editor paste/save</td><td><code>Cmd+A</code>, paste, <code>Cmd+S</code></td><td><span class="badge pass">PASS</span></td><td>Saved <code>src/untitled-2.ts</code> with pasted text.</td></tr>
+                    <tr><td>Editor autocomplete</td><td><code>Ctrl-Space</code> after <code>al</code></td><td><span class="badge fail">FAIL</span></td><td>No completion popup visible.</td></tr>
+                    <tr><td>Theme</td><td>Toggle dark/light with CodeMirror file open</td><td><span class="badge warn">PARTIAL</span></td><td>Editor chrome switches; syntax tokens still use CodeMirror defaultHighlightStyle.</td></tr>
+                    <tr><td>Terminal</td><td><code>pwd</code> + <code>bun run test</code></td><td><span class="badge pass">PASS</span></td><td><code>/private/tmp/yuuzu-ide-user-smoke.nVqass</code>; output <code>smoke-test-ok</code></td></tr>
+                    <tr><td>LSP</td><td>TypeScript server + workspace symbol search</td><td><span class="badge pass">PASS</span></td><td>Server running; search <code>greet</code> returned <code>src/main.ts:1</code></td></tr>
+                    <tr><td>SQLite connection</td><td>Add SQLite profile + test + save</td><td><span class="badge pass">PASS</span></td><td><code>連線成功 SQLite 3.53.2</code>; saved <code>Smoke SQLite</code></td></tr>
+                    <tr><td>SQLite table/query</td><td>Open <code>people</code> + run SQL</td><td><span class="badge pass">PASS</span></td><td>Table shows 2 rows; <code>SELECT count(*) AS total FROM people;</code> returns <code>2</code></td></tr>
+                    <tr><td>Browser screenshot</td><td>Capture button</td><td><span class="badge fail">FAIL</span></td><td><code>rect ... does not intersect any displays</code></td></tr>
+                    <tr><td>External sync</td><td>External add/edit/reload</td><td><span class="badge pass">PASS</span></td><td>Explorer/editor reacts; changed-on-disk guard works.</td></tr>
+                    <tr><td>Git freshness</td><td>CLI status vs IDE Source Control</td><td><span class="badge warn">PARTIAL</span></td><td>Stale until Fetch; Fetch refreshes to 5 changes.</td></tr>
+                    <tr><td>Git Graph</td><td>Details, diff, fetch, pull, push, checkout, cherry-pick, revert</td><td><span class="badge warn">PARTIAL</span></td><td>Main paths visible; destructive paths guarded by dialog/Git errors; copy hash failed.</td></tr>
+                    <tr><td>Agent-Zone</td><td>Session lifecycle, layout, input</td><td><span class="badge pass">PASS</span></td><td>Created two sessions, ran command, changed layout, focused, collapsed, closed to 0.</td></tr>
+                    <tr><td>Context menus</td><td>Manual file/dir/root right-click</td><td><span class="badge warn">PARTIAL</span></td><td>Open, split, history, token count, create file, delete pass; folder create fails; delete lacks confirmation.</td></tr>
+                    <tr><td>Context menus</td><td><code>bun test output/context-menu-smoke.test.tsx</code></td><td><span class="badge pass">PASS</span></td><td>14 context menu kinds rendered and every enabled item clicked; React act warnings only.</td></tr>
+                    <tr><td>Context menu tests</td><td><code>bun test src/v2/Overlays.test.tsx</code></td><td><span class="badge pass">PASS</span></td><td>16 pass, 0 fail; commit reset/rebase/export, editor language actions, rename terminal/session, db edit/delete covered.</td></tr>
+                    <tr><td>Related UI tests</td><td><code>bun test src/v2/AgentZone.test.tsx src/v2/SftpView.test.tsx src/v2/ContentViews.test.tsx</code></td><td><span class="badge pass">PASS</span></td><td>23 pass, 0 fail; Agent-Zone layout/rename, SFTP connection actions, editor/browser view paths covered.</td></tr>
+                    <tr><td>Window lifecycle</td><td>Restart/reopen after window disappears</td><td><span class="badge fail">FAIL</span></td><td>Process stayed alive but Computer Use saw <code>cgWindowNotFound</code>; reopen, direct binary, and <code>tauri dev</code> did not restore a window.</td></tr>
+                </tbody>
+            </table>
+        </section>
+    </div>
+
+    <div id="evidence" class="tab-content">
+        <section>
+            <h2>Raw Evidence</h2>
+            <details open><summary>測試專案</summary><div class="body">
+                <pre>/tmp/yuuzu-ide-user-smoke.nVqass
+package.json: bun test -> echo smoke-test-ok
+src/main.ts
+src/external-added.ts
+smoke.sqlite</pre>
+            </div></details>
+            <details><summary>自動化命令</summary><div class="body">
+                <pre>bun test
+bun run build
+. "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml
+. "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check
+. "$HOME/.cargo/env" && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+bun run verify:editor-large-file
+bun run tauri build --debug --bundles app</pre>
+            </div></details>
+            <details><summary>Explorer / editor evidence</summary><div class="body">
+                <pre>New folder: toast only, no folder created
+New file: src/untitled.ts
+Second new file: src/untitled-2.ts
+Direct type: export const directEditor = 42;
+Actual result: e
+Manual keys after refocus: a, Return, 1, comma
+Paste + Cmd+S: saved src/untitled-2.ts
+Autocomplete: const alphaValue = 1; + al + Ctrl-Space -> no popup
+Delete: src/untitled-2.ts removed, tab closed</pre>
+            </div></details>
+            <details><summary>Right-click menu evidence</summary><div class="body">
+                <pre>Manual UI:
+file menu: Open PASS, Open to side PASS, Git history PASS, Count tokens PASS
+file menu: New folder FAIL toast-only, Delete PASS but no confirmation
+dir menu: New file PASS, New folder FAIL toast-only, Delete PASS recursive but no confirmation
+root menu: New file PASS, New folder FAIL toast-only
+tab-strip right-click follow-up: app entered process-alive/no-window state
+
+Component smoke:
+bun test output/context-menu-smoke.test.tsx
+14 pass, 0 fail
+Kinds clicked: file, dir, root, tab, project, editor, term, browser, dbconn, dbtable, host, sftp, commit, session
+Temporary test file deleted after run
+
+Existing tests:
+bun test src/v2/Overlays.test.tsx -> 16 pass, 0 fail
+bun test src/v2/AgentZone.test.tsx src/v2/SftpView.test.tsx src/v2/ContentViews.test.tsx -> 23 pass, 0 fail</pre>
+            </div></details>
+            <details><summary>外部變更命令</summary><div class="body">
+                <pre>printf '\nexport const externalEdit = "changed-outside-ide";\n' >> src/main.ts
+printf 'export const externalAdded = true;\n' > src/external-added.ts
+printf '\nexport const externalConflict = "outside";\n' >> src/main.ts
+git status --short</pre>
+            </div></details>
+            <details><summary>Git / Agent evidence</summary><div class="body">
+                <pre>Git Graph: initial smoke project visible
+Fetch: fetched and refreshed Source Control changes
+Pull: no tracking branch error
+Push: no remote destination error
+Checkout: detached HEAD confirmation shown, cancelled
+Cherry-pick: empty cherry-pick error
+Revert: confirmation shown, Git aborted due local changes
+Copy hash: pbpaste unchanged
+Agent-Zone: echo agent-zone-123 && pwd
+Agent-Zone cwd: /private/tmp/yuuzu-ide-user-smoke.nVqass
+Agent-Zone sessions: 0 -> 1 -> 2 -> 1 -> 0</pre>
+            </div></details>
+            <details><summary>SQLite evidence</summary><div class="body">
+                <pre>uv run python: create /tmp/yuuzu-ide-user-smoke.nVqass/smoke.sqlite
+Dialog: 新增連線 -> SQLite
+Test: 連線成功 SQLite 3.53.2
+Schema: people 2
+SQL: SELECT count(*) AS total FROM people;
+Result: total = 2</pre>
+            </div></details>
+            <details><summary>工作樹注意事項</summary><div class="body">
+                <p>本次測試是在目前 dirty worktree 上執行，且新增了此 HTML 報告。報告代表目前實際工作樹與 debug app 狀態，不等同乾淨 <code>main</code>。測試結束時已停掉無視窗的 Yuuzu-IDE process，沒有殘留 <code>tauri dev</code>、Vite 或 Cargo Tauri dev 程序，Agent-Zone session count 在最後可見狀態已回到 0。</p>
+            </div></details>
+        </section>
+    </div>
+
+    <div class="actions">
+        <button class="btn" onclick="window.print()">Print / PDF</button>
+    </div>
+</div>
+
+<script>
+function showTab(id, event) {
+    document.querySelectorAll(".tab").forEach((tab) => tab.classList.remove("active"));
+    document.querySelectorAll(".tab-content").forEach((content) => content.classList.remove("active"));
+    document.getElementById(id).classList.add("active");
+    event.target.classList.add("active");
+}
+</script>
+</body>
+</html>

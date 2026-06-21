@@ -6,7 +6,7 @@ import { useEffect } from "react"
 import { type UnlistenFn } from "@tauri-apps/api/event"
 
 import "./yuzu.css"
-import { filterPaletteCommands, filterPaletteFiles, langLabel } from "./v2-model"
+import { filterPaletteCommands, filterPaletteFiles, fmtBytes, langLabel } from "./v2-model"
 import { useV2Store, v2Store } from "./v2-store"
 import { bootstrapV2 } from "./controller"
 import { onWorkspaceFileChanged, unwatchWorkspace, watchWorkspace, type WatchWorkspaceHandle } from "../features/files/file-api"
@@ -96,6 +96,7 @@ function StatusBar() {
     const order = useV2Store((s) => s.order)
     const ui = useV2Store((s) => s.ui)
     const cursor = useV2Store((s) => s.cursor)
+    const memoryBytes = useV2Store((s) => s.stab.metric?.memoryBytes ?? null)
     const tabSize = useV2Store((s) => (s.stVals.tabSize === "4" ? "4" : "2"))
     const azTotal = order.reduce((n, id) => n + (ui[id]?.wins.length ?? 0), 0)
 
@@ -115,6 +116,9 @@ function StatusBar() {
             <span className="branch">⎇ {meta?.branch || "—"}</span>
             <span style={{ padding: "0 10px" }} title="behind ↓ / ahead ↑ of upstream">
                 ⟳ {git?.behind ?? 0}↓ {git?.ahead ?? 0}↑
+            </span>
+            <span style={{ padding: "0 9px" }} title="Performance memory">
+                Memory {fmtBytes(memoryBytes)}
             </span>
             {isReal ? null : (
                 <>
@@ -413,7 +417,15 @@ export function WorkbenchV2() {
     useWorkspaceFileWatcher()
 
     useEffect(() => {
-        void bootstrapV2()
+        let disposed = false
+        void bootstrapV2().then(() => {
+            if (disposed) return
+            const store = v2Store.getState()
+            if (!store.stab.metric) store.refreshMetric()
+        })
+        return () => {
+            disposed = true
+        }
     }, [])
 
     return (

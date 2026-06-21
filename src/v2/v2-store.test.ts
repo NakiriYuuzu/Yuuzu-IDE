@@ -127,7 +127,7 @@ describe("language actions", () => {
         expect(store.getState().toast).toContain("needs a real workspace")
     })
 
-    test("real language actions delegate and editor changes backup without notifying LSP", () => {
+    test("real language actions delegate and editor changes backup and schedule LSP document sync", () => {
         const store = freshStore()
         const calls: unknown[][] = []
         registerRealDelegate({
@@ -156,6 +156,26 @@ describe("language actions", () => {
             ["restart", "TypeScript"],
             ["reload"],
             ["backup", tabId, "updated"],
+            ["change", tabId],
+        ])
+    })
+
+    test("autosave off does not save on edit", () => {
+        const store = freshStore()
+        const calls: unknown[][] = []
+        registerRealDelegate({
+            backupTab: (...args: unknown[]) => calls.push(["backup", ...args]),
+            lspChange: (...args: unknown[]) => calls.push(["change", ...args]),
+            saveFile: (...args: unknown[]) => calls.push(["save", ...args]),
+        } as any)
+        store.setState((s) => ({ mode: "real", stVals: { ...s.stVals, autosave: "off" } }))
+        const tabId = store.getState().ui.api.tabs[0].id
+
+        store.getState().setTabContent(tabId, "updated")
+
+        expect(calls).toEqual([
+            ["backup", tabId, "updated"],
+            ["change", tabId],
         ])
     })
 
@@ -1257,6 +1277,23 @@ describe("settings", () => {
         freshStore().getState().setSetting("rowLimit", "1K")
         expect(freshStore().getState().stVals.rowLimit).toBe("1K")
         g.localStorage.removeItem("yuuzu-ide-v2-settings")
+    })
+
+    test("migrates legacy textarea editor engine settings to CodeMirror once", () => {
+        const g = globalThis as { localStorage?: Storage }
+        if (!g.localStorage) g.localStorage = window.localStorage
+        g.localStorage.removeItem("yuuzu-ide-v2-editor-engine-default-codemirror-v1")
+        g.localStorage.setItem("yuuzu-ide-v2-settings", JSON.stringify({ editorEngine: "textarea", rowLimit: "1K" }))
+
+        expect(freshStore().getState().stVals.editorEngine).toBe("codemirror")
+        expect(freshStore().getState().stVals.rowLimit).toBe("1K")
+        expect(JSON.parse(g.localStorage.getItem("yuuzu-ide-v2-settings") ?? "{}").editorEngine).toBe("codemirror")
+
+        freshStore().getState().setSetting("editorEngine", "textarea")
+        expect(freshStore().getState().stVals.editorEngine).toBe("textarea")
+
+        g.localStorage.removeItem("yuuzu-ide-v2-settings")
+        g.localStorage.removeItem("yuuzu-ide-v2-editor-engine-default-codemirror-v1")
     })
 
     test("persists side panel width across store instances", () => {

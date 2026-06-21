@@ -874,6 +874,7 @@ export const SETTINGS_CONFIG: SettingSection[] = [
         { k: "tabSize", label: "Indentation", desc: "Spaces inserted per tab", choice: ["2", "4"], def: "2" },
         { k: "formatSave", label: "Format on save", desc: "Run the formatter before writing to disk", toggle: true, def: true },
         { k: "autosave", label: "Autosave", desc: "When edits are written automatically", choice: ["off", "focus", "delay"], def: "focus" },
+        { k: "editorEngine", label: "Editor engine", desc: "Editor surface used for editable files", choice: ["codemirror", "textarea"], def: "codemirror" },
         { k: "tokenChip", label: "Show token estimate", desc: "Σ chip in the editor header — cost of sending the file to Claude", toggle: true, def: true },
     ] },
     { id: "terminal", label: "Terminal", glyph: "❯", desc: "Shell sessions in tabs and AgentZone.", rows: [

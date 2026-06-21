@@ -536,6 +536,7 @@ export type V2State = {
 
 const THEME_KEY = "yuuzu-ide-theme"
 const SETTINGS_KEY = "yuuzu-ide-v2-settings"
+const EDITOR_ENGINE_DEFAULT_MIGRATION_KEY = "yuuzu-ide-v2-editor-engine-default-codemirror-v1"
 
 export const SIDE_PANEL_MIN_WIDTH = 220
 export const SIDE_PANEL_DEFAULT_WIDTH = 284
@@ -587,6 +588,11 @@ export function loadStoredSettings(): Record<string, string | boolean> {
             const v = parsed[k]
             if (typeof v === "string" || typeof v === "boolean") out[k] = v
         }
+        if (out.editorEngine === "textarea" && localStorage.getItem(EDITOR_ENGINE_DEFAULT_MIGRATION_KEY) !== "1") {
+            out.editorEngine = "codemirror"
+            localStorage.setItem(SETTINGS_KEY, JSON.stringify(out))
+            localStorage.setItem(EDITOR_ENGINE_DEFAULT_MIGRATION_KEY, "1")
+        }
         return out
     } catch {
         return {}
@@ -596,6 +602,9 @@ export function loadStoredSettings(): Record<string, string | boolean> {
 function persistSettings(vals: Record<string, string | boolean>): void {
     try {
         localStorage.setItem(SETTINGS_KEY, JSON.stringify(vals))
+        if (Object.prototype.hasOwnProperty.call(vals, "editorEngine")) {
+            localStorage.setItem(EDITOR_ENGINE_DEFAULT_MIGRATION_KEY, "1")
+        }
     } catch {
         // persistence is best-effort
     }
@@ -1291,6 +1300,7 @@ export function createV2Store() {
                 })
                 if (get().mode === "real") {
                     realDelegate?.backupTab(tabId, content)
+                    realDelegate?.lspChange?.(tabId)
                 }
             },
 

@@ -798,10 +798,11 @@ are actually reachable in the app the user runs.
 
 ### Node 15: CodeMirror Editor Platform And C# Syntax Package
 
-**Status:** planned. This node records the 2026-06-21 direction to move the
-editor-platform track toward CodeMirror 6, keep language intelligence in the
-Rust/Tauri core and LSP layer, and build a first-party C# syntax package instead
-of depending permanently on a legacy stream mode.
+**Status:** in progress. Initial CodeMirror 6 default surface and first-party C#
+Lezer package results are recorded in
+`docs/architecture/node-15-codemirror-csharp-results.md`; CodeMirror is now the
+default editor engine, with the old textarea surface retained as an explicit
+fallback while packaged-app latency and memory measurements are filled.
 
 **Goal:** make the shipping editor feel closer to JetBrains for daily coding
 while staying lighter than JetBrains: CodeMirror owns the editor interaction
@@ -811,8 +812,9 @@ fast C# syntax support.
 
 **Scope**
 
-- Introduce an editor adapter boundary so the v2 workbench can keep the current
-  textarea engine as a fallback while a CodeMirror 6 surface reaches parity.
+- Introduce an editor adapter boundary so the v2 workbench can use CodeMirror 6
+  by default while keeping the current textarea engine as an explicit fallback
+  until full packaged-app parity is verified.
 - Use CodeMirror 6 as the preferred next editor surface for Rust, C#, YAML,
   Markdown, HTML, CSS, XML, JavaScript, and TypeScript. Monaco may be retained as
   comparison or retired support code, but is not the default direction for this
@@ -938,9 +940,10 @@ v2 interface. With v2 as the only shell, the user-reachable surface is:
 The active priority is **Node 14: v2 (Yuzu Redesign) Completion**, which ports
 the missing Docs, Debug, and Extension surfaces, connects the Language panel to
 real LSP state, and closes the editor performance pass. The next planned editor
-platform track is **Node 15: CodeMirror Editor Platform And C# Syntax Package**,
-which replaces the old "do not rewrite the editor engine again" stance with a
-scoped CodeMirror migration and first-party Lezer-based C# syntax package. Node
+platform track is **Node 15: CodeMirror Editor Platform And C# Syntax Package**;
+its default-editor implementation is now in progress and replaces the old "do
+not rewrite the editor engine again" stance with a scoped CodeMirror migration
+and first-party Lezer-based C# syntax package. Node
 13 evidence is recorded in `docs/architecture/node-13-hardening-results.md`; Git
 Deep Dive evidence is recorded in
 `docs/architecture/git-deep-dive-results.md`.

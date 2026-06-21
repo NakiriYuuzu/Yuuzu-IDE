@@ -15,6 +15,15 @@ const initialWorkbenchState = {
     active: v2Store.getState().active,
     meta: structuredClone(v2Store.getState().meta),
     ui: structuredClone(v2Store.getState().ui),
+    stab: structuredClone(v2Store.getState().stab),
+}
+const baselineMetric = {
+    memoryBytes: 184 * 1024 * 1024,
+    uptimeMs: 3_600_000,
+    workspaceCount: 3,
+    docsIndexEntries: 0,
+    fileTreeEntries: 42,
+    processId: 0,
 }
 
 beforeEach(() => {
@@ -25,6 +34,7 @@ beforeEach(() => {
         panelOpen: true,
         meta: structuredClone(initialWorkbenchState.meta),
         ui: structuredClone(initialWorkbenchState.ui),
+        stab: { ...structuredClone(initialWorkbenchState.stab), metric: { ...baselineMetric } },
     })
 })
 
@@ -36,6 +46,7 @@ afterEach(() => {
         panelOpen: true,
         meta: structuredClone(initialWorkbenchState.meta),
         ui: structuredClone(initialWorkbenchState.ui),
+        stab: structuredClone(initialWorkbenchState.stab),
     })
 })
 
@@ -83,5 +94,29 @@ describe("WorkbenchV2", () => {
         const view = render(<WorkbenchV2 />)
 
         expect(view.getByRole("dialog", { name: "新增連線" })).toBeTruthy()
+    })
+
+    test("shows only memory from performance metrics in the left status bar", () => {
+        v2Store.setState((s) => ({
+            stab: {
+                ...s.stab,
+                metric: {
+                    memoryBytes: 128 * 1024 * 1024,
+                    uptimeMs: 120_000,
+                    workspaceCount: 3,
+                    docsIndexEntries: 42,
+                    fileTreeEntries: 99,
+                    processId: 1234,
+                },
+            },
+        }))
+
+        const view = render(<WorkbenchV2 />)
+
+        const status = view.container.querySelector(".yz2-status")
+        expect(status?.textContent).toContain("Memory 128.0 MB")
+        expect(status?.textContent).not.toContain("Uptime")
+        expect(status?.textContent).not.toContain("Files")
+        expect(status?.textContent).not.toContain("PID")
     })
 })

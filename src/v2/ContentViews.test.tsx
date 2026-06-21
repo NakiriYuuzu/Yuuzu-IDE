@@ -11,6 +11,7 @@ import { registerRealDelegate, v2Store } from "./v2-store"
 ensureTestDom()
 
 const initialApiUI = structuredClone(v2Store.getState().ui.api)
+const initialStVals = structuredClone(v2Store.getState().stVals)
 
 afterEach(() => {
     cleanup()
@@ -20,6 +21,7 @@ afterEach(() => {
         active: "api",
         ctx: null,
         confirm: null,
+        stVals: structuredClone(initialStVals),
         ui: {
             ...s.ui,
             api: structuredClone(initialApiUI),
@@ -47,6 +49,41 @@ function resetBrowser(tab: Tab) {
 }
 
 describe("EditorView", () => {
+    test("editable real files use CodeMirror by default", () => {
+        const tab = {
+            id: 8999,
+            type: "file" as const,
+            name: "server.ts",
+            path: "src/server.ts",
+            realPath: "/workspace/src/server.ts",
+            content: "const a = 1\n",
+            savedContent: "const a = 1\n",
+            contentLang: "ts",
+        }
+        v2Store.setState((s) => {
+            const { editorEngine: _editorEngine, ...stVals } = s.stVals
+            return {
+                mode: "real",
+                active: "api",
+                stVals,
+                ui: {
+                    ...s.ui,
+                    api: {
+                        ...s.ui.api,
+                        tabs: [tab],
+                        activeTab: tab.id,
+                    },
+                },
+            }
+        })
+
+        const view = render(<EditorView tab={tab} />)
+
+        expect(view.container.querySelector(".yz2-ed-body.is-codemirror")).toBeTruthy()
+        expect(view.container.querySelector(".cm-editor")).toBeTruthy()
+        expect(view.container.querySelector("textarea")).toBeNull()
+    })
+
     test("real file diagnostics render gutter dots and line severity classes", () => {
         const tab = {
             id: 9001,
@@ -61,6 +98,7 @@ describe("EditorView", () => {
         v2Store.setState((s) => ({
             mode: "real",
             active: "api",
+            stVals: { ...s.stVals, editorEngine: "textarea" },
             ui: {
                 ...s.ui,
                 api: {
@@ -100,6 +138,7 @@ describe("EditorView", () => {
         v2Store.setState((s) => ({
             mode: "real",
             active: "api",
+            stVals: { ...s.stVals, editorEngine: "textarea" },
             ui: {
                 ...s.ui,
                 api: {
@@ -145,6 +184,7 @@ describe("EditorView", () => {
         v2Store.setState((s) => ({
             mode: "real",
             active: "api",
+            stVals: { ...s.stVals, editorEngine: "textarea" },
             ui: {
                 ...s.ui,
                 api: {
@@ -186,6 +226,7 @@ describe("EditorView", () => {
         v2Store.setState((s) => ({
             mode: "real",
             active: "api",
+            stVals: { ...s.stVals, editorEngine: "textarea" },
             ui: {
                 ...s.ui,
                 api: {
@@ -220,6 +261,7 @@ describe("EditorView", () => {
         v2Store.setState((s) => ({
             mode: "real",
             active: "api",
+            stVals: { ...s.stVals, editorEngine: "textarea" },
             ui: {
                 ...s.ui,
                 api: {
@@ -252,6 +294,7 @@ describe("EditorView", () => {
         v2Store.setState((s) => ({
             mode: "real",
             active: "api",
+            stVals: { ...s.stVals, editorEngine: "textarea" },
             ui: {
                 ...s.ui,
                 api: {
@@ -325,6 +368,7 @@ describe("EditorView", () => {
         v2Store.setState((s) => ({
             mode: "real",
             active: "api",
+            stVals: { ...s.stVals, editorEngine: "textarea" },
             ui: {
                 ...s.ui,
                 api: {
@@ -347,6 +391,34 @@ describe("EditorView", () => {
 
         expect(calls).toEqual([["src/server.ts", 1, 4]])
         expect(v2Store.getState().ui.api.tabs[0].content).toBe("console")
+    })
+
+    test("CodeMirror editor surface uses a bounded scroll body", async () => {
+        const tab = {
+            id: 9201,
+            type: "file" as const,
+            name: "Program.cs",
+            path: "Program.cs",
+            realPath: "/workspace/Program.cs",
+            content: "class Program {}",
+            contentLang: "csharp",
+            savedContent: "class Program {}",
+        }
+        v2Store.setState((s) => ({
+            mode: "real",
+            stVals: { ...s.stVals, editorEngine: "codemirror" },
+            active: "api",
+            ui: {
+                ...s.ui,
+                api: { ...s.ui.api, tabs: [tab], activeTab: tab.id },
+            },
+        }))
+
+        const view = render(<EditorView tab={tab as Tab} />)
+        const body = view.container.querySelector(".yz2-ed-body.is-codemirror")
+        const editor = view.container.querySelector(".cm-editor")
+        expect(body).toBeTruthy()
+        expect(editor).toBeTruthy()
     })
 })
 
