@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { act, cleanup, fireEvent, render } from "@testing-library/react"
 
 import { ensureTestDom } from "../test/test-dom"
-import { ConfirmModal, ContextMenu, ReferencesOverlay } from "./Overlays"
+import { ConfirmModal, ContextMenu, ReferencesOverlay, SettingsModal } from "./Overlays"
 import { v2Store } from "./v2-store"
 
 ensureTestDom()
@@ -373,6 +373,227 @@ describe("ContextMenu", () => {
                 ["edit", "edit", "pg-1"],
                 ["delete", "pg-1"],
             ])
+        } finally {
+            act(() => v2Store.setState(previous))
+        }
+    })
+})
+
+describe("SettingsModal", () => {
+    test("Language Servers section tolerates bootstrap no-workspace state", () => {
+        const previous = {
+            mode: v2Store.getState().mode,
+            active: v2Store.getState().active,
+            stOpen: v2Store.getState().stOpen,
+            stSec: v2Store.getState().stSec,
+            ui: structuredClone(v2Store.getState().ui),
+        }
+
+        act(() => v2Store.setState({
+            mode: "real",
+            active: "",
+            stOpen: true,
+            stSec: "language",
+            ui: {},
+        }))
+
+        try {
+            const view = render(<SettingsModal />)
+            expect(view.getByText("No active workspace.")).toBeTruthy()
+            expect(view.getByRole("button", { name: "Refresh language data" })).toBeTruthy()
+        } finally {
+            act(() => v2Store.setState(previous))
+        }
+    })
+
+    test("Language Servers reloads language data when mounted and active workspace switches", () => {
+        const previous = {
+            mode: v2Store.getState().mode,
+            active: v2Store.getState().active,
+            stOpen: v2Store.getState().stOpen,
+            stSec: v2Store.getState().stSec,
+            ui: structuredClone(v2Store.getState().ui),
+            reloadLang: v2Store.getState().reloadLang,
+        }
+        const reloadCalls: string[] = []
+
+        act(() => v2Store.setState((s) => {
+            const first = s.order[0] ?? "api"
+            const second = s.order[1]
+            return {
+                mode: "real",
+                active: first,
+                stOpen: true,
+                stSec: "language",
+                ui: {
+                    ...s.ui,
+                    [first]: {
+                        ...s.ui[first],
+                        lspLoaded: false,
+                        lspServers: [],
+                        diagnosticsByPath: {},
+                        lspLogs: [],
+                    },
+                    ...(s.ui[second]
+                        ? {
+                            [second]: {
+                                ...s.ui[second],
+                                lspLoaded: false,
+                                lspServers: [],
+                                diagnosticsByPath: {},
+                                lspLogs: [],
+                            },
+                        }
+                        : {}),
+                },
+                reloadLang: () => {
+                    reloadCalls.push(v2Store.getState().active)
+                },
+            }
+        }))
+
+        try {
+            render(<SettingsModal />)
+            const previousActive = v2Store.getState().active
+            const nextActive = v2Store.getState().order.find((id) => id !== previousActive)
+            expect(nextActive).toBeDefined()
+
+            expect(reloadCalls).toEqual([previousActive])
+
+            act(() => {
+                v2Store.setState({ active: nextActive! })
+            })
+
+            if (!nextActive) {
+                throw new Error("Expected a second project id for active switch coverage")
+            }
+
+            const expected = [previousActive, nextActive]
+            expect(reloadCalls).toEqual(expected)
+        } finally {
+            act(() => v2Store.setState(previous))
+        }
+    })
+
+    test("Language Servers section renders servers and diagnostics and restarts a selected server", () => {
+        const previous = {
+            active: v2Store.getState().active,
+            mode: v2Store.getState().mode,
+            stOpen: v2Store.getState().stOpen,
+            stSec: v2Store.getState().stSec,
+            ui: structuredClone(v2Store.getState().ui),
+            restartLspServer: v2Store.getState().restartLspServer,
+        }
+
+        const restartCalls: string[] = []
+
+        act(() => v2Store.setState((s) => ({
+            active: "api",
+            mode: "real",
+            stOpen: true,
+            stSec: "language",
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    lspLoaded: true,
+                    lspServers: [{
+                        workspace_id: "w1",
+                        workspace_root: "/Users/yuuzu/projects/api",
+                        language: "typescript",
+                        display_name: "TypeScript Language Server",
+                        state: "Running",
+                        pid: 1234,
+                        memory_bytes: 1_572_864,
+                        open_documents: 2,
+                        last_error: null,
+                    }],
+                    diagnosticsByPath: {
+                        "src/server.ts": [{
+                            path: "src/server.ts",
+                            severity: "error",
+                            range: {
+                                start_line: 2,
+                                start_character: 1,
+                                end_line: 2,
+                                end_character: 3,
+                            },
+                            message: "Unexpected token",
+                            source: "tsc",
+                        }],
+                    },
+                    lspLogs: [
+                        "[info] Language server started",
+                    ],
+                },
+            },
+            restartLspServer: (language) => restartCalls.push(language),
+        })))
+
+        try {
+            const view = render(<SettingsModal />)
+
+            expect(view.getByText("LANGUAGE SERVERS")).toBeTruthy()
+            expect(view.getByText("TypeScript Language Server")).toBeTruthy()
+            expect(view.getByText("src/server.ts:3")).toBeTruthy()
+            expect(view.getByText("Unexpected token")).toBeTruthy()
+
+            fireEvent.click(view.getByRole("button", { name: "Restart TypeScript Language Server" }))
+            expect(restartCalls).toEqual(["typescript"])
+        } finally {
+            act(() => v2Store.setState(previous))
+        }
+    })
+
+    test("Language Servers diagnostic click opens file at reveal position and closes settings", () => {
+        const previous = {
+            active: v2Store.getState().active,
+            mode: v2Store.getState().mode,
+            stOpen: v2Store.getState().stOpen,
+            stSec: v2Store.getState().stSec,
+            ui: structuredClone(v2Store.getState().ui),
+            openFile: v2Store.getState().openFile,
+        }
+
+        const opened: Array<{ path: string; reveal?: { line: number; col: number } }> = []
+
+        act(() => v2Store.setState((s) => ({
+            active: "api",
+            mode: "real",
+            stOpen: true,
+            stSec: "language",
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    lspLoaded: true,
+                    lspServers: [],
+                    diagnosticsByPath: {
+                        "src/server.ts": [{
+                            path: "src/server.ts",
+                            severity: "warning",
+                            range: {
+                                start_line: 4,
+                                start_character: 2,
+                                end_line: 4,
+                                end_character: 6,
+                            },
+                            message: "Unused variable",
+                            source: "tsc",
+                        }],
+                    },
+                    lspLogs: [],
+                },
+            },
+            openFile: (path, reveal) => opened.push({ path, reveal }),
+        })))
+
+        try {
+            const view = render(<SettingsModal />)
+            fireEvent.click(view.getByRole("button", { name: /Open src\/server\.ts:5 .*Unused variable/ }))
+
+            expect(opened).toEqual([{ path: "src/server.ts", reveal: { line: 5, col: 3 } }])
+            expect(v2Store.getState().stOpen).toBe(false)
         } finally {
             act(() => v2Store.setState(previous))
         }

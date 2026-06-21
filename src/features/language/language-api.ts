@@ -51,7 +51,47 @@ export function requestLanguageHover(args: {
   line: number;
   character: number;
 }): Promise<LanguageHover | null> {
-  return call<unknown>("lsp_hover", args).then(normalizeLanguageHover);
+  return call<unknown>("lsp_hover", args).then((value) =>
+    normalizeBackendLanguageHover(value, args),
+  );
+}
+
+function normalizeBackendLanguageHover(
+  value: unknown,
+  args: { path: string; line: number; character: number },
+): LanguageHover | null {
+  const normalized = normalizeLanguageHover(value);
+  if (normalized) return normalized;
+  if (!value || typeof value !== "object" || !("contents" in value)) return null;
+
+  const contents = stringifyHoverContents(
+    (value as Record<string, unknown>).contents,
+  );
+  if (contents === null) return null;
+
+  return {
+    path: args.path,
+    line: args.line,
+    character: args.character,
+    contents,
+  };
+}
+
+function stringifyHoverContents(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value
+      .map(stringifyHoverContents)
+      .filter((part): part is string => part !== null)
+      .join("\n");
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (typeof record.value === "string") return record.value;
+    return JSON.stringify(value);
+  }
+  if (value === null || value === undefined) return null;
+  return String(value);
 }
 
 export function requestLanguageDefinition(args: {

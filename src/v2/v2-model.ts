@@ -61,6 +61,7 @@ export type Tab = {
     title?: string
     name?: string
     path?: string
+    reveal?: { line: number; col: number }
     dirty?: boolean
     url?: string
     mode?: "api" | "web" | "blank"
@@ -831,7 +832,7 @@ export type SettingSection = {
     glyph: string
     desc: string
     rows: SettingRow[]
-    custom?: "performance" | "diagnostics" | "recovery"
+    custom?: "performance" | "diagnostics" | "recovery" | "language"
 }
 
 export const SETTINGS_CONFIG: SettingSection[] = [
@@ -875,6 +876,7 @@ export const SETTINGS_CONFIG: SettingSection[] = [
         { label: "Exit focus / close menu", desc: "AgentZone focus, palette, menus", info: "Esc" },
         { label: "SFTP copy / paste", desc: "Transfer the selected file", info: "⌘C · ⌘V" },
     ] },
+    { id: "language", label: "Language Servers", glyph: "◇", desc: "Language servers, diagnostics and logs for the active workspace.", rows: [], custom: "language" },
     { id: "performance", label: "Performance", glyph: "◷", desc: "Live process metrics — memory, uptime and index sizes.", rows: [], custom: "performance" },
     { id: "diagnostics", label: "Diagnostics", glyph: "◉", desc: "Recent IDE action log written by the backend.", rows: [], custom: "diagnostics" },
     { id: "recovery", label: "Recovery", glyph: "↺", desc: "Unsaved edits backed up automatically.", rows: [], custom: "recovery" },

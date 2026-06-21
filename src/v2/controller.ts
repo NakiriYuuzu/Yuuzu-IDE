@@ -99,12 +99,13 @@ import {
     getWorkspaceDiagnostics,
     openLanguageDocument,
     requestLanguageDefinition,
+    requestLanguageHover,
     requestLanguageReferences,
     requestLanguageRename,
     restartLanguageServer,
 } from "../features/language/language-api"
 import { isLspSupportedDocumentPath, lspDocumentPathForWorkspace } from "../features/language/language-model"
-import type { LanguageServerStatus } from "../features/language/language-model"
+import type { LanguageHover, LanguageServerStatus } from "../features/language/language-model"
 
 import {
     confirmationFromError,
@@ -933,7 +934,7 @@ const delegate = {
         })()
     },
 
-    openFile(displayPath: string) {
+    openFile(displayPath: string, reveal?: { line: number; col: number }) {
         const pid = store().active
         const root = rootOf(pid)
         const p = store().ui[pid]
@@ -942,6 +943,9 @@ const delegate = {
         if (existing) {
             patchProject(pid, (q) => {
                 q.activeTab = existing.id
+                if (reveal) {
+                    q.tabs = q.tabs.map((t) => (t.id === existing.id ? { ...t, reveal } : t))
+                }
             })
             return
         }
@@ -950,7 +954,19 @@ const delegate = {
         const name = displayPath.split("/").pop() ?? displayPath
         const id = tabId()
         patchProject(pid, (q) => {
-            q.tabs = [...q.tabs, { id, type: "file", name, path: displayPath, realPath, loading: true, contentLang: langForPath(name) }]
+            q.tabs = [
+                ...q.tabs,
+                {
+                    id,
+                    type: "file",
+                    name,
+                    path: displayPath,
+                    realPath,
+                    loading: true,
+                    contentLang: langForPath(name),
+                    ...(reveal ? { reveal } : {}),
+                },
+            ]
             q.activeTab = id
         })
         void (async () => {
@@ -2445,13 +2461,31 @@ const delegate = {
                     store().showToast("No definition found")
                     return
                 }
-                store().openFile(locs[0].path)
+                store().openFile(locs[0].path, { line: locs[0].line, col: locs[0].col })
                 store().showToast("Definition → " + locs[0].path + ":" + locs[0].line)
                 logDiag("info", "language", "definition " + path)
             } catch (error) {
                 store().showToast("Definition: " + errMsg(error))
             }
         })()
+    },
+
+    async hoverAt(path: string, line: number, col: number): Promise<LanguageHover | null> {
+        const pid = store().active
+        const root = rootOf(pid)
+        if (!root || !isLspSupportedDocumentPath(path)) return null
+        try {
+            const pos = cursorToLsp({ ln: line, col })
+            return await requestLanguageHover({
+                workspaceId: pid,
+                workspaceRoot: root,
+                path: lspPath(root, path),
+                line: pos.line,
+                character: pos.character,
+            })
+        } catch {
+            return null
+        }
     },
 
     findReferences(path: string, line: number, col: number) {

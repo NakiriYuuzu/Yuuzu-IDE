@@ -144,6 +144,20 @@ function normalizePosixPath(path: string): string {
     return (absolute ? "/" : "") + parts.join("/")
 }
 
+function isWindowsDrivePath(path: string): boolean {
+    return /^[a-zA-Z]:($|\/)/.test(path)
+}
+
+function normalizeFileUriPathForRoot(root: string, path: string): { root: string; path: string; caseInsensitive: boolean } {
+    const cleanRoot = normalizePosixPath(root).replace(/\/+$/, "")
+    let cleanPath = normalizePosixPath(path)
+    const caseInsensitive = isWindowsDrivePath(cleanRoot)
+    if (caseInsensitive && /^\/[a-zA-Z]:($|\/)/.test(cleanPath)) {
+        cleanPath = cleanPath.slice(1)
+    }
+    return { root: cleanRoot, path: cleanPath, caseInsensitive }
+}
+
 export function relativePathFromUri(root: string, uri: string): string | null {
     if (!uri.startsWith("file://")) return null
     const raw = uri.slice("file://".length)
@@ -153,9 +167,12 @@ export function relativePathFromUri(root: string, uri: string): string | null {
     } catch {
         return null
     }
-    const cleanRoot = normalizePosixPath(root).replace(/\/+$/, "")
-    const cleanPath = normalizePosixPath(path)
-    if (!cleanPath.startsWith(cleanRoot + "/")) return null
+    const normalized = normalizeFileUriPathForRoot(root, path)
+    const cleanRoot = normalized.root
+    const cleanPath = normalized.path
+    const compareRoot = normalized.caseInsensitive ? cleanRoot.toLowerCase() : cleanRoot
+    const comparePath = normalized.caseInsensitive ? cleanPath.toLowerCase() : cleanPath
+    if (!comparePath.startsWith(compareRoot + "/")) return null
     const rel = cleanPath.slice(cleanRoot.length + 1)
     return rel ? rel : null
 }

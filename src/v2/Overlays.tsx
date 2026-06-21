@@ -8,6 +8,7 @@ import {
     codeFor,
     ctxPct,
     diagLevelStyle,
+    normSeverity,
     estTokens,
     filterPaletteCommands,
     filterPaletteFiles,
@@ -514,6 +515,126 @@ function PerformanceSection() {
     )
 }
 
+function memoryLabel(bytes: number | null): string {
+    if (bytes == null) return "not running"
+    return fmtBytes(bytes)
+}
+
+function LanguageSection() {
+    const mode = useV2Store((s) => s.mode)
+    const active = useV2Store((s) => s.active)
+    const project = useV2Store((s) => s.ui[active])
+    const reloadLang = useV2Store((s) => s.reloadLang)
+    const restartLspServer = useV2Store((s) => s.restartLspServer)
+    const openFile = useV2Store((s) => s.openFile)
+    const closeSettings = useV2Store((s) => s.closeSettings)
+
+    useEffect(() => {
+        if (mode === "real" && project && !project.lspLoaded) reloadLang()
+    }, [mode, active, project?.lspLoaded, reloadLang])
+
+    if (!project) {
+        return (
+            <div className="yz2-stab">
+                <div className="yz2-stab-refresh">
+                    <button type="button" className="yz2-btn-ghost" aria-label="Refresh language data" onClick={reloadLang}>⟳ Refresh</button>
+                </div>
+                <div className="yz2-panel-note">No active workspace.</div>
+            </div>
+        )
+    }
+
+    const diagnostics = Object.entries(project.diagnosticsByPath).flatMap(([path, byPath]) =>
+        byPath.map((diagnostic, index) => ({ ...diagnostic, path, index })),
+    )
+
+    return (
+        <div className="yz2-stab">
+            <div className="yz2-stab-refresh">
+                <button type="button" className="yz2-btn-ghost" aria-label="Refresh language data" onClick={reloadLang}>⟳ Refresh</button>
+            </div>
+            {mode === "real" && !project.lspLoaded ? (
+                <div className="yz2-panel-note">Loading language servers...</div>
+            ) : null}
+            {mode !== "real" ? (
+                <div className="yz2-panel-note">Language services are not connected in demo mode.</div>
+            ) : null}
+            <div className="yz2-lang-section">
+                <div className="yz2-lang-section-head">
+                    <span>LANGUAGE SERVERS</span>
+                    <span>{project.lspServers.length}</span>
+                </div>
+                {project.lspServers.length ? (
+                    project.lspServers.map((server) => (
+                        <div className="yz2-lang-server" key={`${server.workspace_id}:${server.workspace_root}:${server.language}`}>
+                            <span className="ic">◇</span>
+                            <div className="main">
+                                <span className="name">{server.display_name}</span>
+                                <span className="meta">{server.state} · pid {server.pid ?? "n/a"}</span>
+                                <span className="meta">open {server.open_documents} · mem {memoryLabel(server.memory_bytes)}</span>
+                            </div>
+                            <span className={"yz2-lang-state is-" + String(server.state).toLowerCase()}>{server.state}</span>
+                            <button
+                                type="button"
+                                className="yz2-lang-iconbtn"
+                                aria-label={`Restart ${server.display_name}`}
+                                onClick={() => restartLspServer(server.language)}
+                            >
+                                ↻
+                            </button>
+                        </div>
+                    ))
+                ) : (
+                    <div className="yz2-sc-empty">No language servers detected</div>
+                )}
+            </div>
+            <div className="yz2-lang-section">
+                <div className="yz2-lang-section-head">
+                    <span>DIAGNOSTICS</span>
+                    <span>{diagnostics.length}</span>
+                </div>
+                {diagnostics.length ? (
+                    diagnostics.map((diagnostic) => {
+                        const sev = normSeverity(diagnostic.severity)
+                        const line = diagnostic.range.start_line + 1
+                        const col = diagnostic.range.start_character + 1
+                        const source = diagnostic.source ?? "unknown"
+                        return (
+                            <button
+                                type="button"
+                                key={`${diagnostic.path}:${line}:${diagnostic.index}`}
+                                className="yz2-lang-diag"
+                                aria-label={`Open ${diagnostic.path}:${line} · ${sev} · ${source} · ${diagnostic.message}`}
+                                title={`Open ${diagnostic.path}:${line}`}
+                                onClick={() => {
+                                    openFile(diagnostic.path, { line, col })
+                                    closeSettings()
+                                }}
+                            >
+                                <span className={"yz2-lang-sev is-" + sev}>{sev}</span>
+                                <div className="main">
+                                    <span className="name">{diagnostic.path}:{line}</span>
+                                    <span className="meta">{diagnostic.source ?? "unknown"}</span>
+                                    <span className="meta">{diagnostic.message}</span>
+                                </div>
+                            </button>
+                        )
+                    })
+                ) : (
+                    <div className="yz2-sc-empty">No diagnostics</div>
+                )}
+            </div>
+            <div className="yz2-lang-section">
+                <div className="yz2-lang-section-head">
+                    <span>SERVER LOGS</span>
+                    <span>{project.lspLogs.length}</span>
+                </div>
+                <pre className="yz2-lang-log">{project.lspLogs.length ? project.lspLogs.join("\n") : "none"}</pre>
+            </div>
+        </div>
+    )
+}
+
 function DiagnosticsSection() {
     const store = useV2Store()
     const events = store.stab.events
@@ -609,6 +730,8 @@ export function SettingsModal() {
                         <div className="sec-desc">{cur.desc}</div>
                         {cur.custom === "performance" ? (
                             <PerformanceSection />
+                        ) : cur.custom === "language" ? (
+                            <LanguageSection />
                         ) : cur.custom === "diagnostics" ? (
                             <DiagnosticsSection />
                         ) : cur.custom === "recovery" ? (
