@@ -2400,6 +2400,28 @@
     min-height: 0;
     box-sizing: border-box;
 }
+.yz2-az-col-resizer {
+    position: absolute;
+    top: 16px;
+    bottom: 16px;
+    width: 8px;
+    cursor: col-resize;
+    z-index: 6;
+}
+.yz2-az-col-resizer::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 3px;
+    width: 1px;
+    background: transparent;
+}
+.yz2-az-col-resizer:hover::after,
+.yz2-az-col-resizer:focus::after,
+.yz2-az-col-resizer.is-dragging::after {
+    background: var(--yz-a8e23f);
+}
 .yz2-az-win {
     display: flex;
     flex-direction: column;

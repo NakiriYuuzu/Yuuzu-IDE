@@ -12,6 +12,9 @@ ensureTestDom()
 const initialState = {
     mode: v2Store.getState().mode,
     active: v2Store.getState().active,
+    azWidth: v2Store.getState().azWidth,
+    azColsOverride: v2Store.getState().azColsOverride,
+    azSplitRatio: v2Store.getState().azSplitRatio,
     order: [...v2Store.getState().order],
     meta: structuredClone(v2Store.getState().meta),
     ui: structuredClone(v2Store.getState().ui),
@@ -22,6 +25,9 @@ beforeEach(() => {
     v2Store.setState({
         mode: initialState.mode,
         active: initialState.active,
+        azWidth: initialState.azWidth,
+        azColsOverride: initialState.azColsOverride,
+        azSplitRatio: initialState.azSplitRatio,
         order: [...initialState.order],
         meta: structuredClone(initialState.meta),
         ui: structuredClone(initialState.ui),
@@ -33,6 +39,9 @@ afterEach(() => {
     v2Store.setState({
         mode: initialState.mode,
         active: initialState.active,
+        azWidth: initialState.azWidth,
+        azColsOverride: initialState.azColsOverride,
+        azSplitRatio: initialState.azSplitRatio,
         order: [...initialState.order],
         meta: structuredClone(initialState.meta),
         ui: structuredClone(initialState.ui),
@@ -40,7 +49,7 @@ afterEach(() => {
 })
 
 describe("AgentZone", () => {
-    function setSession(overrides: { title?: string; sessionId?: string } = {}) {
+    function setSessions(count: number, overrides: { title?: string; sessionId?: string } = {}) {
         const seed = {
             id: 9101,
             title: "agent session",
@@ -51,6 +60,11 @@ describe("AgentZone", () => {
             max: false,
             ...overrides,
         }
+        const wins = Array.from({ length: Math.max(1, count) }, (_, idx) => ({
+            ...seed,
+            id: seed.id + idx,
+            title: count > 1 ? `agent session ${idx + 1}` : seed.title,
+        }))
 
         act(() => {
             v2Store.setState((s) => ({
@@ -58,13 +72,17 @@ describe("AgentZone", () => {
                     ...s.ui,
                     api: {
                         ...s.ui.api,
-                        wins: [seed],
+                        wins,
                     },
                 },
             }))
         })
 
-        return seed
+        return wins
+    }
+
+    function setSession(overrides: { title?: string; sessionId?: string } = {}) {
+        return setSessions(1, overrides)[0]
     }
 
     test("double click title enters inline edit and Enter submits rename", () => {
@@ -204,5 +222,64 @@ describe("AgentZone", () => {
         } finally {
             act(() => v2Store.setState({ azMax: previous }))
         }
+    })
+
+    test("resolved two-column layout shows separator and manual 3-column hides it", () => {
+        setSessions(4)
+        const view = render(<AgentZone />)
+        expect(view.getByRole("separator")).toBeTruthy()
+
+        act(() => v2Store.getState().setAzColsOverride(3))
+        expect(view.queryByRole("separator")).toBeNull()
+    })
+
+    test("dragging the separator updates azSplitRatio", () => {
+        setSessions(4)
+        act(() => v2Store.setState({ azWidth: 1000 }))
+        render(<AgentZone />)
+
+        const canvas = document.querySelector(".yz2-az-canvas") as HTMLDivElement
+        const rect = {
+            left: 16,
+            right: 1016,
+            top: 0,
+            bottom: 700,
+            width: 1000,
+            height: 700,
+            x: 16,
+            y: 0,
+            toJSON: () => "",
+        } as unknown as DOMRect
+        canvas.getBoundingClientRect = () => rect
+
+        const separator = document.querySelector('[role="separator"]') as HTMLDivElement
+        expect(separator).toBeTruthy()
+
+        fireEvent.pointerDown(separator, { clientX: 200, pointerId: 1 })
+        fireEvent.pointerMove(separator, { clientX: 10000, pointerId: 1 })
+        fireEvent.pointerUp(separator, { clientX: 10000, pointerId: 1 })
+
+        expect(v2Store.getState().azSplitRatio).toBe(70)
+    })
+
+    test("keyboard controls update ratio and aria-valuenow", () => {
+        setSessions(4)
+        act(() => v2Store.setState({ azWidth: 1280 }))
+        render(<AgentZone />)
+        const separator = document.querySelector('[role="separator"]') as HTMLDivElement
+        expect(separator).toBeTruthy()
+        separator.focus()
+
+        fireEvent.keyDown(separator, { key: "ArrowRight" })
+        expect(separator.getAttribute("aria-valuenow")).toBe("52")
+        expect(v2Store.getState().azSplitRatio).toBe(52)
+
+        fireEvent.keyDown(separator, { key: "Home" })
+        expect(separator.getAttribute("aria-valuenow")).toBe("30")
+        expect(v2Store.getState().azSplitRatio).toBe(30)
+
+        fireEvent.keyDown(separator, { key: "End" })
+        expect(separator.getAttribute("aria-valuenow")).toBe("70")
+        expect(v2Store.getState().azSplitRatio).toBe(70)
     })
 })

@@ -347,6 +347,7 @@ export type V2State = {
     toast: string | null
     azWidth: number
     azColsOverride: number | null
+    azSplitRatio: number
     confirm: ConfirmState | null
     cursor: { ln: number; col: number } | null
     stab: StabilityState
@@ -365,6 +366,8 @@ export type V2State = {
     persistSidePanelWidth: () => void
     setAzWidth: (width: number) => void
     setAzColsOverride: (cols: number | null) => void
+    setAzSplitRatio: (ratio: number) => void
+    persistAzSplitRatio: () => void
     showToast: (msg: string) => void
     dismissToast: () => void
 
@@ -527,15 +530,31 @@ export const SIDE_PANEL_MIN_WIDTH = 220
 export const SIDE_PANEL_DEFAULT_WIDTH = 284
 export const SIDE_PANEL_MAX_WIDTH = 420
 
+export const AZ_SPLIT_MIN_RATIO = 30
+export const AZ_SPLIT_DEFAULT_RATIO = 50
+export const AZ_SPLIT_MAX_RATIO = 70
+
 export function clampSidePanelWidth(width: number): number {
     if (!Number.isFinite(width)) return SIDE_PANEL_DEFAULT_WIDTH
     return Math.max(SIDE_PANEL_MIN_WIDTH, Math.min(SIDE_PANEL_MAX_WIDTH, Math.round(width)))
+}
+
+export function clampAzSplitRatio(ratio: number): number {
+    if (!Number.isFinite(ratio)) return AZ_SPLIT_DEFAULT_RATIO
+    const rounded = Math.round(ratio)
+    return Math.max(AZ_SPLIT_MIN_RATIO, Math.min(AZ_SPLIT_MAX_RATIO, rounded))
 }
 
 function sidePanelWidthFromSettings(vals: Record<string, string | boolean>): number {
     const raw = vals.sidePanelWidth
     if (typeof raw !== "string") return SIDE_PANEL_DEFAULT_WIDTH
     return clampSidePanelWidth(Number(raw))
+}
+
+function azSplitRatioFromSettings(vals: Record<string, string | boolean>): number {
+    const raw = vals.azSplitRatio
+    if (typeof raw !== "string") return AZ_SPLIT_DEFAULT_RATIO
+    return clampAzSplitRatio(Number(raw))
 }
 
 function loadTheme(): "dark" | "light" {
@@ -805,6 +824,7 @@ export function createV2Store() {
             toast: null,
             azWidth: 0,
             azColsOverride: null,
+            azSplitRatio: azSplitRatioFromSettings(initialSettings),
             confirm: null,
             cursor: null,
             stab: { metric: null, events: [], backups: [], loading: false },
@@ -884,6 +904,12 @@ export function createV2Store() {
                 if (Math.abs(width - get().azWidth) > 4) set({ azWidth: width })
             },
             setAzColsOverride: (cols) => set({ azColsOverride: cols }),
+            setAzSplitRatio: (ratio) => set({ azSplitRatio: clampAzSplitRatio(ratio) }),
+            persistAzSplitRatio: () => {
+                const azSplitRatio = String(get().azSplitRatio)
+                set((s) => ({ stVals: { ...s.stVals, azSplitRatio } }))
+                persistSettings(get().stVals)
+            },
 
             showToast: (msg) => {
                 if (toastTimer) clearTimeout(toastTimer)

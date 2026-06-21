@@ -3,9 +3,12 @@
 import { afterEach, describe, expect, test } from "bun:test"
 
 import {
+    AZ_SPLIT_MAX_RATIO,
+    AZ_SPLIT_MIN_RATIO,
     SIDE_PANEL_MAX_WIDTH,
     SIDE_PANEL_MIN_WIDTH,
     clampSidePanelWidth,
+    clampAzSplitRatio,
     createV2Store,
     emptyUI,
     sanitizeTerminalTitle,
@@ -1174,6 +1177,32 @@ describe("agent zone", () => {
         expect(store.getState().azColsOverride).toBe(4)
         store.getState().setAzColsOverride(null)
         expect(store.getState().azColsOverride).toBeNull()
+    })
+
+    test("AgentZone split ratio clamps to the supported two-column range", () => {
+        expect(clampAzSplitRatio(10)).toBe(AZ_SPLIT_MIN_RATIO)
+        expect(clampAzSplitRatio(30)).toBe(30)
+        expect(clampAzSplitRatio(56.4)).toBe(56)
+        expect(clampAzSplitRatio(70)).toBe(AZ_SPLIT_MAX_RATIO)
+        expect(clampAzSplitRatio(95)).toBe(AZ_SPLIT_MAX_RATIO)
+        expect(clampAzSplitRatio(Number.NaN)).toBe(50)
+    })
+
+    test("split ratio is stored and persisted like side panel width", () => {
+        const g = globalThis as { localStorage?: Storage }
+        if (!g.localStorage) g.localStorage = window.localStorage
+        g.localStorage.removeItem("yuuzu-ide-v2-settings")
+
+        const store = freshStore()
+        expect(store.getState().azSplitRatio).toBe(50)
+
+        store.getState().setAzSplitRatio(62)
+        expect(store.getState().azSplitRatio).toBe(62)
+        store.getState().persistAzSplitRatio()
+
+        expect(freshStore().getState().azSplitRatio).toBe(62)
+
+        g.localStorage.removeItem("yuuzu-ide-v2-settings")
     })
 })
 
