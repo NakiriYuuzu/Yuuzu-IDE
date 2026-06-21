@@ -670,10 +670,26 @@ export function azColsForWidth(width: number): number {
     return 1
 }
 
+export function azAutoCols(sessionCount: number, width: number): number {
+    const count = Number.isFinite(sessionCount) ? Math.max(0, Math.floor(sessionCount)) : 0
+    const cap = azColsForWidth(width)
+    let wanted = 1
+    if (count >= 7) wanted = 4
+    else if (count >= 5) wanted = 3
+    else if (count >= 2) wanted = 2
+    return Math.max(1, Math.min(cap, wanted))
+}
+
 // Resolve the AgentZone column count: a manual override (2 / 3 / 4) wins,
-// otherwise fall back to the width-driven automatic count.
-export function resolveAzCols(override: number | null, width: number): number {
-    return override ?? azColsForWidth(width)
+// otherwise Auto chooses a session-aware grid capped by the canvas width.
+export function resolveAzCols(override: number | null, width: number, sessionCount: number): number {
+    return override ?? azAutoCols(sessionCount, width)
+}
+
+export function agentZoneSplitHandleLeft(width: number, ratio: number): number {
+    if (!width) return 0
+    const usable = Math.max(1, width - 32 - 14)
+    return Math.round(16 + usable * (ratio / 100) + 7)
 }
 
 export function execOut(cmd: string, branch: string): string[] {

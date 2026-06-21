@@ -2,11 +2,11 @@
 // whose column count tracks the canvas width (1 / 2 / 3 / 4), each window
 // keeping a header with collapse (—), focus (⤢) and close (×) controls.
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react"
 
 import { TerminalTab } from "../features/terminal/TerminalTab"
 
-import { resolveAzCols, termSegs } from "./v2-model"
+import { agentZoneSplitHandleLeft, resolveAzCols, termSegs } from "./v2-model"
 import { useV2Store } from "./v2-store"
 import { applyOscTitle, resizeSession, writeToSession } from "./controller"
 import { Segs } from "./ContentViews"
@@ -19,6 +19,9 @@ export function AgentZone() {
     const setAzWidth = useV2Store((s) => s.setAzWidth)
     const azColsOverride = useV2Store((s) => s.azColsOverride)
     const setAzColsOverride = useV2Store((s) => s.setAzColsOverride)
+    const azSplitRatio = useV2Store((s) => s.azSplitRatio)
+    const setAzSplitRatio = useV2Store((s) => s.setAzSplitRatio)
+    const persistAzSplitRatio = useV2Store((s) => s.persistAzSplitRatio)
     const azNew = useV2Store((s) => s.azNew)
     const azClose = useV2Store((s) => s.azClose)
     const azCollapse = useV2Store((s) => s.azCollapse)
@@ -30,6 +33,7 @@ export function AgentZone() {
     const canvasRef = useRef<HTMLDivElement | null>(null)
     const [editingWin, setEditingWin] = useState<number | null>(null)
     const [editingTitle, setEditingTitle] = useState("")
+    const [isResizing, setIsResizing] = useState(false)
     const renameCommitRef = useRef(true)
     const renameInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -48,9 +52,47 @@ export function AgentZone() {
         renameInputRef.current?.focus()
     }, [editingWin])
 
-    const cols = resolveAzCols(azColsOverride, azWidth)
+    const cols = resolveAzCols(azColsOverride, azWidth, wins.length)
     const anyMax = wins.some((w) => w.max)
     const activeId = azActive ?? wins[0]?.id ?? null
+    const showAzSplitter = cols === 2 && wins.length > 1 && !anyMax
+
+    const startResize = (e: PointerEvent<HTMLDivElement>) => {
+        if (!showAzSplitter || !canvasRef.current) return
+        e.preventDefault()
+        setIsResizing(true)
+        e.currentTarget.classList.add("is-dragging")
+        e.currentTarget.setPointerCapture?.(e.pointerId)
+    }
+
+    const moveResize = (e: PointerEvent<HTMLDivElement>) => {
+        if (!isResizing || !canvasRef.current) return
+        const canvasRect = canvasRef.current.getBoundingClientRect()
+        const usable = Math.max(1, canvasRect.width - 16 - 16 - 14)
+        const next = ((e.clientX - canvasRect.left - 16 - 7) / usable) * 100
+        setAzSplitRatio(next)
+    }
+
+    const stopResize = (e: PointerEvent<HTMLDivElement>) => {
+        if (!isResizing) return
+        e.preventDefault()
+        setIsResizing(false)
+        e.currentTarget.classList.remove("is-dragging")
+        e.currentTarget.releasePointerCapture?.(e.pointerId)
+        persistAzSplitRatio()
+    }
+
+    const keyResize = (e: KeyboardEvent<HTMLDivElement>) => {
+        let next: number | null = null
+        if (e.key === "ArrowLeft") next = azSplitRatio - 2
+        if (e.key === "ArrowRight") next = azSplitRatio + 2
+        if (e.key === "Home") next = 30
+        if (e.key === "End") next = 70
+        if (next == null) return
+        e.preventDefault()
+        setAzSplitRatio(next)
+        persistAzSplitRatio()
+    }
 
     return (
         <div className="yz2-az">
@@ -104,7 +146,14 @@ export function AgentZone() {
                         </div>
                     </div>
                 ) : null}
-                <div className="yz2-az-grid" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+                <div
+                    className="yz2-az-grid"
+                    style={{
+                        gridTemplateColumns: cols === 2
+                            ? `minmax(220px, ${azSplitRatio}fr) minmax(220px, ${100 - azSplitRatio}fr)`
+                            : `repeat(${cols}, minmax(0, 1fr))`,
+                    }}
+                >
                     {wins.map((w) => {
                         const isActive = w.max || w.id === activeId
                         const isEditing = editingWin === w.id
@@ -241,6 +290,24 @@ export function AgentZone() {
                         )
                     })}
                 </div>
+                {showAzSplitter ? (
+                    <div
+                        role="separator"
+                        aria-label="Resize AgentZone columns"
+                        aria-orientation="vertical"
+                        aria-valuemin={30}
+                        aria-valuemax={70}
+                        aria-valuenow={azSplitRatio}
+                        className="yz2-az-col-resizer"
+                        tabIndex={0}
+                        style={{ left: `${agentZoneSplitHandleLeft(azWidth, azSplitRatio)}px` }}
+                        onKeyDown={keyResize}
+                        onPointerDown={startResize}
+                        onPointerMove={moveResize}
+                        onPointerUp={stopResize}
+                        onPointerCancel={stopResize}
+                    />
+                ) : null}
             </div>
         </div>
     )

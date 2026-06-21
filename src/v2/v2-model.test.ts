@@ -4,6 +4,8 @@ import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 
 import {
+    agentZoneSplitHandleLeft,
+    azAutoCols,
     azColsForWidth,
     blameLineMap,
     buildSelect,
@@ -66,17 +68,58 @@ describe("azColsForWidth", () => {
 })
 
 describe("resolveAzCols", () => {
-    test("null override falls back to width-based auto columns", () => {
-        expect(resolveAzCols(null, 0)).toBe(2)
-        expect(resolveAzCols(null, 500)).toBe(1)
-        expect(resolveAzCols(null, 2000)).toBe(3)
-        expect(resolveAzCols(null, 3200)).toBe(4)
+    test("uses session count but stays capped by canvas width", () => {
+        expect(resolveAzCols(null, 0, 0)).toBe(1)
+        expect(resolveAzCols(null, 3200, 1)).toBe(1)
+        expect(resolveAzCols(null, 3200, 2)).toBe(2)
+        expect(resolveAzCols(null, 3200, 4)).toBe(2)
+        expect(resolveAzCols(null, 3200, 5)).toBe(3)
+        expect(resolveAzCols(null, 3200, 6)).toBe(3)
+        expect(resolveAzCols(null, 3200, 7)).toBe(4)
+        expect(resolveAzCols(null, 3200, 8)).toBe(4)
     })
 
-    test("a manual override wins over the auto breakpoint", () => {
-        expect(resolveAzCols(2, 3200)).toBe(2)
-        expect(resolveAzCols(3, 500)).toBe(3)
-        expect(resolveAzCols(4, 0)).toBe(4)
+    test("narrow canvases keep the width-based cap", () => {
+        expect(resolveAzCols(null, 500, 4)).toBe(1)
+        expect(resolveAzCols(null, 900, 8)).toBe(2)
+        expect(resolveAzCols(null, 2400, 8)).toBe(3)
+    })
+
+    test("a manual override wins over the auto calculation", () => {
+        expect(resolveAzCols(2, 3200, 8)).toBe(2)
+        expect(resolveAzCols(3, 500, 1)).toBe(3)
+        expect(resolveAzCols(4, 0, 0)).toBe(4)
+    })
+})
+
+describe("azAutoCols", () => {
+    test("uses session count and remains capped by canvas width", () => {
+        expect(azAutoCols(0, 0)).toBe(1)
+        expect(azAutoCols(1, 3200)).toBe(1)
+        expect(azAutoCols(2, 3200)).toBe(2)
+        expect(azAutoCols(4, 3200)).toBe(2)
+        expect(azAutoCols(5, 3200)).toBe(3)
+        expect(azAutoCols(6, 3200)).toBe(3)
+        expect(azAutoCols(7, 3200)).toBe(4)
+        expect(azAutoCols(8, 3200)).toBe(4)
+    })
+
+    test("does not over-split narrow AgentZone canvases", () => {
+        expect(azAutoCols(4, 500)).toBe(1)
+        expect(azAutoCols(8, 900)).toBe(2)
+        expect(azAutoCols(8, 2400)).toBe(3)
+    })
+})
+
+describe("agentZoneSplitHandleLeft", () => {
+    test("computes handle left from width and ratio", () => {
+        expect(agentZoneSplitHandleLeft(1000, 50)).toBe(500)
+        expect(agentZoneSplitHandleLeft(1000, 30)).toBe(309)
+        expect(agentZoneSplitHandleLeft(1000, 70)).toBe(691)
+    })
+
+    test("falls back to the center when width is unavailable", () => {
+        expect(agentZoneSplitHandleLeft(0, 70)).toBe(0)
     })
 })
 
