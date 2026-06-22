@@ -44,6 +44,7 @@ function fakeAdapter() {
     detach: mock(async () => {}),
     reload: mock(async () => {}),
     hardReload: mock(async () => {}),
+    updateBounds: mock(async () => {}),
   };
 }
 
@@ -328,6 +329,41 @@ describe("browser webview adapter geometry", () => {
     await adapter.hardReload("http://localhost:5173");
     expect(openedUrls).toHaveLength(3);
     expect(hardReloadUrl("http://localhost:5173", 2)).toBe(openedUrls[2]);
+  });
+
+  test("updates existing webview bounds without recreating it", async () => {
+    const fakeWindow = {} as BrowserAdapterWindow;
+    const calls: string[] = [];
+    const adapter = createTauriBrowserPreviewAdapterWithDependencies({
+      getCurrentWindow: () => fakeWindow,
+      createWebview: (_window, _label, options) => {
+        calls.push(`create:${options.url}:${options.x},${options.y},${options.width},${options.height}`);
+        return {
+          close: async () => {
+            calls.push("close");
+          },
+          setPosition: async (position: { x: number; y: number }) => {
+            calls.push(`position:${position.x},${position.y}`);
+          },
+          setSize: async (size: { width: number; height: number }) => {
+            calls.push(`size:${size.width},${size.height}`);
+          },
+        };
+      },
+    });
+
+    await adapter.attach({
+      workspaceId: "workspace-1",
+      url: "https://example.com",
+      webviewBounds: { x: 1, y: 2, width: 300, height: 200 },
+    });
+    await adapter.updateBounds({ x: 10, y: 20, width: 640, height: 360 });
+
+    expect(calls).toEqual([
+      "create:https://example.com:1,2,300,200",
+      "position:10,20",
+      "size:640,360",
+    ]);
   });
 
   test("waits for prior close before creating replacement webview", async () => {

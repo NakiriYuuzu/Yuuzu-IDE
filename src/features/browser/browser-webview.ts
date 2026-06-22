@@ -1,10 +1,13 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type UnlistenFn } from "@tauri-apps/api/event";
 import { Webview } from "@tauri-apps/api/webview";
+import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import type { Window as TauriWindow } from "@tauri-apps/api/window";
 
 type BrowserWebviewHandle = {
   close: () => Promise<void>;
+  setPosition?: (position: LogicalPosition) => Promise<void>;
+  setSize?: (size: LogicalSize) => Promise<void>;
   once?: (
     event: "tauri://created" | "tauri://error",
     listener: (event: unknown) => void,
@@ -34,6 +37,7 @@ export type BrowserPreviewAdapter = {
   detach: () => Promise<void>;
   reload: (url: string) => Promise<void>;
   hardReload: (url: string) => Promise<void>;
+  updateBounds: (bounds: BrowserWebviewBounds) => Promise<void>;
 };
 
 type BrowserGeometryInput = {
@@ -266,6 +270,21 @@ export function createTauriBrowserPreviewAdapterWithDependencies(
           ...lastRequest,
           url: hardReloadUrl(url, hardReloadVersion),
         });
+      });
+    },
+    updateBounds: async (bounds) => {
+      await queueOperation(async () => {
+        if (!webview || !lastRequest) {
+          return;
+        }
+
+        if (!webview.setPosition || !webview.setSize) {
+          return;
+        }
+
+        await webview.setPosition(new LogicalPosition(bounds.x, bounds.y));
+        await webview.setSize(new LogicalSize(bounds.width, bounds.height));
+        lastRequest = { ...lastRequest, webviewBounds: bounds };
       });
     },
   };

@@ -38,14 +38,43 @@ mod tests {
     }
 
     #[test]
-    fn rejects_remote_and_non_http_urls() {
+    fn accepts_remote_https_urls_and_preserves_parts() {
+        let url =
+            normalize_browser_url("https://example.com/docs?q=tauri#webview").expect("https url");
+
+        assert_eq!(url.url, "https://example.com/docs?q=tauri#webview");
+        assert_eq!(url.host, "example.com");
+        assert_eq!(url.port, None);
+
+        let with_port =
+            normalize_browser_url("https://example.com:8443/path").expect("https url with port");
+        assert_eq!(with_port.url, "https://example.com:8443/path");
+        assert_eq!(with_port.host, "example.com");
+        assert_eq!(with_port.port, Some(8443));
+    }
+
+    #[test]
+    fn keeps_http_urls_loopback_only() {
+        assert!(normalize_browser_url("localhost:5173/dashboard").is_ok());
+        assert!(normalize_browser_url("http://127.0.0.1:3000").is_ok());
+        assert!(normalize_browser_url("http://[::1]:8080/").is_ok());
+
+        assert!(normalize_browser_url("http://example.com").is_err());
+        assert!(normalize_browser_url("http://example.local:3000").is_err());
+        assert!(normalize_browser_url("http://localhost.evil.test:3000").is_err());
+    }
+
+    #[test]
+    fn rejects_unsupported_and_credentialed_browser_urls() {
         for value in [
             "",
-            "https://example.com",
-            "http://example.local:3000",
             "file:///Users/yuuzu/index.html",
             "tauri://localhost",
-            "http://localhost.evil.test:3000",
+            "data:text/html,hello",
+            "javascript:alert(1)",
+            "https://user@example.com",
+            "https://user:pass@example.com",
+            "http://localhost:0",
             "http://127.0.0.1:99999",
         ] {
             assert!(
@@ -223,147 +252,56 @@ pub fn normalize_browser_url(input: &str) -> Result<BrowserUrl, String> {
         return Err("browser url is empty".to_string());
     }
 
-    let normalized = if input.contains("://") {
+    let candidate = if input.contains("://") {
         input.to_string()
     } else {
         format!("http://{input}")
     };
+    let parsed = url::Url::parse(&candidate).map_err(|_| "invalid browser url".to_string())?;
+    let scheme = parsed.scheme();
 
-    let Some((scheme, rest)) = normalized.split_once("://") else {
-        return Err("invalid browser url".to_string());
-    };
-    if scheme != "http" {
+    if scheme != "http" && scheme != "https" {
         return Err(format!("unsupported browser scheme: {scheme}"));
     }
-
-    let split = split_browser_url(rest)?;
-    let authority = split.authority;
-    let path = split.path;
-    let query = split.query;
-    let fragment = split.fragment;
-    let (host, port) = parse_loopback_host(authority)?;
-
-    let mut normalized_url = format!("http://{authority}");
-    normalized_url.push_str(&path);
-    if let Some(query) = query {
-        normalized_url.push('?');
-        normalized_url.push_str(query);
+    if parsed.cannot_be_a_base() {
+        return Err("browser url is missing host".to_string());
     }
-    if let Some(fragment) = fragment {
-        normalized_url.push('#');
-        normalized_url.push_str(fragment);
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("browser url must not include credentials".to_string());
+    }
+    if parsed.port() == Some(0) {
+        return Err("browser url has invalid port".to_string());
+    }
+
+    let host = browser_host_string(&parsed)?;
+
+    if scheme == "http" && !is_loopback_url(&parsed) {
+        return Err("browser host is not a loopback address".to_string());
     }
 
     Ok(BrowserUrl {
-        url: normalized_url,
+        url: parsed.to_string(),
         host,
-        port,
+        port: parsed.port(),
     })
 }
 
-struct SplitBrowserUrl<'a> {
-    authority: &'a str,
-    path: String,
-    query: Option<&'a str>,
-    fragment: Option<&'a str>,
-}
-
-fn split_browser_url(input: &str) -> Result<SplitBrowserUrl<'_>, String> {
-    if input.is_empty() {
-        return Err("browser url is missing host".to_string());
-    }
-
-    let mut remainder = input;
-    let mut fragment = None;
-    if let Some((before_hash, hash)) = remainder.split_once('#') {
-        fragment = Some(hash);
-        remainder = before_hash;
-    }
-
-    let mut query = None;
-    if let Some((before_query, query_part)) = remainder.split_once('?') {
-        query = Some(query_part);
-        remainder = before_query;
-    }
-
-    let (authority, path_part) = match remainder.split_once('/') {
-        Some((authority, path_part)) => (authority, Some(path_part)),
-        None => (remainder, None),
-    };
-
-    if authority.is_empty() {
-        return Err("browser url is missing host".to_string());
-    }
-    let path = if let Some(path_after) = path_part {
-        if path_after.is_empty() {
-            "/".to_string()
-        } else {
-            format!("/{path_after}")
-        }
-    } else {
-        String::new()
-    };
-
-    Ok(SplitBrowserUrl {
-        authority,
-        path,
-        query,
-        fragment,
-    })
-}
-
-fn parse_loopback_host(authority: &str) -> Result<(String, Option<u16>), String> {
-    if authority.starts_with('[') {
-        let Some(close) = authority.find(']') else {
-            return Err("browser url has invalid IPv6 host".to_string());
-        };
-
-        let host = &authority[1..close];
-        if host != "::1" {
-            return Err("browser host is not a loopback address".to_string());
-        }
-
-        if close + 1 == authority.len() {
-            return Ok((host.to_string(), None));
-        }
-
-        let suffix = &authority[close + 1..];
-        if !suffix.starts_with(':') {
-            return Err("browser url has invalid IPv6 port".to_string());
-        }
-        let port = parse_port(&suffix[1..])?;
-        Ok((host.to_string(), Some(port)))
-    } else {
-        let mut split = authority.split(':');
-        let host = split
-            .next()
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| "browser url is missing host".to_string())?;
-        let port = match split.next() {
-            Some(raw_port) if !raw_port.is_empty() => Some(parse_port(raw_port)?),
-            Some(_) => return Err("browser url has invalid port".to_string()),
-            None => None,
-        };
-
-        if split.next().is_some() {
-            return Err("browser url host is malformed".to_string());
-        }
-        if host != "localhost" && host != "127.0.0.1" {
-            return Err("browser host is not a loopback address".to_string());
-        }
-
-        Ok((host.to_string(), port))
+fn is_loopback_url(url: &url::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(addr)) => addr.is_loopback(),
+        Some(url::Host::Ipv6(addr)) => addr.is_loopback(),
+        None => false,
     }
 }
 
-fn parse_port(raw_port: &str) -> Result<u16, String> {
-    let port: u16 = raw_port
-        .parse()
-        .map_err(|_| "browser url has invalid port".to_string())?;
-    if port == 0 {
-        return Err("browser url has invalid port".to_string());
+fn browser_host_string(url: &url::Url) -> Result<String, String> {
+    match url.host() {
+        Some(url::Host::Domain(host)) if !host.is_empty() => Ok(host.to_string()),
+        Some(url::Host::Ipv4(addr)) => Ok(addr.to_string()),
+        Some(url::Host::Ipv6(addr)) => Ok(addr.to_string()),
+        _ => Err("browser url is missing host".to_string()),
     }
-    Ok(port)
 }
 
 pub fn validate_capture_bounds(bounds: &BrowserCaptureBounds) -> Result<(), String> {

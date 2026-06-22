@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react"
 
 import { ensureTestDom } from "../test/test-dom"
 import { BrowserView, EditorView } from "./ContentViews"
+import type { BrowserPaneGeometry, BrowserPreviewAdapter } from "../features/browser/browser-webview"
 import type { Tab } from "./v2-model"
 import { registerRealDelegate, v2Store } from "./v2-store"
 
@@ -529,6 +530,90 @@ describe("BrowserView", () => {
         fireEvent.click(view.getByRole("button", { name: "Capture browser screenshot" }))
 
         expect(calls).toEqual([["capture", tab.id, { x: 15, y: 28, width: 300, height: 180 }]])
+    })
+
+    test("uses native browser preview surface for HTTPS URLs in Tauri real mode", async () => {
+        const originalTauri = (window as any).__TAURI_INTERNALS__
+        ;(window as any).__TAURI_INTERNALS__ = {}
+        const tab: Tab = { id: 9505, type: "browser", title: "example.com", url: "https://example.com/docs" }
+        resetBrowser(tab)
+
+        const calls: unknown[] = []
+        const adapter: BrowserPreviewAdapter = {
+            attach: async (request) => { calls.push(["attach", request]) },
+            detach: async () => { calls.push(["detach"]) },
+            reload: async (url) => { calls.push(["reload", url]) },
+            hardReload: async (url) => { calls.push(["hardReload", url]) },
+            updateBounds: async (bounds) => { calls.push(["updateBounds", bounds]) },
+        }
+        const geometry: BrowserPaneGeometry = {
+            webviewBounds: { x: 10, y: 20, width: 640, height: 360 },
+            captureBounds: { x: 20, y: 40, width: 1280, height: 720 },
+        }
+
+        try {
+            const view = render(
+                <BrowserView
+                    tab={tab}
+                    browserPreviewAdapter={adapter}
+                    resolveBrowserGeometry={async () => geometry}
+                />,
+            )
+
+            await waitFor(() => {
+                expect(calls).toContainEqual([
+                    "attach",
+                    {
+                        workspaceId: "api",
+                        url: "https://example.com/docs",
+                        webviewBounds: geometry.webviewBounds,
+                    },
+                ])
+            })
+            expect(view.container.querySelector("iframe")).toBeNull()
+            expect(view.getByLabelText("Browser preview frame")).toBeTruthy()
+        } finally {
+            if (originalTauri === undefined) {
+                delete (window as any).__TAURI_INTERNALS__
+            } else {
+                ;(window as any).__TAURI_INTERNALS__ = originalTauri
+            }
+        }
+    })
+
+    test("shows URL errors instead of the previous native browser page", () => {
+        const originalTauri = (window as any).__TAURI_INTERNALS__
+        ;(window as any).__TAURI_INTERNALS__ = {}
+        const tab: Tab = {
+            id: 9506,
+            type: "browser",
+            title: "example.com",
+            url: "https://example.com/",
+            urlInput: "http://example.com",
+            urlErr: "remote http URLs are blocked",
+        }
+        resetBrowser(tab)
+
+        const adapter: BrowserPreviewAdapter = {
+            attach: async () => {},
+            detach: async () => {},
+            reload: async () => {},
+            hardReload: async () => {},
+            updateBounds: async () => {},
+        }
+
+        try {
+            const view = render(<BrowserView tab={tab} browserPreviewAdapter={adapter} />)
+
+            expect(view.getByText("✗ remote http URLs are blocked")).toBeTruthy()
+            expect(view.queryByLabelText("Browser preview frame")).toBeNull()
+        } finally {
+            if (originalTauri === undefined) {
+                delete (window as any).__TAURI_INTERNALS__
+            } else {
+                ;(window as any).__TAURI_INTERNALS__ = originalTauri
+            }
+        }
     })
 
     test("renders browser screenshot thumbnail with dimensions", () => {

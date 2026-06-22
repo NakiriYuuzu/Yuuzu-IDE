@@ -309,7 +309,7 @@ function parseOutputDevServerUrls(
 function parseOutputUrl(value: string): BrowserUrl | null {
   try {
     const parsed = new URL(value);
-    if (parsed.protocol !== "http:") {
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return null;
     }
 
