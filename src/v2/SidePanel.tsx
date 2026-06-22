@@ -1,16 +1,9 @@
 import { useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react"
+import { Database, Files, GitBranch, Server, Sparkles } from "lucide-react"
 
 import { DIR_CHIP, chipFor, LANE_COLORS } from "./v2-model"
 import type { FnMode, GitFile, TreeNode } from "./v2-model"
 import { SIDE_PANEL_MAX_WIDTH, SIDE_PANEL_MIN_WIDTH, useV2Store } from "./v2-store"
-
-function FnIcon({ children }: { children: ReactNode }) {
-    return (
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
-            {children}
-        </svg>
-    )
-}
 
 function ActivityTabs() {
     const mode = useV2Store((s) => s.mode)
@@ -23,11 +16,11 @@ function ActivityTabs() {
 
     const gitBadge = mode === "real" ? git.ahead + git.behind : git.ahead + git.behind + 2
     const rows: { id: FnMode; label: string; icon: ReactNode; badge?: string }[] = [
-        { id: "files", label: "Files", icon: <path d="M2 4.5C2 3.7 2.7 3 3.5 3h2.8l1.8 2h4.4c.8 0 1.5.7 1.5 1.5v5c0 .8-.7 1.5-1.5 1.5h-9C2.7 13 2 12.3 2 11.5V4.5z" /> },
-        { id: "git", label: "Git", badge: gitBadge > 0 ? String(gitBadge) : undefined, icon: <><circle cx="4.5" cy="4.2" r="1.7" /><circle cx="4.5" cy="11.8" r="1.7" /><circle cx="11.5" cy="5.8" r="1.7" /><path d="M4.5 5.9v4.2 M11.5 7.5c0 2.6-3.2 2-7 3.2" /></> },
-        { id: "db", label: "Database", badge: String(dbs.length), icon: <><ellipse cx="8" cy="3.8" rx="5" ry="1.9" /><path d="M3 3.8v8.4c0 1 2.2 1.9 5 1.9s5-.9 5-1.9V3.8 M3 8c0 1 2.2 1.9 5 1.9S13 9 13 8" /></> },
-        { id: "ssh", label: "SSH-SFTP", badge: String(hosts.length), icon: <><rect x="2" y="3" width="12" height="10" rx="1.5" /><path d="M4.5 6.2l2 1.8-2 1.8 M8.5 10h3" /></> },
-        { id: "agent", label: "AgentZone", icon: <path d="M8 1.8l1.3 4 4 1.3-4 1.3-1.3 4-1.3-4-4-1.3 4-1.3z" /> },
+        { id: "files", label: "Files", icon: <Files aria-hidden="true" /> },
+        { id: "git", label: "Git", badge: gitBadge > 0 ? String(gitBadge) : undefined, icon: <GitBranch aria-hidden="true" /> },
+        { id: "db", label: "Database", badge: String(dbs.length), icon: <Database aria-hidden="true" /> },
+        { id: "ssh", label: "SSH-SFTP", badge: String(hosts.length), icon: <Server aria-hidden="true" /> },
+        { id: "agent", label: "AgentZone", icon: <Sparkles aria-hidden="true" /> },
     ]
 
     return (
@@ -41,7 +34,7 @@ function ActivityTabs() {
                     title={row.label}
                     onClick={() => selectFn(row.id)}
                 >
-                    <FnIcon>{row.icon}</FnIcon>
+                    {row.icon}
                     {row.id === "agent" ? (
                         wins.length > 0 ? (
                             <span className="yz2-activity-badge is-live">

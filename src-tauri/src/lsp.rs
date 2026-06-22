@@ -247,7 +247,9 @@ pub fn decode_lsp_message(buffer: &mut Vec<u8>) -> Result<Option<serde_json::Val
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ServerState {
     Unsupported,
+    Idle,
     MissingCommand,
+    Starting,
     Running,
     Stopped,
     Error,
@@ -259,10 +261,33 @@ pub struct LanguageServerStatus {
     pub workspace_root: String,
     pub language: LanguageId,
     pub display_name: String,
+    pub command: Option<String>,
     pub state: ServerState,
     pub pid: Option<u32>,
     pub memory_bytes: Option<u64>,
     pub open_documents: usize,
+    pub last_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum DocumentReadiness {
+    Unsupported,
+    Syncing,
+    Ready,
+    Stale,
+    MissingCommand,
+    Error,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct LspEnsureDocumentResult {
+    pub workspace_id: String,
+    pub workspace_root: String,
+    pub path: String,
+    pub language: Option<LanguageId>,
+    pub readiness: DocumentReadiness,
+    pub server: LanguageServerStatus,
+    pub command: Option<String>,
     pub last_error: Option<String>,
 }
 
@@ -319,6 +344,7 @@ struct LanguageServerKey {
 struct LanguageServerRecord {
     display_name: String,
     language: LanguageId,
+    command: String,
     state: ServerState,
     pid: Option<u32>,
     memory_bytes: Option<u64>,
@@ -337,8 +363,9 @@ impl LanguageServerRecord {
         Self {
             display_name: profile.display_name.clone(),
             language: profile.language,
+            command: profile.command.clone(),
             state: if available {
-                ServerState::Running
+                ServerState::Idle
             } else {
                 ServerState::MissingCommand
             },
@@ -372,6 +399,7 @@ impl LanguageServerRecord {
             workspace_root: workspace_root.to_string(),
             language,
             display_name: self.display_name.clone(),
+            command: Some(self.command.clone()),
             state: self.state.clone(),
             pid,
             memory_bytes,
@@ -1710,11 +1738,12 @@ impl LanguageServerManager {
         path: String,
         content: String,
     ) -> Result<LanguageServerStatus, String> {
-        self.open_document_at(
+        self.open_document_with_version_at(
             workspace_id,
             workspace_root,
             path,
             content,
+            None,
             current_unix_millis(),
         )
     }
@@ -1727,12 +1756,25 @@ impl LanguageServerManager {
         content: String,
         now: u64,
     ) -> Result<LanguageServerStatus, String> {
+        self.open_document_with_version_at(workspace_id, workspace_root, path, content, None, now)
+    }
+
+    fn open_document_with_version_at(
+        &self,
+        workspace_id: String,
+        workspace_root: String,
+        path: String,
+        content: String,
+        requested_version: Option<i32>,
+        now: u64,
+    ) -> Result<LanguageServerStatus, String> {
         let Some(language) = detect_language(&path) else {
             return Ok(LanguageServerStatus {
                 workspace_id,
                 workspace_root,
                 language: LanguageId::Rust,
                 display_name: "Unsupported".to_string(),
+                command: None,
                 state: ServerState::Unsupported,
                 pid: None,
                 memory_bytes: None,
@@ -1771,16 +1813,18 @@ impl LanguageServerManager {
             let was_open = entry.open_documents.contains(&path);
             let previous_content = entry.open_contents.get(&path).cloned();
             let was_running_initialized = entry.state == ServerState::Running && entry.initialized;
-            let version = if previous_content.as_deref() == Some(content.as_str()) {
-                *entry.open_versions.get(&path).unwrap_or(&1)
-            } else {
-                entry
-                    .open_versions
-                    .get(&path)
-                    .copied()
-                    .unwrap_or(0)
-                    .saturating_add(1)
-            };
+            let version = requested_version.unwrap_or_else(|| {
+                if previous_content.as_deref() == Some(content.as_str()) {
+                    *entry.open_versions.get(&path).unwrap_or(&1)
+                } else {
+                    entry
+                        .open_versions
+                        .get(&path)
+                        .copied()
+                        .unwrap_or(0)
+                        .saturating_add(1)
+                }
+            });
             entry.open_documents.insert(path.clone());
             entry.open_contents.insert(path.clone(), content.clone());
             entry.open_versions.insert(path.clone(), version);
@@ -1849,6 +1893,44 @@ impl LanguageServerManager {
             .get(&key)
             .ok_or_else(|| "language server record vanished".to_string())?;
         Ok(entry.status(&key.workspace_id, &key.workspace_root, key.language))
+    }
+
+    pub fn ensure_document(
+        &self,
+        workspace_id: String,
+        workspace_root: String,
+        path: String,
+        content: String,
+        version: Option<i32>,
+    ) -> Result<LspEnsureDocumentResult, String> {
+        let language = detect_language(&path);
+        let status = self.open_document_with_version_at(
+            workspace_id.clone(),
+            workspace_root.clone(),
+            path.clone(),
+            content,
+            version,
+            current_unix_millis(),
+        )?;
+        let readiness = match status.state {
+            ServerState::Unsupported => DocumentReadiness::Unsupported,
+            ServerState::Idle | ServerState::Stopped => DocumentReadiness::Stale,
+            ServerState::Starting => DocumentReadiness::Syncing,
+            ServerState::Running => DocumentReadiness::Ready,
+            ServerState::MissingCommand => DocumentReadiness::MissingCommand,
+            ServerState::Error => DocumentReadiness::Error,
+        };
+
+        Ok(LspEnsureDocumentResult {
+            workspace_id,
+            workspace_root,
+            path,
+            language,
+            command: status.command.clone(),
+            last_error: status.last_error.clone(),
+            readiness,
+            server: status,
+        })
     }
 
     pub fn restart_server(
@@ -1965,6 +2047,7 @@ impl LanguageServerManager {
                 workspace_root,
                 language: LanguageId::Rust,
                 display_name: "Unsupported".to_string(),
+                command: None,
                 state: ServerState::Unsupported,
                 pid: None,
                 memory_bytes: None,
@@ -2007,15 +2090,16 @@ impl LanguageServerManager {
                         language,
                         available: false,
                     });
-            let display_name = server_profile_for_workspace(language, &workspace_root).display_name;
+            let server_profile = server_profile_for_workspace(language, &workspace_root);
 
             LanguageServerStatus {
                 workspace_id,
                 workspace_root,
                 language,
-                display_name,
+                display_name: server_profile.display_name,
+                command: Some(server_profile.command),
                 state: if profile.available {
-                    ServerState::Stopped
+                    ServerState::Idle
                 } else {
                     ServerState::MissingCommand
                 },
@@ -2148,13 +2232,16 @@ impl LanguageServerManager {
                 available: false,
             });
 
+        let server_profile = server_profile_for_workspace(language, workspace_root);
+
         LanguageServerStatus {
             workspace_id: workspace_id.to_string(),
             workspace_root: workspace_root.to_string(),
             language,
-            display_name: server_profile_for_workspace(language, workspace_root).display_name,
+            display_name: server_profile.display_name,
+            command: Some(server_profile.command),
             state: if profile.available {
-                ServerState::Stopped
+                ServerState::Idle
             } else {
                 ServerState::MissingCommand
             },
@@ -2318,7 +2405,7 @@ impl LanguageServerManager {
 
 #[derive(Clone)]
 pub struct LspState {
-    manager: Arc<Mutex<LanguageServerManager>>,
+    manager: Arc<LanguageServerManager>,
 }
 
 impl Default for LspState {
@@ -2330,14 +2417,14 @@ impl Default for LspState {
 impl LspState {
     pub fn new() -> Self {
         Self {
-            manager: Arc::new(Mutex::new(LanguageServerManager::new())),
+            manager: Arc::new(LanguageServerManager::new()),
         }
     }
 
     #[cfg(test)]
     pub fn new_for_tests() -> Self {
         Self {
-            manager: Arc::new(Mutex::new(LanguageServerManager::default_for_tests())),
+            manager: Arc::new(LanguageServerManager::default_for_tests()),
         }
     }
 
@@ -2348,8 +2435,20 @@ impl LspState {
         path: String,
         content: String,
     ) -> Result<LanguageServerStatus, String> {
-        let manager = self.manager.lock().map_err(|err| err.to_string())?;
-        manager.open_document(workspace_id, workspace_root, path, content)
+        self.manager
+            .open_document(workspace_id, workspace_root, path, content)
+    }
+
+    pub fn ensure_document(
+        &self,
+        workspace_id: String,
+        workspace_root: String,
+        path: String,
+        content: String,
+        version: Option<i32>,
+    ) -> Result<LspEnsureDocumentResult, String> {
+        self.manager
+            .ensure_document(workspace_id, workspace_root, path, content, version)
     }
 
     pub fn close_document(
@@ -2358,8 +2457,8 @@ impl LspState {
         workspace_root: String,
         path: String,
     ) -> Result<LanguageServerStatus, String> {
-        let manager = self.manager.lock().map_err(|err| err.to_string())?;
-        manager.close_document(workspace_id, workspace_root, path)
+        self.manager
+            .close_document(workspace_id, workspace_root, path)
     }
 
     pub fn hover(
@@ -2370,8 +2469,8 @@ impl LspState {
         line: u32,
         character: u32,
     ) -> Result<serde_json::Value, String> {
-        let manager = self.manager.lock().map_err(|err| err.to_string())?;
-        manager.hover(&workspace_id, &workspace_root, &path, line, character)
+        self.manager
+            .hover(&workspace_id, &workspace_root, &path, line, character)
     }
 
     pub fn definition(
@@ -2382,8 +2481,8 @@ impl LspState {
         line: u32,
         character: u32,
     ) -> Result<Vec<serde_json::Value>, String> {
-        let manager = self.manager.lock().map_err(|err| err.to_string())?;
-        manager.definition(&workspace_id, &workspace_root, &path, line, character)
+        self.manager
+            .definition(&workspace_id, &workspace_root, &path, line, character)
     }
 
     pub fn references(
@@ -2394,8 +2493,8 @@ impl LspState {
         line: u32,
         character: u32,
     ) -> Result<Vec<serde_json::Value>, String> {
-        let manager = self.manager.lock().map_err(|err| err.to_string())?;
-        manager.references(&workspace_id, &workspace_root, &path, line, character)
+        self.manager
+            .references(&workspace_id, &workspace_root, &path, line, character)
     }
 
     pub fn completion(
@@ -2406,8 +2505,8 @@ impl LspState {
         line: u32,
         character: u32,
     ) -> Result<serde_json::Value, String> {
-        let manager = self.manager.lock().map_err(|err| err.to_string())?;
-        manager.completion(&workspace_id, &workspace_root, &path, line, character)
+        self.manager
+            .completion(&workspace_id, &workspace_root, &path, line, character)
     }
 
     pub fn code_actions(
@@ -2418,8 +2517,8 @@ impl LspState {
         line: u32,
         character: u32,
     ) -> Result<Vec<serde_json::Value>, String> {
-        let manager = self.manager.lock().map_err(|err| err.to_string())?;
-        manager.code_actions(&workspace_id, &workspace_root, &path, line, character)
+        self.manager
+            .code_actions(&workspace_id, &workspace_root, &path, line, character)
     }
 
     pub fn symbols(
@@ -2428,8 +2527,7 @@ impl LspState {
         workspace_root: String,
         query: String,
     ) -> Result<Vec<serde_json::Value>, String> {
-        let manager = self.manager.lock().map_err(|err| err.to_string())?;
-        manager.symbols(&workspace_id, &workspace_root, &query)
+        self.manager.symbols(&workspace_id, &workspace_root, &query)
     }
 
     pub fn rename(
@@ -2441,8 +2539,7 @@ impl LspState {
         character: u32,
         new_name: String,
     ) -> Result<serde_json::Value, String> {
-        let manager = self.manager.lock().map_err(|err| err.to_string())?;
-        manager.rename(
+        self.manager.rename(
             &workspace_id,
             &workspace_root,
             &path,
@@ -2458,22 +2555,17 @@ impl LspState {
         workspace_root: String,
         language: LanguageId,
     ) -> Result<LanguageServerStatus, String> {
-        let manager = self.manager.lock().map_err(|err| err.to_string())?;
-        manager.restart_server(&workspace_id, &workspace_root, language)
+        self.manager
+            .restart_server(&workspace_id, &workspace_root, language)
     }
 
     pub fn server_logs(&self, workspace_id: String, workspace_root: String) -> Vec<String> {
-        if let Ok(manager) = self.manager.lock() {
-            return manager.server_logs(&workspace_id, &workspace_root);
-        }
-
-        Vec::new()
+        self.manager.server_logs(&workspace_id, &workspace_root)
     }
 
     pub fn set_memory_for_tests(&self, workspace_id: String, language: LanguageId, bytes: u64) {
-        if let Ok(manager) = self.manager.lock() {
-            manager.set_memory_for_tests(&workspace_id, language, bytes);
-        }
+        self.manager
+            .set_memory_for_tests(&workspace_id, language, bytes);
     }
 
     pub fn statuses(
@@ -2482,9 +2574,7 @@ impl LspState {
         workspace_root: String,
     ) -> Vec<LanguageServerStatus> {
         self.manager
-            .lock()
-            .map(|manager| manager.status_for_workspace(&workspace_id, &workspace_root))
-            .unwrap_or_default()
+            .status_for_workspace(&workspace_id, &workspace_root)
     }
 
     pub fn document_status(
@@ -2493,8 +2583,9 @@ impl LspState {
         workspace_root: &str,
         path: &str,
     ) -> Result<Option<LanguageServerStatus>, String> {
-        let manager = self.manager.lock().map_err(|err| err.to_string())?;
-        Ok(manager.document_status(workspace_id, workspace_root, path))
+        Ok(self
+            .manager
+            .document_status(workspace_id, workspace_root, path))
     }
 
     pub fn document_diagnostics(
@@ -2504,9 +2595,7 @@ impl LspState {
         path: &str,
     ) -> Vec<LspDiagnostic> {
         self.manager
-            .lock()
-            .map(|manager| manager.document_diagnostics(workspace_id, workspace_root, path))
-            .unwrap_or_default()
+            .document_diagnostics(workspace_id, workspace_root, path)
     }
 
     pub fn workspace_diagnostics(
@@ -2515,15 +2604,11 @@ impl LspState {
         workspace_root: &str,
     ) -> Vec<LspDiagnostic> {
         self.manager
-            .lock()
-            .map(|manager| manager.workspace_diagnostics(workspace_id, workspace_root))
-            .unwrap_or_default()
+            .workspace_diagnostics(workspace_id, workspace_root)
     }
 
     pub fn sweep_idle_servers(&self, now_ms: u64, idle_timeout_ms: u64) {
-        if let Ok(manager) = self.manager.lock() {
-            manager.sweep_idle_servers(now_ms, idle_timeout_ms);
-        }
+        self.manager.sweep_idle_servers(now_ms, idle_timeout_ms);
     }
 }
 
@@ -2942,6 +3027,27 @@ mod tests {
     }
 
     #[test]
+    fn detected_unopened_workspace_language_is_idle() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        std::fs::create_dir_all(workspace.path().join("src")).expect("src dir");
+        std::fs::write(
+            workspace.path().join("src/app.ts"),
+            "export const app = true;\n",
+        )
+        .expect("typescript file");
+
+        let manager = LanguageServerManager::default_for_tests();
+        let statuses =
+            manager.status_for_workspace("workspace", &workspace.path().to_string_lossy());
+
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].language, LanguageId::TypeScript);
+        assert_eq!(statuses[0].state, ServerState::Idle);
+        assert_eq!(statuses[0].pid, None);
+        assert_eq!(statuses[0].open_documents, 0);
+    }
+
+    #[test]
     fn restart_replaces_status_and_records_log_line() {
         let manager = LanguageServerManager::default_for_tests();
 
@@ -3323,6 +3429,193 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn ensure_unsupported_document_returns_unsupported_without_starting_server() {
+        let manager = LanguageServerManager::default_for_tests();
+
+        let result = manager
+            .ensure_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "README.md".to_string(),
+                "# Notes\n".to_string(),
+                None,
+            )
+            .expect("ensure unsupported");
+
+        assert_eq!(result.readiness, DocumentReadiness::Unsupported);
+        assert_eq!(result.language, None);
+        assert_eq!(result.server.state, ServerState::Unsupported);
+        assert_eq!(result.command, None);
+        assert!(manager.statuses().is_empty());
+    }
+
+    #[test]
+    fn ensure_supported_document_starts_server_and_reports_ready() {
+        let capture = TransportFixtureState::default();
+        let transport = TestTransport::new(capture.clone());
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": serde_json::json!({}),
+        }));
+
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::Rust)],
+            move |_profile| Ok(Box::new(TestTransport::new(capture.clone()))),
+        );
+
+        let result = manager
+            .ensure_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}\n".to_string(),
+                Some(7),
+            )
+            .expect("ensure document");
+
+        assert_eq!(result.readiness, DocumentReadiness::Ready);
+        assert_eq!(result.language, Some(LanguageId::Rust));
+        assert_eq!(result.server.state, ServerState::Running);
+        assert_eq!(result.server.open_documents, 1);
+        assert_eq!(result.command.as_deref(), Some("rust-analyzer"));
+
+        let methods = transport
+            .sent_messages()
+            .into_iter()
+            .filter_map(|message| {
+                message
+                    .get("method")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            methods,
+            vec!["initialize", "initialized", "textDocument/didOpen"]
+        );
+    }
+
+    #[test]
+    fn ensure_open_document_sends_did_change_for_new_content() {
+        let capture = TransportFixtureState::default();
+        let transport = TestTransport::new(capture.clone());
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": serde_json::json!({}),
+        }));
+
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::Rust)],
+            move |_profile| Ok(Box::new(TestTransport::new(capture.clone()))),
+        );
+
+        manager
+            .ensure_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}\n".to_string(),
+                Some(1),
+            )
+            .expect("ensure first version");
+        let result = manager
+            .ensure_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() { println!(\"hi\"); }\n".to_string(),
+                Some(2),
+            )
+            .expect("ensure second version");
+
+        assert_eq!(result.readiness, DocumentReadiness::Ready);
+        assert_eq!(
+            transport
+                .sent_messages()
+                .iter()
+                .filter(|message| {
+                    message.get("method").and_then(serde_json::Value::as_str)
+                        == Some("textDocument/didChange")
+                })
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn ensure_same_content_does_not_send_duplicate_did_change() {
+        let capture = TransportFixtureState::default();
+        let transport = TestTransport::new(capture.clone());
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": serde_json::json!({}),
+        }));
+
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::Rust)],
+            move |_profile| Ok(Box::new(TestTransport::new(capture.clone()))),
+        );
+
+        manager
+            .ensure_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}\n".to_string(),
+                Some(1),
+            )
+            .expect("ensure first version");
+        manager
+            .ensure_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}\n".to_string(),
+                Some(1),
+            )
+            .expect("ensure same version");
+
+        assert_eq!(
+            transport
+                .sent_messages()
+                .iter()
+                .filter(|message| {
+                    message.get("method").and_then(serde_json::Value::as_str)
+                        == Some("textDocument/didChange")
+                })
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn ensure_missing_command_reports_command_without_starting_server() {
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::Rust)],
+            |_profile| Err("command not found".to_string()),
+        );
+
+        let result = manager
+            .ensure_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}\n".to_string(),
+                None,
+            )
+            .expect("ensure missing command");
+
+        assert_eq!(result.readiness, DocumentReadiness::MissingCommand);
+        assert_eq!(result.server.state, ServerState::MissingCommand);
+        assert_eq!(result.command.as_deref(), Some("rust-analyzer"));
+        assert_eq!(result.last_error.as_deref(), Some("command not found"));
     }
 
     #[test]

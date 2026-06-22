@@ -7,6 +7,15 @@ bun run tauri build --debug --bundles app
 open src-tauri/target/debug/bundle/macos/Yuuzu-IDE.app
 ```
 
+If the build reaches bundle creation but exits on updater artifact signing
+because `TAURI_SIGNING_PRIVATE_KEY` is unset, report that blocker and rerun only
+the local runtime smoke build with updater artifacts disabled:
+
+```bash
+bun run tauri build --debug --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
+open src-tauri/target/debug/bundle/macos/Yuuzu-IDE.app
+```
+
 Use a temporary workspace for destructive or synthetic tests:
 
 ```bash
@@ -49,6 +58,35 @@ Pass condition: values match exactly.
 2. Open a text/code file in the editor.
 3. Focus the CodeMirror editor, type, move left/right, and click different positions.
 4. Pass condition: the caret remains visible against the dark background and content updates do not recreate/drop the focused editor instance.
+
+## LSP editor action readiness
+
+Use this when validating LSP lazy-start, document readiness, completion,
+definition, references, rename, or code actions in the packaged app.
+
+1. Open Language Settings before opening or using an LSP-backed file when
+   possible.
+2. Pass condition before first use: detected languages show `Idle · starts on
+   first use`, not `Stopped`.
+3. Open a supported source file such as `.ts`, `.rs`, or `.py`.
+4. Prefer keyboard-triggered editor actions for Computer Use stability. Focus
+   the CodeMirror editor and press `Ctrl-Space` to trigger completion; this
+   exercises the same document ensure path without relying on context-menu
+   cursor capture.
+5. If the task specifically requires context-menu actions, first click inside
+   the editor text, then right-click the same line. If Go to Definition, Find
+   References, Rename Symbol, and Code Actions remain disabled because
+   Computer Use did not set the editor cursor, record that as a UI automation
+   limitation and pair the smoke with focused controller tests that prove
+   ensure-before-request ordering.
+6. Pass condition after first use: the relevant server transitions to
+   `Running`, or the UI shows an actionable `Missing command: <command>` plus
+   install hint.
+7. Useful terminal evidence after first use:
+
+```bash
+pgrep -fl "typescript-language-server|rust-analyzer|pylsp|csharp-ls|kotlin-language-server" || true
+```
 
 ## Browser capture
 

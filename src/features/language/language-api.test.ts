@@ -12,7 +12,7 @@ mock.module("@tauri-apps/api/core", () => ({
   },
 }));
 
-const { requestLanguageHover } = await import("./language-api");
+const { ensureLanguageDocument, requestLanguageHover } = await import("./language-api");
 
 describe("language api", () => {
   beforeEach(() => {
@@ -44,6 +44,52 @@ describe("language api", () => {
           path: "src/main.rs",
           line: 4,
           character: 9,
+        },
+      },
+    ]);
+  });
+
+  test("invokes document ensure with flat LSP arguments", async () => {
+    hoverPayload = {
+      workspace_id: "workspace",
+      workspace_root: "/workspace",
+      path: "src/main.rs",
+      language: "Rust",
+      readiness: "Ready",
+      command: "rust-analyzer",
+      last_error: null,
+      server: {
+        workspace_id: "workspace",
+        workspace_root: "/workspace",
+        language: "Rust",
+        display_name: "Rust Analyzer",
+        command: "rust-analyzer",
+        state: "Running",
+        pid: 42,
+        memory_bytes: null,
+        open_documents: 1,
+        last_error: null,
+      },
+    };
+
+    const result = await ensureLanguageDocument({
+      workspaceId: "workspace",
+      workspaceRoot: "/workspace",
+      path: "src/main.rs",
+      content: "fn main() {}\n",
+      version: 12,
+    });
+
+    expect(result).toEqual(hoverPayload as Awaited<ReturnType<typeof ensureLanguageDocument>>);
+    expect(calls).toEqual([
+      {
+        command: "lsp_ensure_document",
+        args: {
+          workspaceId: "workspace",
+          workspaceRoot: "/workspace",
+          path: "src/main.rs",
+          content: "fn main() {}\n",
+          version: 12,
         },
       },
     ]);

@@ -2,6 +2,7 @@
 // split pane. Git graph / DB / SFTP views live in their own files.
 
 import { useRef } from "react"
+import { EditorView as CodeMirrorView } from "@codemirror/view"
 import { TerminalTab } from "../features/terminal/TerminalTab"
 
 import { ctxPct, estTokens, fmtK, hlCode, hlLine, settingDefault, termSegs } from "./v2-model"
@@ -14,13 +15,22 @@ import { highlightContent } from "./hl-cache"
 import { EditorHost } from "./editor/EditorHost"
 import { cursorFromOffset } from "./editor/editor-surface"
 
-function cursorFromEventTarget(target: EventTarget | null): { ln: number; col: number } | null {
+function cursorFromEventTarget(target: EventTarget | null, clientX?: number, clientY?: number): { ln: number; col: number } | null {
     if (!(target instanceof HTMLElement)) return null
     const area = target.closest(".yz2-ed-area")
     const textarea = area?.querySelector("textarea")
-    if (textarea?.tagName !== "TEXTAREA") return null
-    const el = textarea as HTMLTextAreaElement
-    return cursorFromOffset(el.value, el.selectionStart)
+    if (textarea?.tagName === "TEXTAREA") {
+        const el = textarea as HTMLTextAreaElement
+        return cursorFromOffset(el.value, el.selectionStart)
+    }
+    if (typeof clientX !== "number" || typeof clientY !== "number") return null
+    const cmEditor = target.closest(".cm-editor")
+    if (!(cmEditor instanceof HTMLElement)) return null
+    const view = CodeMirrorView.findFromDOM(cmEditor)
+    if (!view) return null
+    const offset = view.posAtCoords({ x: clientX, y: clientY }, false)
+    if (typeof offset !== "number") return null
+    return cursorFromOffset(view.state.doc.toString(), offset)
 }
 
 export function Segs({ segs }: { segs: Seg[] }) {
@@ -59,6 +69,7 @@ export function EditorView({ tab }: { tab: Tab }) {
     const openCtx = useV2Store((s) => s.openCtx)
     const showTokenChip = useV2Store((s) => s.stVals.tokenChip !== false)
     const editorEngine = useV2Store((s) => s.stVals.editorEngine ?? settingDefault("editorEngine"))
+    const currentCursor = useV2Store((s) => s.cursor)
     const toggleBlame = useV2Store((s) => s.toggleBlame)
     const reloadTab = useV2Store((s) => s.reloadTab)
     const overwriteTab = useV2Store((s) => s.overwriteTab)
@@ -150,7 +161,7 @@ export function EditorView({ tab }: { tab: Tab }) {
                 className={"yz2-ed-body" + (editable && editorEngine === "codemirror" ? " is-codemirror" : "")}
                 onContextMenu={(e) => {
                     e.preventDefault()
-                    openCtx({ kind: "editor", x: e.clientX, y: e.clientY, path, cursor: cursorFromEventTarget(e.target) })
+                    openCtx({ kind: "editor", x: e.clientX, y: e.clientY, path, cursor: cursorFromEventTarget(e.target, e.clientX, e.clientY) ?? currentCursor })
                 }}
             >
                 {body}

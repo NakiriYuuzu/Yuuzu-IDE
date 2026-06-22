@@ -333,6 +333,14 @@
     color: var(--yz-a8e23f);
     border-color: var(--yz-45611a);
 }
+.yz2-iconbtn svg {
+    width: 18px;
+    height: 18px;
+}
+.yz2-panel-toggle svg {
+    width: 19px;
+    height: 19px;
+}
 
 /* ============ main row ============ */
 .yz2-main { flex: 1; display: flex; min-height: 0; }
@@ -488,6 +496,11 @@
     background: var(--yz-1b2410);
     border-color: var(--yz-45611a);
     color: var(--yz-a8e23f);
+}
+.yz2-activity-tab svg {
+    width: 19px;
+    height: 19px;
+    stroke-width: 2;
 }
 .yz2-activity-badge {
     position: absolute;

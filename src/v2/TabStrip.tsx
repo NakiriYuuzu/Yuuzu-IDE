@@ -59,6 +59,14 @@ export function TabStrip() {
         titleActivateTimerRef.current = null
     }
 
+    const closeFromMiddleClick = (tab: Tab, e: React.MouseEvent<HTMLDivElement>) => {
+        if (e.button !== 1) return
+        e.preventDefault()
+        e.stopPropagation()
+        clearTitleActivateTimer()
+        closeTab(tab.id)
+    }
+
     const activateFromTitleClick = (tab: Tab, e: React.MouseEvent<HTMLSpanElement>) => {
         if (tab.type !== "cmd") return
         e.stopPropagation()
@@ -97,6 +105,8 @@ export function TabStrip() {
                         <div
                             key={t.id}
                             className={"yz2-tab" + (isActive ? " is-active" : "")}
+                            onMouseDown={(e) => closeFromMiddleClick(t, e)}
+                            onAuxClick={(e) => closeFromMiddleClick(t, e)}
                             onClick={() => activateTab(t.id)}
                             onContextMenu={(e) => {
                                 e.preventDefault()

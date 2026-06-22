@@ -2513,6 +2513,24 @@ pub async fn lsp_open_document(
 }
 
 #[tauri::command]
+pub async fn lsp_ensure_document(
+    state: State<'_, AppState>,
+    lsp_state: State<'_, crate::lsp::LspState>,
+    workspace_root: String,
+    workspace_id: String,
+    path: String,
+    content: String,
+    version: Option<i32>,
+) -> Result<crate::lsp::LspEnsureDocumentResult, String> {
+    let _ = workspace_id;
+    let (workspace_id, workspace_root) = state.lsp_workspace_identity(&workspace_root)?;
+    let path = normalize_lsp_document_path(&path)?;
+    let lsp = lsp_state.inner().clone();
+    run_blocking(move || lsp.ensure_document(workspace_id, workspace_root, path, content, version))
+        .await
+}
+
+#[tauri::command]
 pub async fn lsp_close_document(
     state: State<'_, AppState>,
     lsp_state: State<'_, crate::lsp::LspState>,
@@ -4349,6 +4367,28 @@ mod tests {
         }
 
         assert_flat_signature(super::lsp_open_document);
+    }
+
+    #[test]
+    fn lsp_ensure_document_preserves_flat_command_signature() {
+        fn assert_flat_signature<F>(_command: F)
+        where
+            F: for<'app_state, 'lsp_state> AsyncFn(
+                State<'app_state, AppState>,
+                State<'lsp_state, crate::lsp::LspState>,
+                String,
+                String,
+                String,
+                String,
+                Option<i32>,
+            ) -> Result<
+                crate::lsp::LspEnsureDocumentResult,
+                String,
+            >,
+        {
+        }
+
+        assert_flat_signature(super::lsp_ensure_document);
     }
 
     #[test]

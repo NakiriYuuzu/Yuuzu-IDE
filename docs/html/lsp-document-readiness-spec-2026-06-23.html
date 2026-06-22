@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Yuuzu-IDE LSP Document Readiness Spec</title>
+<style>
+:root {
+    --font-sans: system-ui, -apple-system, "PingFang TC", "Segoe UI", sans-serif;
+    --font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    --bg: #070b12;
+    --surface: #0d1420;
+    --surface-2: #111b2a;
+    --text: #e7edf6;
+    --muted: #90a0b6;
+    --border: #233044;
+    --green: #9ccc65;
+    --blue: #82aaff;
+    --amber: #f6a960;
+    --red: #f07178;
+    --violet: #c792ea;
+    --radius: 8px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    line-height: 1.6;
+    padding: 24px;
+}
+.container { max-width: 1180px; margin: 0 auto; }
+header { border-bottom: 1px solid var(--border); padding-bottom: 18px; margin-bottom: 18px; }
+.label { color: var(--green); font-size: 12px; font-weight: 700; text-transform: uppercase; }
+h1 { font-size: 30px; line-height: 1.2; margin-top: 6px; }
+.meta { color: var(--muted); font-size: 13px; margin-top: 8px; }
+.summary {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--green);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    margin-bottom: 18px;
+}
+.summary strong { color: var(--green); }
+.metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 10px;
+    margin-bottom: 18px;
+}
+.metric {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+}
+.metric .value { font-size: 24px; font-weight: 800; color: var(--text); }
+.metric .name { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.metric .note { color: var(--amber); font-size: 12px; margin-top: 4px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 18px; }
+.tab {
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    padding: 10px 14px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    border-bottom: 2px solid transparent;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--green); border-bottom-color: var(--green); }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+section { margin-bottom: 20px; }
+h2 { font-size: 20px; margin-bottom: 10px; }
+h3 { font-size: 15px; margin: 16px 0 8px; color: var(--text); }
+p { margin-bottom: 10px; }
+ul, ol { margin-left: 20px; margin-bottom: 12px; }
+li { margin-bottom: 5px; }
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+}
+.card h3 { margin-top: 0; }
+.badge {
+    display: inline-block;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 800;
+    margin-right: 6px;
+}
+.badge.green { color: var(--green); border-color: rgba(156, 204, 101, 0.5); }
+.badge.blue { color: var(--blue); border-color: rgba(130, 170, 255, 0.5); }
+.badge.amber { color: var(--amber); border-color: rgba(246, 169, 96, 0.5); }
+.badge.red { color: var(--red); border-color: rgba(240, 113, 120, 0.5); }
+code {
+    font-family: var(--font-mono);
+    background: #151f2e;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 1px 5px;
+    color: #dbe7ff;
+    font-size: 0.9em;
+}
+pre {
+    background: #050812;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    overflow: auto;
+    margin: 8px 0 14px;
+}
+pre code { background: transparent; border: 0; padding: 0; color: #dbe7ff; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 10px 0 18px; }
+th, td { text-align: left; border-bottom: 1px solid var(--border); padding: 9px 8px; vertical-align: top; }
+th { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+.diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow-x: auto;
+    padding: 10px;
+    margin-bottom: 16px;
+}
+.timeline { display: grid; gap: 10px; }
+.step {
+    display: grid;
+    grid-template-columns: 68px minmax(0, 1fr);
+    gap: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+}
+.step-num { color: var(--green); font-weight: 900; font-family: var(--font-mono); }
+.callout {
+    border-left: 3px solid var(--blue);
+    background: #0b1728;
+    border-radius: 0 var(--radius) var(--radius) 0;
+    padding: 12px 14px;
+    margin: 12px 0;
+}
+.callout.warn { border-left-color: var(--amber); background: #211709; }
+.review-list label {
+    display: block;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    margin-bottom: 8px;
+}
+.review-list input { margin-right: 8px; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.btn {
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 9px 12px;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+}
+.btn:hover { border-color: var(--green); }
+@media print {
+    body { background: white; color: black; padding: 8px; }
+    .tabs, .actions { display: none; }
+    .tab-content { display: block !important; }
+    .card, .summary, .metric, .diagram, .step { break-inside: avoid; background: white; color: black; }
+}
+@media (max-width: 760px) {
+    body { padding: 12px; }
+    h1 { font-size: 24px; }
+    .step { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+    <header>
+        <div class="label">Draft Spec / Yuuzu-IDE</div>
+        <h1>LSP Document Readiness Lifecycle</h1>
+        <p class="meta">2026-06-23 · Review artifact · Source spec: docs/superpowers/specs/2026-06-23-lsp-document-readiness-design.md</p>
+    </header>
+
+    <div class="summary">
+        <p><strong>核心設計:</strong> 不預設啟動所有 language servers，而是建立 document-first readiness contract。任何 editor LSP action 執行前，都先確保目前文件已啟動 server、initialized、didOpen/didChange 到最新內容。</p>
+    </div>
+
+    <div class="metrics">
+        <div class="metric"><div class="value">Idle</div><div class="name">替代 misleading Stopped</div><div class="note">偵測到語言但尚未使用</div></div>
+        <div class="metric"><div class="value">1</div><div class="name">單一 ensure contract</div><div class="note">所有 LSP actions 走同一路徑</div></div>
+        <div class="metric"><div class="value">0</div><div class="name">預設自動啟動數量</div><div class="note">保留 lazy-start 資源優勢</div></div>
+        <div class="metric"><div class="value">6</div><div class="name">落地 tasks</div><div class="note">state → backend → frontend → UI → smoke</div></div>
+    </div>
+
+    <div class="tabs">
+        <button class="tab active" onclick="showTab(event, 'overview')">總覽</button>
+        <button class="tab" onclick="showTab(event, 'architecture')">架構</button>
+        <button class="tab" onclick="showTab(event, 'tasks')">落地步驟</button>
+        <button class="tab" onclick="showTab(event, 'tests')">驗證</button>
+        <button class="tab" onclick="showTab(event, 'review')">Review</button>
+    </div>
+
+    <div id="overview" class="tab-content active">
+        <section>
+            <h2>問題定義</h2>
+            <div class="grid-2">
+                <div class="card">
+                    <h3><span class="badge red">Current</span>狀態語義混淆</h3>
+                    <p><code>Stopped</code> 同時被用來表示「偵測到但未啟動」和「曾啟動後停止」。使用者會以為 LSP 壞了或應該手動啟動。</p>
+                </div>
+                <div class="card">
+                    <h3><span class="badge red">Current</span>Action 前置條件分散</h3>
+                    <p><code>gotoDefinition</code>、references、rename、code actions 直接送 request，沒有共同的 document readiness 入口。</p>
+                </div>
+                <div class="card">
+                    <h3><span class="badge amber">Constraint</span>不能暴力全開</h3>
+                    <p>workspace 開啟就啟動所有 LSP 會拖慢大型 repo，也仍可能留下 stale content 問題。</p>
+                </div>
+                <div class="card">
+                    <h3><span class="badge green">Target</span>使用時保證可用</h3>
+                    <p>只要使用者對某個支援檔案觸發 LSP 行為，系統就自動準備該文件，再執行 request。</p>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Target Behavior</h2>
+            <table>
+                <thead><tr><th>Scenario</th><th>Current</th><th>Target</th></tr></thead>
+                <tbody>
+                    <tr><td>Workspace contains TypeScript but no TS file opened</td><td><code>Stopped</code></td><td><code>Idle · starts on first use</code></td></tr>
+                    <tr><td>First Go to Definition on TS file</td><td>May depend on background openLspDocument</td><td>Ensure document Ready, then request definition</td></tr>
+                    <tr><td>Missing command</td><td>May appear as generic failure</td><td><code>Missing command: typescript-language-server</code></td></tr>
+                    <tr><td>Unsupported file</td><td>Can be unclear/noisy</td><td>No spawn; explicit unsupported state</td></tr>
+                </tbody>
+            </table>
+        </section>
+    </div>
+
+    <div id="architecture" class="tab-content">
+        <section>
+            <h2>Lifecycle Diagram</h2>
+            <div class="diagram">
+                <svg viewBox="0 0 1000 360" width="1000" height="360" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+                            <path d="M0,0 L0,6 L9,3 z" fill="#82aaff"/>
+                        </marker>
+                    </defs>
+                    <rect x="20" y="35" width="160" height="58" rx="8" fill="#111b2a" stroke="#233044"/>
+                    <text x="100" y="60" text-anchor="middle" fill="#e7edf6" font-size="14" font-weight="700">Workspace</text>
+                    <text x="100" y="79" text-anchor="middle" fill="#90a0b6" font-size="12">detect languages</text>
+
+                    <rect x="230" y="35" width="160" height="58" rx="8" fill="#111b2a" stroke="#9ccc65"/>
+                    <text x="310" y="60" text-anchor="middle" fill="#9ccc65" font-size="14" font-weight="700">Idle</text>
+                    <text x="310" y="79" text-anchor="middle" fill="#90a0b6" font-size="12">no process yet</text>
+
+                    <rect x="445" y="35" width="190" height="58" rx="8" fill="#111b2a" stroke="#82aaff"/>
+                    <text x="540" y="60" text-anchor="middle" fill="#82aaff" font-size="14" font-weight="700">Ensure Document</text>
+                    <text x="540" y="79" text-anchor="middle" fill="#90a0b6" font-size="12">spawn + initialize + sync</text>
+
+                    <rect x="690" y="35" width="140" height="58" rx="8" fill="#111b2a" stroke="#9ccc65"/>
+                    <text x="760" y="60" text-anchor="middle" fill="#9ccc65" font-size="14" font-weight="700">Ready</text>
+                    <text x="760" y="79" text-anchor="middle" fill="#90a0b6" font-size="12">document synced</text>
+
+                    <rect x="870" y="35" width="110" height="58" rx="8" fill="#111b2a" stroke="#c792ea"/>
+                    <text x="925" y="60" text-anchor="middle" fill="#c792ea" font-size="14" font-weight="700">Request</text>
+                    <text x="925" y="79" text-anchor="middle" fill="#90a0b6" font-size="12">definition etc.</text>
+
+                    <line x1="180" y1="64" x2="230" y2="64" stroke="#82aaff" stroke-width="2" marker-end="url(#arrow)"/>
+                    <line x1="390" y1="64" x2="445" y2="64" stroke="#82aaff" stroke-width="2" marker-end="url(#arrow)"/>
+                    <line x1="635" y1="64" x2="690" y2="64" stroke="#82aaff" stroke-width="2" marker-end="url(#arrow)"/>
+                    <line x1="830" y1="64" x2="870" y2="64" stroke="#82aaff" stroke-width="2" marker-end="url(#arrow)"/>
+
+                    <rect x="445" y="145" width="190" height="58" rx="8" fill="#211709" stroke="#f6a960"/>
+                    <text x="540" y="170" text-anchor="middle" fill="#f6a960" font-size="14" font-weight="700">MissingCommand</text>
+                    <text x="540" y="189" text-anchor="middle" fill="#90a0b6" font-size="12">show command name</text>
+
+                    <rect x="690" y="145" width="140" height="58" rx="8" fill="#271018" stroke="#f07178"/>
+                    <text x="760" y="170" text-anchor="middle" fill="#f07178" font-size="14" font-weight="700">Error</text>
+                    <text x="760" y="189" text-anchor="middle" fill="#90a0b6" font-size="12">action toast</text>
+
+                    <line x1="540" y1="93" x2="540" y2="145" stroke="#f6a960" stroke-width="2" marker-end="url(#arrow)"/>
+                    <line x1="760" y1="93" x2="760" y2="145" stroke="#f07178" stroke-width="2" marker-end="url(#arrow)"/>
+
+                    <rect x="20" y="260" width="960" height="62" rx="8" fill="#0d1420" stroke="#233044"/>
+                    <text x="40" y="287" fill="#e7edf6" font-size="14" font-weight="700">Single contract</text>
+                    <text x="40" y="307" fill="#90a0b6" font-size="13">All editor LSP actions call ensureLspDocumentReady(tab) before requestLanguageDefinition / References / Rename / CodeActions / Hover / Completion.</text>
+                </svg>
+            </div>
+        </section>
+
+        <section>
+            <h2>Contract</h2>
+            <div class="grid-2">
+                <div class="card">
+                    <h3>Backend command</h3>
+                    <pre><code>lsp_ensure_document({
+  workspaceId,
+  workspaceRoot,
+  path,
+  content,
+  version
+})</code></pre>
+                    <p>Detect language, spawn if needed, initialize, send didOpen/didChange, return document readiness and server status.</p>
+                </div>
+                <div class="card">
+                    <h3>Frontend helper</h3>
+                    <pre><code>await ensureLspDocumentReady(tab.id)
+await requestLanguageDefinition(...)</code></pre>
+                    <p>Controller dedupes concurrent ensures per workspace/path and patches LSP UI state from the result.</p>
+                </div>
+            </div>
+        </section>
+
+        <section>
+            <h2>State Split</h2>
+            <table>
+                <thead><tr><th>Layer</th><th>States</th><th>Purpose</th></tr></thead>
+                <tbody>
+                    <tr><td>Server lifecycle</td><td><code>Idle</code>, <code>Starting</code>, <code>Running</code>, <code>MissingCommand</code>, <code>Error</code>, <code>Stopped</code></td><td>Process lifecycle and Settings UI.</td></tr>
+                    <tr><td>Document readiness</td><td><code>Unsupported</code>, <code>Syncing</code>, <code>Ready</code>, <code>Stale</code>, <code>MissingCommand</code>, <code>Error</code></td><td>Whether a specific file can safely receive LSP requests.</td></tr>
+                </tbody>
+            </table>
+        </section>
+    </div>
+
+    <div id="tasks" class="tab-content">
+        <section>
+            <h2>Implementation Tasks</h2>
+            <div class="timeline">
+                <div class="step"><div class="step-num">T1</div><div><strong>State model split</strong><p>Add <code>Idle</code>; detected unopened languages return Idle instead of Stopped.</p></div></div>
+                <div class="step"><div class="step-num">T2</div><div><strong>Backend ensure command</strong><p>Add <code>lsp_ensure_document</code> and manager method that spawns, initializes, and syncs content.</p></div></div>
+                <div class="step"><div class="step-num">T3</div><div><strong>Frontend readiness helper</strong><p>Add controller helper, patch state, dedupe concurrent ensures per path.</p></div></div>
+                <div class="step"><div class="step-num">T4</div><div><strong>Route editor actions through ensure</strong><p>Definition, references, rename, code actions, hover, completion all await readiness first.</p></div></div>
+                <div class="step"><div class="step-num">T5</div><div><strong>Language Settings semantics</strong><p>Render Idle/Starting/Ready/MissingCommand accurately; Start/Restart/Retry labels.</p></div></div>
+                <div class="step"><div class="step-num">T6</div><div><strong>Runtime smoke</strong><p>Packaged app verifies first-use startup and MissingCommand behavior.</p></div></div>
+            </div>
+        </section>
+
+        <section>
+            <h2>Files Expected</h2>
+            <table>
+                <thead><tr><th>Area</th><th>Likely files</th></tr></thead>
+                <tbody>
+                    <tr><td>Rust LSP core</td><td><code>src-tauri/src/lsp.rs</code>, <code>src-tauri/src/commands.rs</code>, <code>src-tauri/src/lib.rs</code></td></tr>
+                    <tr><td>Language API/model</td><td><code>src/features/language/language-api.ts</code>, <code>src/features/language/language-model.ts</code></td></tr>
+                    <tr><td>v2 controller/store</td><td><code>src/v2/controller.ts</code>, <code>src/v2/v2-store.ts</code>, <code>src/v2/v2-model.ts</code></td></tr>
+                    <tr><td>UI</td><td><code>src/v2/Overlays.tsx</code>, <code>src/v2/ContentViews.tsx</code>, <code>src/v2/yuzu.css</code></td></tr>
+                    <tr><td>Tests</td><td><code>src-tauri/src/lsp.rs</code> inline tests, <code>src/v2/*.test.tsx</code>, <code>src/features/language/*.test.ts</code></td></tr>
+                </tbody>
+            </table>
+        </section>
+    </div>
+
+    <div id="tests" class="tab-content">
+        <section>
+            <h2>Verification Plan</h2>
+            <div class="grid-2">
+                <div class="card">
+                    <h3>Rust</h3>
+                    <ul>
+                        <li>Detected unopened language returns <code>Idle</code>.</li>
+                        <li>Unsupported file returns <code>Unsupported</code> and does not spawn.</li>
+                        <li>Idle + supported file ensures to <code>Ready</code>.</li>
+                        <li>Changed content sends didChange.</li>
+                        <li>Missing command returns <code>MissingCommand</code> with command name.</li>
+                    </ul>
+                </div>
+                <div class="card">
+                    <h3>Frontend</h3>
+                    <ul>
+                        <li>Definition/references/rename/code actions call ensure first.</li>
+                        <li>Context menu enables supported file actions even when server is Idle.</li>
+                        <li>MissingCommand produces actionable toast.</li>
+                        <li>Language Settings renders Idle and Start button.</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="callout">
+                Suggested gates: <code>bun test src/features/language src/v2</code>, <code>bunx tsc --noEmit</code>, <code>cargo test --manifest-path src-tauri/Cargo.toml lsp</code>, packaged debug app smoke.
+            </div>
+        </section>
+
+        <section>
+            <h2>Runtime Smoke</h2>
+            <ol>
+                <li>Build debug app with updater artifacts disabled for local smoke.</li>
+                <li>Fresh launch packaged app.</li>
+                <li>Open a TypeScript file.</li>
+                <li>Invoke Go to Definition or Code Actions without visiting Language Settings first.</li>
+                <li>Confirm server transitions Idle/Starting to Running or MissingCommand with clear message.</li>
+            </ol>
+        </section>
+    </div>
+
+    <div id="review" class="tab-content">
+        <section>
+            <h2>Review Decisions</h2>
+            <div class="review-list">
+                <label><input type="checkbox"> 同意新增 <code>Idle</code>, 並把 <code>Stopped</code> 限定為曾啟動後停止。</label>
+                <label><input type="checkbox"> 同意所有 explicit editor LSP actions 先走 <code>ensureLspDocumentReady</code>。</label>
+                <label><input type="checkbox"> 同意 hover 也可以在 debounce 後自動 ensure, 但不顯示 noisy toast。</label>
+                <label><input type="checkbox"> 同意不把 auto-start all detected servers 作為預設。</label>
+                <label><input type="checkbox"> 同意新增 <code>lsp_ensure_document</code>, 並保留 <code>lsp_open_document</code> 相容 wrapper。</label>
+                <label><input type="checkbox"> 決定是否第一版需要 per-document readiness UI, 或只顯示 server lifecycle。</label>
+            </div>
+        </section>
+
+        <section>
+            <h2>Implementation Prompt</h2>
+            <p>Review 後可用下面 prompt 啟動 implementation。</p>
+            <pre id="implementation-prompt"><code>Implement docs/superpowers/specs/2026-06-23-lsp-document-readiness-design.md task-by-task.
+Preserve lazy-start, add document-first LSP readiness, route editor LSP actions through ensure, and verify with focused Rust/Bun tests plus packaged debug smoke.</code></pre>
+        </section>
+    </div>
+
+    <div class="actions">
+        <button class="btn" onclick="window.print()">Print / PDF</button>
+        <button class="btn" onclick="copyPrompt(event)">Copy Implementation Prompt</button>
+    </div>
+</div>
+
+<script>
+function showTab(event, id) {
+    document.querySelectorAll(".tab").forEach((tab) => tab.classList.remove("active"));
+    document.querySelectorAll(".tab-content").forEach((panel) => panel.classList.remove("active"));
+    document.getElementById(id).classList.add("active");
+    event.currentTarget.classList.add("active");
+}
+function copyPrompt(event) {
+    const text = document.getElementById("implementation-prompt").innerText;
+    navigator.clipboard.writeText(text).then(() => {
+        const btn = event.currentTarget;
+        const old = btn.textContent;
+        btn.textContent = "Copied";
+        setTimeout(() => { btn.textContent = old; }, 1200);
+    });
+}
+</script>
+</body>
+</html>

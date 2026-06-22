@@ -258,6 +258,9 @@ Do not silently convert a one-off lesson into a permanent rule.
 - For UI/runtime regressions, static reasoning is not enough when the issue is
   visual or launch-related. Verify with browser preview or the Tauri app when
   feasible.
+- For CodeMirror interaction fixes, include a focused regression where store
+  cursor state is null and the cursor must be derived from the editor DOM or
+  view state.
 
 ## Style
 

@@ -10,6 +10,7 @@
       ],
       "expectations": [
         "Uses `bun run tauri build --debug --bundles app`.",
+        "If updater artifact signing fails because `TAURI_SIGNING_PRIVATE_KEY` is missing, reports that failure and uses `--config '{\"bundle\":{\"createUpdaterArtifacts\":false}}'` only for local packaged runtime smoke.",
         "Identifies `src-tauri/target/debug/bundle/macos/Yuuzu-IDE.app` as the app bundle.",
         "Includes a .git watcher probe and checks detail stability instead of only checking that commits render.",
         "Includes cleanup of probe files and debug app processes."

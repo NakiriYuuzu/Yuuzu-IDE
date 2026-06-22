@@ -2,6 +2,7 @@ import { call } from "../../lib/tauri";
 import type {
   LanguageHover,
   LanguageServerStatus,
+  LspEnsureDocumentResult,
   LspDiagnostic,
 } from "./language-model";
 import { normalizeLanguageHover } from "./language-model";
@@ -19,6 +20,16 @@ export function openLanguageDocument(args: {
   content: string;
 }): Promise<LanguageServerStatus> {
   return call("lsp_open_document", args);
+}
+
+export function ensureLanguageDocument(args: {
+  workspaceId: string;
+  workspaceRoot: string;
+  path: string;
+  content: string;
+  version?: number;
+}): Promise<LspEnsureDocumentResult> {
+  return call("lsp_ensure_document", args);
 }
 
 export function closeLanguageDocument(args: {

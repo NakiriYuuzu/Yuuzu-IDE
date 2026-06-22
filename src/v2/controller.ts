@@ -95,6 +95,7 @@ import { appendDiagnosticEvent, listDiagnosticEvents, metricSnapshot } from "../
 import { discardUnsavedBackup, listUnsavedBackups, saveUnsavedBackup } from "../features/recovery/recovery-api"
 import {
     closeLanguageDocument,
+    ensureLanguageDocument,
     getDocumentDiagnostics,
     getLanguageServerLogs,
     getLanguageServerStatus,
@@ -110,7 +111,7 @@ import {
     restartLanguageServer,
 } from "../features/language/language-api"
 import { isLspSupportedDocumentPath, lspDocumentPathForWorkspace, normalizeLanguageCodeActions, normalizeLanguageCompletionItems } from "../features/language/language-model"
-import type { LanguageHover, LanguageServerStatus } from "../features/language/language-model"
+import type { LanguageHover, LanguageServerStatus, LspEnsureDocumentResult } from "../features/language/language-model"
 
 import {
     confirmationFromError,
@@ -341,6 +342,7 @@ function relativeWatchPath(workspaceRoot: string, eventPath: string): string {
 
 const lspChangeTimers = new Map<number, ReturnType<typeof setTimeout>>()
 const lspDiagTimers = new Map<number, ReturnType<typeof setTimeout>>()
+const lspEnsureInFlight = new Map<string, Promise<LspEnsureDocumentResult>>()
 const closedLspPathsByPid = new Map<string, Set<string>>()
 
 function logDiag(level: "debug" | "info" | "warn" | "error", source: string, message: string): void {
@@ -426,6 +428,107 @@ async function openLspDocument(pid: string, displayPath: string, content: string
     })
     patchLspServer(pid, status)
     await pollDocDiag(pid, displayPath)
+}
+
+function tabForLspDocument(pid: string, displayPath: string): Tab | null {
+    return store().ui[pid]?.tabs.find((tab) => tab.type === "file" && tab.path === displayPath) ?? null
+}
+
+function languageInfoForDocumentPath(path: string): Pick<LanguageServerStatus, "language" | "display_name" | "command"> | null {
+    const lower = path.toLowerCase()
+    if (lower.endsWith(".rs")) return { language: "Rust", display_name: "Rust Analyzer", command: "rust-analyzer" }
+    if (lower.endsWith(".ts") || lower.endsWith(".tsx") || lower.endsWith(".mts") || lower.endsWith(".cts")) {
+        return { language: "TypeScript", display_name: "TypeScript Language Server", command: "typescript-language-server" }
+    }
+    if (lower.endsWith(".js") || lower.endsWith(".jsx") || lower.endsWith(".mjs") || lower.endsWith(".cjs")) {
+        return { language: "JavaScript", display_name: "JavaScript Language Server", command: "typescript-language-server" }
+    }
+    if (lower.endsWith(".py") || lower.endsWith(".pyw") || lower.endsWith(".pyi")) return { language: "Python", display_name: "Python LSP Server", command: "pylsp" }
+    if (lower.endsWith(".cs")) return { language: "CSharp", display_name: "C# Language Server", command: "csharp-ls" }
+    if (lower.endsWith(".kt") || lower.endsWith(".kts")) return { language: "Kotlin", display_name: "Kotlin Language Server", command: "kotlin-language-server" }
+    return null
+}
+
+function patchLspServerStarting(pid: string, root: string, displayPath: string): void {
+    const info = languageInfoForDocumentPath(displayPath)
+    if (!info) return
+    patchProject(pid, (p) => {
+        const existing = p.lspServers.find((server) =>
+            server.workspace_id === pid &&
+            server.workspace_root === root &&
+            server.language === info.language
+        )
+        const status: LanguageServerStatus = {
+            workspace_id: pid,
+            workspace_root: root,
+            language: info.language,
+            display_name: existing?.display_name ?? info.display_name,
+            command: existing?.command ?? info.command,
+            state: "Starting",
+            pid: null,
+            memory_bytes: null,
+            open_documents: existing?.open_documents ?? 0,
+            last_error: null,
+        }
+        const sameServer = (server: LanguageServerStatus) =>
+            server.workspace_id === status.workspace_id &&
+            server.workspace_root === status.workspace_root &&
+            server.language === status.language
+        p.lspServers = p.lspServers.some(sameServer)
+            ? p.lspServers.map((server) => (sameServer(server) ? status : server))
+            : [...p.lspServers, status]
+    })
+}
+
+function ensureReadinessMessage(result: LspEnsureDocumentResult): string | null {
+    if (result.readiness === "Ready") return null
+    if (result.readiness === "Unsupported") return "unsupported document"
+    if (result.readiness === "MissingCommand") {
+        return "missing language server command" + (result.command ? ": " + result.command : "")
+    }
+    if (result.readiness === "Error") {
+        return result.last_error ?? "language server error"
+    }
+    return "language server is not ready"
+}
+
+async function ensureLspDocumentReady(
+    pid: string,
+    displayPath: string,
+    options: { toastPrefix?: string } = {},
+): Promise<{ root: string; path: string; result: LspEnsureDocumentResult } | null> {
+    const root = rootOf(pid)
+    if (!root || !isLspSupportedDocumentPath(displayPath)) return null
+    const tab = tabForLspDocument(pid, displayPath)
+    if (!tab || typeof tab.content !== "string") {
+        if (options.toastPrefix) store().showToast(options.toastPrefix + ": document content is not available")
+        return null
+    }
+    const path = lspPath(root, displayPath)
+    const key = `${pid}:${path}`
+    let pending = lspEnsureInFlight.get(key)
+    if (!pending) {
+        patchLspServerStarting(pid, root, displayPath)
+        pending = ensureLanguageDocument({
+            workspaceId: pid,
+            workspaceRoot: root,
+            path,
+            content: tab.content,
+        })
+        lspEnsureInFlight.set(key, pending)
+        pending.finally(() => {
+            if (lspEnsureInFlight.get(key) === pending) lspEnsureInFlight.delete(key)
+        }).catch(() => {})
+    }
+    const result = await pending
+    patchLspServer(pid, result.server)
+    const readinessMessage = ensureReadinessMessage(result)
+    if (readinessMessage) {
+        if (options.toastPrefix) store().showToast(options.toastPrefix + ": " + readinessMessage)
+        return null
+    }
+    await pollDocDiag(pid, displayPath)
+    return { root, path, result }
 }
 
 function scheduleLspChange(pid: string, tabId: number): void {
@@ -2612,19 +2715,20 @@ const delegate = {
 
     gotoDefinition(path: string, line: number, col: number) {
         const pid = store().active
-        const root = rootOf(pid)
-        if (!root) return
+        if (!rootOf(pid)) return
         void (async () => {
             try {
+                const ready = await ensureLspDocumentReady(pid, path, { toastPrefix: "Definition" })
+                if (!ready) return
                 const pos = cursorToLsp({ ln: line, col })
                 const res = await requestLanguageDefinition({
                     workspaceId: pid,
-                    workspaceRoot: root,
-                    path: lspPath(root, path),
+                    workspaceRoot: ready.root,
+                    path: ready.path,
                     line: pos.line,
                     character: pos.character,
                 })
-                const locs = mapLspLocations(res, root)
+                const locs = mapLspLocations(res, ready.root)
                 if (!locs.length) {
                     store().showToast("No definition found")
                     return
@@ -2640,14 +2744,15 @@ const delegate = {
 
     async hoverAt(path: string, line: number, col: number): Promise<LanguageHover | null> {
         const pid = store().active
-        const root = rootOf(pid)
-        if (!root || !isLspSupportedDocumentPath(path)) return null
+        if (!rootOf(pid) || !isLspSupportedDocumentPath(path)) return null
         try {
+            const ready = await ensureLspDocumentReady(pid, path)
+            if (!ready) return null
             const pos = cursorToLsp({ ln: line, col })
             return await requestLanguageHover({
                 workspaceId: pid,
-                workspaceRoot: root,
-                path: lspPath(root, path),
+                workspaceRoot: ready.root,
+                path: ready.path,
                 line: pos.line,
                 character: pos.character,
             })
@@ -2658,14 +2763,15 @@ const delegate = {
 
     async completeAt(path: string, line: number, col: number) {
         const pid = store().active
-        const root = rootOf(pid)
-        if (!root || !isLspSupportedDocumentPath(path)) return []
+        if (!rootOf(pid) || !isLspSupportedDocumentPath(path)) return []
         try {
+            const ready = await ensureLspDocumentReady(pid, path)
+            if (!ready) return []
             const pos = cursorToLsp({ ln: line, col })
             const res = await requestLanguageCompletion({
                 workspaceId: pid,
-                workspaceRoot: root,
-                path: lspPath(root, path),
+                workspaceRoot: ready.root,
+                path: ready.path,
                 line: pos.line,
                 character: pos.character,
             })
@@ -2678,19 +2784,20 @@ const delegate = {
 
     findReferences(path: string, line: number, col: number) {
         const pid = store().active
-        const root = rootOf(pid)
-        if (!root) return
+        if (!rootOf(pid)) return
         void (async () => {
             try {
+                const ready = await ensureLspDocumentReady(pid, path, { toastPrefix: "References" })
+                if (!ready) return
                 const pos = cursorToLsp({ ln: line, col })
                 const res = await requestLanguageReferences({
                     workspaceId: pid,
-                    workspaceRoot: root,
-                    path: lspPath(root, path),
+                    workspaceRoot: ready.root,
+                    path: ready.path,
                     line: pos.line,
                     character: pos.character,
                 })
-                const locs = mapLspLocations(res, root)
+                const locs = mapLspLocations(res, ready.root)
                 if (!locs.length) {
                     store().showToast("No references found")
                     return
@@ -2712,15 +2819,16 @@ const delegate = {
 
     codeActionsAt(path: string, line: number, col: number) {
         const pid = store().active
-        const root = rootOf(pid)
-        if (!root || !isLspSupportedDocumentPath(path)) return
+        if (!rootOf(pid) || !isLspSupportedDocumentPath(path)) return
         void (async () => {
             try {
+                const ready = await ensureLspDocumentReady(pid, path, { toastPrefix: "Code actions" })
+                if (!ready) return
                 const pos = cursorToLsp({ ln: line, col })
                 const res = await requestLanguageCodeActions({
                     workspaceId: pid,
-                    workspaceRoot: root,
-                    path: lspPath(root, path),
+                    workspaceRoot: ready.root,
+                    path: ready.path,
                     line: pos.line,
                     character: pos.character,
                 })
@@ -2768,20 +2876,21 @@ const delegate = {
 
     renameSymbol(path: string, line: number, col: number, newName: string) {
         const pid = store().active
-        const root = rootOf(pid)
-        if (!root || !newName.trim()) return
+        if (!rootOf(pid) || !newName.trim()) return
         void (async () => {
             try {
+                const ready = await ensureLspDocumentReady(pid, path, { toastPrefix: "Rename" })
+                if (!ready) return
                 const pos = cursorToLsp({ ln: line, col })
                 const res = await requestLanguageRename({
                     workspaceId: pid,
-                    workspaceRoot: root,
-                    path: lspPath(root, path),
+                    workspaceRoot: ready.root,
+                    path: ready.path,
                     line: pos.line,
                     character: pos.character,
                     newName,
                 })
-                const groups = flattenWorkspaceEdit(res, root)
+                const groups = flattenWorkspaceEdit(res, ready.root)
                 if (!groups.length) {
                     store().showToast("Rename produced no changes")
                     return

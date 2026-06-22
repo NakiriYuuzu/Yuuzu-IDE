@@ -1,6 +1,7 @@
 /// <reference types="bun-types" />
 
 import { afterEach, describe, expect, test } from "bun:test"
+import { EditorView as CodeMirrorView } from "@codemirror/view"
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react"
 
 import { ensureTestDom } from "../test/test-dom"
@@ -21,6 +22,7 @@ afterEach(() => {
         active: "api",
         ctx: null,
         confirm: null,
+        cursor: null,
         stVals: structuredClone(initialStVals),
         ui: {
             ...s.ui,
@@ -155,6 +157,96 @@ describe("EditorView", () => {
         textarea.selectionEnd = 7
 
         fireEvent.contextMenu(textarea, { clientX: 14, clientY: 18 })
+
+        expect(v2Store.getState().ctx).toMatchObject({
+            kind: "editor",
+            path: "src/server.ts",
+            cursor: { ln: 2, col: 2 },
+        })
+    })
+
+    test("editor context menu falls back to the store cursor for CodeMirror targets", () => {
+        const tab = {
+            id: 9003,
+            type: "file" as const,
+            name: "server.ts",
+            path: "src/server.ts",
+            realPath: "/workspace/src/server.ts",
+            content: "alpha\nbeta\n",
+            savedContent: "alpha\nbeta\n",
+            contentLang: "ts",
+        }
+        v2Store.setState((s) => {
+            const { editorEngine: _editorEngine, ...stVals } = s.stVals
+            return {
+                mode: "real",
+                active: "api",
+                cursor: { ln: 2, col: 2 },
+                stVals,
+                ui: {
+                    ...s.ui,
+                    api: {
+                        ...s.ui.api,
+                        tabs: [tab],
+                        activeTab: tab.id,
+                    },
+                },
+            }
+        })
+
+        const view = render(<EditorView tab={tab} />)
+        const body = view.container.querySelector(".yz2-ed-body") as HTMLElement
+
+        fireEvent.contextMenu(body, { clientX: 14, clientY: 18 })
+
+        expect(v2Store.getState().ctx).toMatchObject({
+            kind: "editor",
+            path: "src/server.ts",
+            cursor: { ln: 2, col: 2 },
+        })
+    })
+
+    test("editor context menu derives the CodeMirror cursor from the click position", () => {
+        const tab = {
+            id: 9004,
+            type: "file" as const,
+            name: "server.ts",
+            path: "src/server.ts",
+            realPath: "/workspace/src/server.ts",
+            content: "alpha\nbeta\n",
+            savedContent: "alpha\nbeta\n",
+            contentLang: "ts",
+        }
+        v2Store.setState((s) => {
+            const { editorEngine: _editorEngine, ...stVals } = s.stVals
+            return {
+                mode: "real",
+                active: "api",
+                cursor: null,
+                stVals,
+                ui: {
+                    ...s.ui,
+                    api: {
+                        ...s.ui.api,
+                        tabs: [tab],
+                        activeTab: tab.id,
+                    },
+                },
+            }
+        })
+
+        const view = render(<EditorView tab={tab} />)
+        const cmEditor = view.container.querySelector(".cm-editor") as HTMLElement
+        const cmView = CodeMirrorView.findFromDOM(cmEditor)
+        expect(cmView).toBeTruthy()
+        const originalPosAtCoords = cmView!.posAtCoords
+        cmView!.posAtCoords = () => 7
+
+        try {
+            fireEvent.contextMenu(cmEditor, { clientX: 24, clientY: 32 })
+        } finally {
+            cmView!.posAtCoords = originalPosAtCoords
+        }
 
         expect(v2Store.getState().ctx).toMatchObject({
             kind: "editor",

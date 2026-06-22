@@ -55,6 +55,32 @@ afterEach(() => {
 })
 
 describe("TabStrip", () => {
+    test("middle-clicking a tab closes it", () => {
+        const view = render(<TabStrip />)
+        const tab = view.getByText(fileTab.name).closest(".yz2-tab")
+        expect(tab).toBeTruthy()
+
+        fireEvent.mouseDown(tab!, { button: 1 })
+
+        expect(v2Store.getState().ui.api.tabs.some((item) => item.id === fileTab.id)).toBe(false)
+    })
+
+    test("aux-clicking a tab with the middle button closes it", () => {
+        const view = render(<TabStrip />)
+        const tab = view.getByText(fileTab.name).closest(".yz2-tab")
+        expect(tab).toBeTruthy()
+
+        fireEvent(
+            tab!,
+            new MouseEvent("auxclick", {
+                bubbles: true,
+                button: 1,
+            }),
+        )
+
+        expect(v2Store.getState().ui.api.tabs.some((item) => item.id === fileTab.id)).toBe(false)
+    })
+
     test("double-click rename does not activate an inactive cmd tab first", async () => {
         const view = render(<TabStrip />)
         const cmdTitle = view.getByText(cmdTab.title!)

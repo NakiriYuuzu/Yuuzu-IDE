@@ -238,16 +238,32 @@ describe("ContextMenu", () => {
             findReferences: v2Store.getState().findReferences,
             renameSymbol: v2Store.getState().renameSymbol,
             codeActionsAt: v2Store.getState().codeActionsAt,
+            active: v2Store.getState().active,
+            ui: structuredClone(v2Store.getState().ui),
         }
         const calls: unknown[][] = []
         const prompt = globalThis.prompt
 
-        act(() => v2Store.setState({
+        act(() => v2Store.setState((s) => ({
             gotoDefinition: (...args: unknown[]) => calls.push(["goto", ...args]),
             findReferences: (...args: unknown[]) => calls.push(["refs", ...args]),
             renameSymbol: (...args: unknown[]) => calls.push(["rename", ...args]),
             codeActionsAt: (...args: unknown[]) => calls.push(["actions", ...args]),
-        }))
+            ui: {
+                ...s.ui,
+                [s.active]: {
+                    ...s.ui[s.active],
+                    tabs: [{
+                        id: 9801,
+                        type: "file",
+                        title: "server.ts",
+                        path: "src/server.ts",
+                        content: "export const server = true\n",
+                    }],
+                    activeTab: 9801,
+                },
+            },
+        })))
         globalThis.prompt = () => "renamed"
 
         try {
@@ -263,6 +279,7 @@ describe("ContextMenu", () => {
             }
 
             let view = openMenu()
+            expect(view.queryByRole("button", { name: /Ask Claude/ })).toBeNull()
             fireEvent.click(view.getByRole("button", { name: /Go to Definition/ }))
             view.unmount()
 
@@ -329,6 +346,95 @@ describe("ContextMenu", () => {
             fireEvent.click(refs)
             fireEvent.click(rename)
             fireEvent.click(actions)
+            expect(calls).toEqual([])
+        } finally {
+            act(() => v2Store.setState(previous))
+        }
+    })
+
+    test("editor language actions stay disabled for unsupported or unavailable documents", () => {
+        const previous = {
+            gotoDefinition: v2Store.getState().gotoDefinition,
+            findReferences: v2Store.getState().findReferences,
+            renameSymbol: v2Store.getState().renameSymbol,
+            codeActionsAt: v2Store.getState().codeActionsAt,
+            active: v2Store.getState().active,
+            ui: structuredClone(v2Store.getState().ui),
+        }
+        const calls: unknown[][] = []
+
+        act(() => v2Store.setState({
+            gotoDefinition: (...args: unknown[]) => calls.push(["goto", ...args]),
+            findReferences: (...args: unknown[]) => calls.push(["refs", ...args]),
+            renameSymbol: (...args: unknown[]) => calls.push(["rename", ...args]),
+            codeActionsAt: (...args: unknown[]) => calls.push(["actions", ...args]),
+        }))
+
+        const expectLanguageButtonsDisabled = () => {
+            const view = render(<ContextMenu />)
+            const goto = view.getByRole("button", { name: /Go to Definition/ }) as HTMLButtonElement
+            const refs = view.getByRole("button", { name: /Find References/ }) as HTMLButtonElement
+            const rename = view.getByRole("button", { name: /Rename Symbol/ }) as HTMLButtonElement
+            const actions = view.getByRole("button", { name: /Code Actions/ }) as HTMLButtonElement
+
+            expect(goto.disabled).toBe(true)
+            expect(refs.disabled).toBe(true)
+            expect(rename.disabled).toBe(true)
+            expect(actions.disabled).toBe(true)
+            view.unmount()
+        }
+
+        try {
+            act(() => v2Store.setState((s) => ({
+                ui: {
+                    ...s.ui,
+                    [s.active]: {
+                        ...s.ui[s.active],
+                        tabs: [{
+                            id: 9802,
+                            type: "file",
+                            title: "notes.md",
+                            path: "notes.md",
+                            content: "# Notes\n",
+                        }],
+                        activeTab: 9802,
+                    },
+                },
+            })))
+            act(() => v2Store.getState().openCtx({
+                kind: "editor",
+                x: 12,
+                y: 20,
+                path: "notes.md",
+                cursor: { ln: 1, col: 1 },
+            }))
+            expectLanguageButtonsDisabled()
+
+            act(() => v2Store.setState((s) => ({
+                ui: {
+                    ...s.ui,
+                    [s.active]: {
+                        ...s.ui[s.active],
+                        tabs: [{
+                            id: 9803,
+                            type: "file",
+                            title: "server.ts",
+                            path: "src/server.ts",
+                            content: null,
+                        }],
+                        activeTab: 9803,
+                    },
+                },
+            })))
+            act(() => v2Store.getState().openCtx({
+                kind: "editor",
+                x: 12,
+                y: 20,
+                path: "src/server.ts",
+                cursor: { ln: 1, col: 1 },
+            }))
+            expectLanguageButtonsDisabled()
+
             expect(calls).toEqual([])
         } finally {
             act(() => v2Store.setState(previous))
@@ -747,6 +853,76 @@ describe("SettingsModal", () => {
 
             fireEvent.click(view.getByRole("button", { name: "Restart TypeScript Language Server" }))
             expect(restartCalls).toEqual(["typescript"])
+        } finally {
+            act(() => v2Store.setState(previous))
+        }
+    })
+
+    test("Language Servers section labels idle and missing-command states", () => {
+        const previous = {
+            active: v2Store.getState().active,
+            mode: v2Store.getState().mode,
+            stOpen: v2Store.getState().stOpen,
+            stSec: v2Store.getState().stSec,
+            ui: structuredClone(v2Store.getState().ui),
+            restartLspServer: v2Store.getState().restartLspServer,
+        }
+
+        const restartCalls: string[] = []
+
+        act(() => v2Store.setState((s) => ({
+            active: "api",
+            mode: "real",
+            stOpen: true,
+            stSec: "language",
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    lspLoaded: true,
+                    lspServers: [
+                        {
+                            workspace_id: "w1",
+                            workspace_root: "/Users/yuuzu/projects/api",
+                            language: "TypeScript",
+                            display_name: "TypeScript Language Server",
+                            command: "typescript-language-server",
+                            state: "Idle",
+                            pid: null,
+                            memory_bytes: null,
+                            open_documents: 0,
+                            last_error: null,
+                        },
+                        {
+                            workspace_id: "w1",
+                            workspace_root: "/Users/yuuzu/projects/api",
+                            language: "Python",
+                            display_name: "Python LSP Server",
+                            command: "pylsp",
+                            state: "MissingCommand",
+                            pid: null,
+                            memory_bytes: null,
+                            open_documents: 0,
+                            last_error: "command not found",
+                        },
+                    ],
+                    diagnosticsByPath: {},
+                    lspLogs: [],
+                },
+            },
+            restartLspServer: (language) => restartCalls.push(language),
+        })))
+
+        try {
+            const view = render(<SettingsModal />)
+
+            expect(view.getByText("Idle · starts on first use")).toBeTruthy()
+            expect(view.getByText("Missing command: pylsp")).toBeTruthy()
+            expect(view.getByText("Install: uv tool install python-lsp-server")).toBeTruthy()
+
+            fireEvent.click(view.getByRole("button", { name: "Start TypeScript Language Server" }))
+            fireEvent.click(view.getByRole("button", { name: "Retry Python LSP Server" }))
+            expect(restartCalls).toEqual(["TypeScript", "Python"])
         } finally {
             act(() => v2Store.setState(previous))
         }

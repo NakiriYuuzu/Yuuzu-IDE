@@ -192,6 +192,7 @@ pub fn run() {
             commands::list_task_runs,
             commands::lsp_server_status,
             commands::lsp_open_document,
+            commands::lsp_ensure_document,
             commands::lsp_close_document,
             commands::lsp_document_diagnostics,
             commands::lsp_workspace_diagnostics,

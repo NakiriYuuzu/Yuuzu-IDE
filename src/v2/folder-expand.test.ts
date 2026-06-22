@@ -31,6 +31,9 @@ const deletePathCalls: any[] = []
 const gitStatusCalls: any[] = []
 let workspaceDiagnostics: any[] = []
 let renameEdit: unknown = null
+let ensureReadiness: "Ready" | "MissingCommand" | "Error" = "Ready"
+let blockEnsure = false
+const ensureResolvers: Array<() => void> = []
 
 function mockDiff(path: string, staged: boolean) {
     return {
@@ -155,6 +158,35 @@ mock.module("@tauri-apps/api/core", () => ({
             lspCalls.push({ cmd, args })
             return workspaceDiagnostics
         }
+        if (cmd === "lsp_ensure_document") {
+            lspCalls.push({ cmd, args })
+            if (blockEnsure) {
+                await new Promise<void>((resolve) => ensureResolvers.push(resolve))
+            }
+            const state = ensureReadiness === "Ready" ? "Running" : ensureReadiness
+            const lastError = ensureReadiness === "Ready" ? null : "command not found"
+            return {
+                workspace_id: args.workspaceId,
+                workspace_root: args.workspaceRoot,
+                path: args.path,
+                language: "TypeScript",
+                readiness: ensureReadiness,
+                command: "typescript-language-server",
+                last_error: lastError,
+                server: {
+                    workspace_id: args.workspaceId,
+                    workspace_root: args.workspaceRoot,
+                    language: "TypeScript",
+                    display_name: "TypeScript",
+                    command: "typescript-language-server",
+                    state,
+                    pid: ensureReadiness === "Ready" ? 123 : null,
+                    memory_bytes: null,
+                    open_documents: ensureReadiness === "Ready" ? 1 : 0,
+                    last_error: lastError,
+                },
+            }
+        }
         if (cmd === "lsp_open_document") {
             lspCalls.push({ cmd, args })
             return {
@@ -162,6 +194,7 @@ mock.module("@tauri-apps/api/core", () => ({
                 workspace_root: args.workspaceRoot,
                 language: "TypeScript",
                 display_name: "TypeScript",
+                command: "typescript-language-server",
                 state: "Running",
                 pid: 123,
                 memory_bytes: null,
@@ -186,6 +219,7 @@ mock.module("@tauri-apps/api/core", () => ({
                 workspace_root: args.workspaceRoot,
                 language: "TypeScript",
                 display_name: "TypeScript",
+                command: "typescript-language-server",
                 state: "Running",
                 pid: 123,
                 memory_bytes: null,
@@ -198,6 +232,10 @@ mock.module("@tauri-apps/api/core", () => ({
             return []
         }
         if (cmd === "lsp_references") {
+            lspCalls.push({ cmd, args })
+            return []
+        }
+        if (cmd === "lsp_code_actions") {
             lspCalls.push({ cmd, args })
             return []
         }
@@ -336,6 +374,9 @@ async function ensureMockWorkspace(): Promise<void> {
     writeFileCalls.length = 0
     workspaceDiagnostics = []
     renameEdit = null
+    ensureReadiness = "Ready"
+    blockEnsure = false
+    for (const resolve of ensureResolvers.splice(0)) resolve()
     lspCalls.length = 0
     dbHistoryCalls.length = 0
     remoteConnectCalls.length = 0
@@ -829,6 +870,120 @@ describe("real folder expansion", () => {
 
         expect(restart.args.language).toBe("TypeScript")
         expect("path" in restart.args).toBe(false)
+    })
+
+    test("editor symbol actions ensure the active document before LSP requests", async () => {
+        await ensureMockWorkspace()
+        v2Store.getState().toggleDir("src")
+        await new Promise((resolve) => setTimeout(resolve, 30))
+        v2Store.getState().openFile("src/App.tsx")
+        await waitFor(() => Boolean(v2Store.getState().ui.demo.tabs.find((t) => t.type === "file" && t.path === "src/App.tsx")?.content))
+
+        const cases = [
+            { run: () => v2Store.getState().gotoDefinition("src/App.tsx", 1, 1), command: "lsp_definition" },
+            { run: () => v2Store.getState().findReferences("src/App.tsx", 1, 1), command: "lsp_references" },
+            { run: () => v2Store.getState().codeActionsAt("src/App.tsx", 1, 1), command: "lsp_code_actions" },
+            { run: () => v2Store.getState().renameSymbol("src/App.tsx", 1, 1, "renamed"), command: "lsp_rename" },
+        ]
+
+        for (const item of cases) {
+            lspCalls.length = 0
+            item.run()
+            await waitFor(() => lspCalls.some((call) => call.cmd === item.command))
+
+            const ensureIndex = lspCalls.findIndex((call) => call.cmd === "lsp_ensure_document")
+            const requestIndex = lspCalls.findIndex((call) => call.cmd === item.command)
+            expect(ensureIndex).toBeGreaterThanOrEqual(0)
+            expect(ensureIndex).toBeLessThan(requestIndex)
+            expect(lspCalls[ensureIndex].args.content).toBe("disk")
+        }
+    })
+
+    test("concurrent editor symbol actions share one pending document ensure", async () => {
+        await ensureMockWorkspace()
+        v2Store.getState().toggleDir("src")
+        await new Promise((resolve) => setTimeout(resolve, 30))
+        v2Store.getState().openFile("src/App.tsx")
+        await waitFor(() => Boolean(v2Store.getState().ui.demo.tabs.find((t) => t.type === "file" && t.path === "src/App.tsx")?.content))
+
+        lspCalls.length = 0
+        blockEnsure = true
+
+        try {
+            v2Store.getState().gotoDefinition("src/App.tsx", 1, 1)
+            v2Store.getState().findReferences("src/App.tsx", 1, 1)
+
+            await waitFor(() => lspCalls.some((call) => call.cmd === "lsp_ensure_document"))
+            await new Promise((resolve) => setTimeout(resolve, 20))
+            expect(lspCalls.filter((call) => call.cmd === "lsp_ensure_document")).toHaveLength(1)
+
+            blockEnsure = false
+            for (const resolve of ensureResolvers.splice(0)) resolve()
+
+            await waitFor(() => lspCalls.some((call) => call.cmd === "lsp_definition"))
+            await waitFor(() => lspCalls.some((call) => call.cmd === "lsp_references"))
+        } finally {
+            blockEnsure = false
+            for (const resolve of ensureResolvers.splice(0)) resolve()
+        }
+    })
+
+    test("pending document ensure exposes a Starting language server state", async () => {
+        await ensureMockWorkspace()
+        v2Store.setState((state) => ({
+            ui: {
+                ...state.ui,
+                demo: {
+                    ...state.ui.demo,
+                    lspServers: [],
+                    tabs: [{
+                        id: 9101,
+                        type: "file",
+                        title: "App.tsx",
+                        path: "src/App.tsx",
+                        realPath: ROOT + "/src/App.tsx",
+                        content: "disk",
+                        savedContent: "disk",
+                    }],
+                    activeTab: 9101,
+                },
+            },
+        }))
+
+        lspCalls.length = 0
+        blockEnsure = true
+
+        try {
+            v2Store.getState().gotoDefinition("src/App.tsx", 1, 1)
+            await waitFor(() => lspCalls.some((call) => call.cmd === "lsp_ensure_document"))
+
+            const server = v2Store.getState().ui.demo.lspServers.find((item) => item.language === "TypeScript")
+            expect(server?.state).toBe("Starting")
+            expect(server?.command).toBe("typescript-language-server")
+
+            blockEnsure = false
+            for (const resolve of ensureResolvers.splice(0)) resolve()
+            await waitFor(() => lspCalls.some((call) => call.cmd === "lsp_definition"))
+            await waitFor(() => v2Store.getState().ui.demo.lspServers.some((item) => item.language === "TypeScript" && item.state === "Running"))
+        } finally {
+            blockEnsure = false
+            for (const resolve of ensureResolvers.splice(0)) resolve()
+        }
+    })
+
+    test("missing-command document ensure shows an actionable toast and skips the LSP request", async () => {
+        await ensureMockWorkspace()
+        v2Store.getState().toggleDir("src")
+        await new Promise((resolve) => setTimeout(resolve, 30))
+        v2Store.getState().openFile("src/App.tsx")
+        await waitFor(() => Boolean(v2Store.getState().ui.demo.tabs.find((t) => t.type === "file" && t.path === "src/App.tsx")?.content))
+
+        lspCalls.length = 0
+        ensureReadiness = "MissingCommand"
+        v2Store.getState().gotoDefinition("src/App.tsx", 1, 1)
+
+        await waitFor(() => String(v2Store.getState().toast).includes("missing language server command: typescript-language-server"))
+        expect(lspCalls.some((call) => call.cmd === "lsp_definition")).toBe(false)
     })
 
     test("workspace diagnostics do not restore diagnostics for a closed language tab", async () => {

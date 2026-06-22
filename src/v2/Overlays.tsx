@@ -25,6 +25,8 @@ import { useV2Store } from "./v2-store"
 import type { V2State } from "./v2-store"
 import { writeToSession } from "./controller"
 import { checkForUpdate, updateToastMessage, type UpdateCheck } from "./updater"
+import { isLspSupportedDocumentPath } from "../features/language/language-model"
+import type { LanguageServerStatus } from "../features/language/language-model"
 
 // Clear a live PTY without killing it: form feed redraws the prompt.
 function sendTermClear(sessionId: string): void {
@@ -114,15 +116,21 @@ function buildCtxItems(ctx: CtxTarget, store: V2State): MenuEntry[] {
         }
         case "editor": {
             const cursor = ctx.cursor ?? null
+            const path = ctx.path ?? ""
+            const contextTab = p.tabs.find((t) => t.type === "file" && t.path === path)
+            const canRunLanguageAction = Boolean(
+                cursor &&
+                isLspSupportedDocumentPath(path) &&
+                typeof contextTab?.content === "string",
+            )
             const symbolAction = (run: (path: string, ln: number, col: number) => void) => {
-                if (!cursor) {
-                    toast("Place cursor on a symbol first")
+                if (!cursor || !canRunLanguageAction) {
+                    toast("Place cursor on a supported document first")
                     return
                 }
-                run(ctx.path ?? "", cursor.ln, cursor.col)
+                run(path, cursor.ln, cursor.col)
             }
             const countTokens = () => {
-                const path = ctx.path ?? ""
                 const tab = p.tabs.find((t) => t.type === "file" && t.path === path)
                 const src = typeof tab?.content === "string" ? tab.content : codeFor(path).src
                 const tk = estTokens(src)
@@ -131,21 +139,17 @@ function buildCtxItems(ctx: CtxTarget, store: V2State): MenuEntry[] {
             return [
                 { glyph: "⧉", label: "Copy", run: () => toast("Copied selection") },
                 { glyph: "≡", label: "Format document", run: () => toast("✓ formatted " + (ctx.path ?? "")) },
-                { glyph: "✻", label: "Ask Claude about this file", run: () => {
-                    store.azNew()
-                    toast("New session opened on " + (ctx.path ?? "file"))
-                } },
                 { divider: true },
-                { glyph: "⇲", label: "Go to Definition", disabled: !cursor, run: () =>
+                { glyph: "⇲", label: "Go to Definition", disabled: !canRunLanguageAction, run: () =>
                     symbolAction((path, ln, col) => store.gotoDefinition(path, ln, col)) },
-                { glyph: "⌕", label: "Find References", disabled: !cursor, run: () =>
+                { glyph: "⌕", label: "Find References", disabled: !canRunLanguageAction, run: () =>
                     symbolAction((path, ln, col) => store.findReferences(path, ln, col)) },
-                { glyph: "✎", label: "Rename Symbol", disabled: !cursor, run: () =>
+                { glyph: "✎", label: "Rename Symbol", disabled: !canRunLanguageAction, run: () =>
                     symbolAction((path, ln, col) => {
                         const next = prompt("Rename symbol to:")
                         if (next?.trim()) store.renameSymbol(path, ln, col, next.trim())
                     }) },
-                { glyph: "✦", label: "Code Actions", disabled: !cursor, run: () =>
+                { glyph: "✦", label: "Code Actions", disabled: !canRunLanguageAction, run: () =>
                     symbolAction((path, ln, col) => store.codeActionsAt(path, ln, col)) },
                 { divider: true },
                 { glyph: "Σ", label: "Count tokens (Claude)", run: countTokens },
@@ -587,6 +591,41 @@ function memoryLabel(bytes: number | null): string {
     return fmtBytes(bytes)
 }
 
+function languageServerMeta(server: LanguageServerStatus): string {
+    if (server.state === "Idle") return "Idle · starts on first use"
+    if (server.state === "MissingCommand") {
+        return "Missing command" + (server.command ? ": " + server.command : "")
+    }
+    if (server.state === "Error") {
+        return server.last_error ? "Error · " + server.last_error : "Error"
+    }
+    return server.state + " · pid " + (server.pid ?? "n/a")
+}
+
+function languageServerAction(server: LanguageServerStatus): string {
+    if (server.state === "Idle" || server.state === "Stopped") return "Start"
+    if (server.state === "MissingCommand" || server.state === "Error") return "Retry"
+    return "Restart"
+}
+
+function languageServerInstallHint(server: LanguageServerStatus): string | null {
+    if (server.state !== "MissingCommand") return null
+    switch (server.command) {
+        case "rust-analyzer":
+            return "Install: rustup component add rust-analyzer"
+        case "typescript-language-server":
+            return "Install: bun add -g typescript-language-server typescript"
+        case "pylsp":
+            return "Install: uv tool install python-lsp-server"
+        case "csharp-ls":
+            return "Install: dotnet tool install -g csharp-ls"
+        case "kotlin-language-server":
+            return "Install kotlin-language-server and make it available on PATH"
+        default:
+            return server.command ? `Install ${server.command} and make it available on PATH` : null
+    }
+}
+
 function LanguageSection() {
     const mode = useV2Store((s) => s.mode)
     const active = useV2Store((s) => s.active)
@@ -645,25 +684,31 @@ function LanguageSection() {
                     <span>{project.lspServers.length}</span>
                 </div>
                 {project.lspServers.length ? (
-                    project.lspServers.map((server) => (
+                    project.lspServers.map((server) => {
+                        const action = languageServerAction(server)
+                        const installHint = languageServerInstallHint(server)
+                        return (
                         <div className="yz2-lang-server" key={`${server.workspace_id}:${server.workspace_root}:${server.language}`}>
                             <span className="ic">◇</span>
                             <div className="main">
                                 <span className="name">{server.display_name}</span>
-                                <span className="meta">{server.state} · pid {server.pid ?? "n/a"}</span>
+                                <span className="meta">{languageServerMeta(server)}</span>
+                                {installHint ? <span className="meta">{installHint}</span> : null}
                                 <span className="meta">open {server.open_documents} · mem {memoryLabel(server.memory_bytes)}</span>
                             </div>
                             <span className={"yz2-lang-state is-" + String(server.state).toLowerCase()}>{server.state}</span>
                             <button
                                 type="button"
                                 className="yz2-lang-iconbtn"
-                                aria-label={`Restart ${server.display_name}`}
+                                aria-label={`${action} ${server.display_name}`}
+                                title={`${action} ${server.display_name}`}
                                 onClick={() => restartLspServer(server.language)}
                             >
                                 ↻
                             </button>
                         </div>
-                    ))
+                        )
+                    })
                 ) : (
                     <div className="yz2-sc-empty">No language servers detected</div>
                 )}

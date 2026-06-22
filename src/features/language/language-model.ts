@@ -18,10 +18,31 @@ export type LanguageServerStatus = {
   workspace_root: string;
   language: "Rust" | "TypeScript" | "JavaScript" | "Python" | "CSharp" | "Kotlin" | string;
   display_name: string;
-  state: "Unsupported" | "MissingCommand" | "Running" | "Stopped" | "Error" | string;
+  command?: string | null;
+  state: "Unsupported" | "Idle" | "MissingCommand" | "Starting" | "Running" | "Stopped" | "Error" | string;
   pid: number | null;
   memory_bytes: number | null;
   open_documents: number;
+  last_error: string | null;
+};
+
+export type LspDocumentReadiness =
+  | "Unsupported"
+  | "Syncing"
+  | "Ready"
+  | "Stale"
+  | "MissingCommand"
+  | "Error"
+  | string;
+
+export type LspEnsureDocumentResult = {
+  workspace_id: string;
+  workspace_root: string;
+  path: string;
+  language: LanguageServerStatus["language"] | null;
+  readiness: LspDocumentReadiness;
+  server: LanguageServerStatus;
+  command: string | null;
   last_error: string | null;
 };
 

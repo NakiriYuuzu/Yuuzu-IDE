@@ -17,6 +17,17 @@ Use this skill for real runtime verification of Yuuzu-IDE behavior in the packag
 bun run tauri build --debug --bundles app
 ```
 
+If that command creates the `.app` but fails only because updater artifact
+signing has a public key without `TAURI_SIGNING_PRIVATE_KEY`, keep the failure
+as evidence and rerun the local smoke build with updater artifacts disabled:
+
+```bash
+bun run tauri build --debug --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
+```
+
+Do not use the override to validate updater artifacts; it is only for packaged
+debug app runtime smoke.
+
 4. Use the app bundle at:
 
 ```text
