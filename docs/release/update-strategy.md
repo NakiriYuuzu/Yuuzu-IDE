@@ -11,14 +11,15 @@ portable `.zip`。更新完整性由 minisign 簽章保證（與 OS code signing
    - `src-tauri/tauri.conf.json` 的 `version`
    - `package.json` 的 `version`
    - `src-tauri/Cargo.toml` 的 `version`
-2. 跑下方「發版前驗證」確認綠燈。
-3. commit 版號變更。
-4. 打 tag 並 push：`git tag vX.Y.Z && git push origin vX.Y.Z`。
-5. GitHub Actions `release.yml` 會在 `macos-26` 與 `windows-2025` 各自 build、
+2. 在 `CHANGELOG.md` 新增對應版本段落，例如 `## [0.2.0] - YYYY-MM-DD`。
+3. 跑下方「發版前驗證」確認綠燈。
+4. commit 版號與 changelog 變更。
+5. 打 tag 並 push：`git tag vX.Y.Z && git push origin vX.Y.Z`。
+6. GitHub Actions `release.yml` 會在 `macos-26` 與 `windows-2025` 各自 build、
    簽章、上傳到一個 **draft** Release，並產生 `latest.json`。
-6. 到 GitHub Releases 檢查 draft：macOS 需有 Apple Silicon artifact，Windows
+7. 到 GitHub Releases 檢查 draft：macOS 需有 Apple Silicon artifact，Windows
    需有 x64 installer / updater `.sig`、portable `.zip`，且 `latest.json` 都在。
-7. 手動 **Publish**。發布後 auto-update endpoint 才會生效。
+8. 手動 **Publish**。發布後 auto-update endpoint 才會生效。
 
 ## 發版前驗證
 
@@ -37,9 +38,12 @@ bun run build
 - App 啟動時靜默呼叫 updater；有新版顯示非阻斷 toast，引導到 Settings ›
   Updates。
 - Settings › Updates 提供手動「Check for updates」與「Install & Restart」。
+- Settings › Updates 會顯示 updater 回傳的新版本日期與更新內容。
 - Endpoint：`https://github.com/NakiriYuuzu/Yuuzu-IDE/releases/latest/download/latest.json`
   ——只會解析到最新已 publish 的非 prerelease release，故 draft 不影響使用者。
 - App 內建 minisign 公鑰驗證 `latest.json` 的簽章，驗章失敗即拒絕安裝。
+- Release notes 由 `CHANGELOG.md` 的版本段落擷取後填入 GitHub Release body；
+  Tauri updater 會把該內容作為更新 metadata 回傳給 UI。
 - Windows `windows-x86_64` entry 應指向 Tauri updater 支援的 signed installer
   artifact（例如 `Yuuzu-IDE_0.2.0_x64-setup.exe`），不是 portable zip。
 - Windows portable zip（例如 `Yuuzu-IDE_0.2.0_windows_x64_portable.zip`）是免安裝

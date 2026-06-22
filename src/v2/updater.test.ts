@@ -16,6 +16,8 @@ describe("checkForUpdate", () => {
         const result = await resolveUpdateCheck(async () => ({
             available: true,
             version: "0.2.0",
+            date: "2026-06-22T03:17:20Z",
+            body: "### Changes\n- Added Windows portable zip",
             downloadAndInstall,
         }), relaunchMock)
 
@@ -24,6 +26,8 @@ describe("checkForUpdate", () => {
             throw new Error("expected an available update")
         }
         expect(result.version).toBe("0.2.0")
+        expect(result.date).toBe("2026-06-22T03:17:20Z")
+        expect(result.notes).toBe("### Changes\n- Added Windows portable zip")
 
         await result.install()
 

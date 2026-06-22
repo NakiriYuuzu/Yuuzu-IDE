@@ -117,6 +117,7 @@ jobs:
 ```
 
 - `tauri-action` 自動：build → 用簽章金鑰產生 updater artifacts（macOS `.app.tar.gz`、Windows NSIS/MSI installer artifact、各自 `.sig`）→ 上傳到 release → 產生並上傳 `latest.json`。
+- `release.yml` 會先從 `CHANGELOG.md` 擷取目前 tag 對應版本段落，填入 `tauri-action` 的 `releaseBody`；GitHub Release body / updater metadata 會帶同一份更新內容。
 - Windows portable `.zip` 是額外 release asset，由 workflow 在 `tauri-action` 後把 release binary 打包上傳；它不進 `latest.json`。
 - `releaseDraft: true`：兩個 runner 會 upload 到同一個 draft release；都跑完後人工 publish。
 
@@ -210,7 +211,7 @@ export async function checkForUpdate(opts: { silent: boolean }): Promise<void>
 2. 有更新 → 顯示**非阻斷 toast/dialog**：「vX.Y.Z 可用 — Install & Restart」。
 3. 使用者確認 → `update.downloadAndInstall(onProgress)`（顯示下載進度）→ `relaunch()`。
 4. **啟動檢查**（silent）：在 v2 啟動流程呼叫 `checkForUpdate({ silent: true })`；無網路 / 無更新一律安靜略過。
-5. **Settings 按鈕**（非 silent）：呼叫 `checkForUpdate({ silent: false })`；無更新時明確顯示「已是最新版本」、錯誤時顯示錯誤。
+5. **Settings 按鈕**（非 silent）：呼叫 `checkForUpdate({ silent: false })`；無更新時明確顯示「已是最新版本」、錯誤時顯示錯誤；有更新時顯示版本、日期與 `latest.json`/Release body 內的更新內容。
 
 UI 接點（沿用 v2 既有元件，不新造 UI 框架）：
 
@@ -224,9 +225,10 @@ UI 接點（沿用 v2 既有元件，不新造 UI 框架）：
 - **版本來源**：`tauri-action` 以 `tauri.conf.json` 的 `version` 為準；tag 名稱（`vX.Y.Z`）獨立，但兩者**必須一致**。
 - 發版步驟（寫進更新後的 update-strategy.md）：
   1. bump `src-tauri/tauri.conf.json`、`package.json`、`src-tauri/Cargo.toml` 三處版號（保持一致）。
-  2. commit。
-  3. `git tag vX.Y.Z && git push origin vX.Y.Z`。
-  4. 等 CI 跑完 → 檢查 draft release → 手動 publish。
+  2. 更新 `CHANGELOG.md` 的對應版本段落。
+  3. commit。
+  4. `git tag vX.Y.Z && git push origin vX.Y.Z`。
+  5. 等 CI 跑完 → 檢查 draft release → 手動 publish。
 
 ### 4.7 文件更新
 
@@ -301,6 +303,8 @@ UI 接點（沿用 v2 既有元件，不新造 UI 框架）：
 |------|------|
 | `.github/workflows/release.yml` | 新增 |
 | `.github/workflows/ci.yml` | 新增 |
+| `CHANGELOG.md` | 新增 release notes source |
+| `scripts/extract-release-notes.mjs` | 新增（從 changelog 擷取 tag 對應 release notes） |
 | `src-tauri/Cargo.toml` | 加 `tauri-plugin-updater`、`tauri-plugin-process` |
 | `src-tauri/src/lib.rs` | 註冊兩個 plugin |
 | `src-tauri/tauri.conf.json` | 加 `bundle.createUpdaterArtifacts`、`bundle.macOS.signingIdentity`、`plugins.updater` endpoint/public key |

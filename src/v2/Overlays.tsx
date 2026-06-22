@@ -819,6 +819,7 @@ function UpdatesSection() {
     const [installing, setInstalling] = useState(false)
     const [result, setResult] = useState<UpdateCheck | null>(null)
     const resultMessage = result ? updateToastMessage(result, false) : null
+    const releaseNotes = result?.kind === "available" ? result.notes?.trim() : ""
 
     async function checkUpdates() {
         setChecking(true)
@@ -858,6 +859,17 @@ function UpdatesSection() {
                 ) : null}
             </div>
             {resultMessage ? <div className="yz2-panel-note">{resultMessage}</div> : null}
+            {result?.kind === "available" && result.date ? (
+                <div className="yz2-update-date">{result.date}</div>
+            ) : null}
+            {releaseNotes ? (
+                <div className="yz2-update-notes">
+                    {releaseNotes
+                        .split(/\r?\n/)
+                        .filter((line) => line.trim())
+                        .map((line, index) => <div key={index}>{line}</div>)}
+                </div>
+            ) : null}
         </div>
     )
 }

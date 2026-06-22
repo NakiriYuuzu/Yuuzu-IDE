@@ -6,7 +6,7 @@ import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react
 import { ensureTestDom } from "../test/test-dom"
 
 type TestUpdateCheck =
-    | { kind: "available"; version: string; install: () => Promise<void> }
+    | { kind: "available"; version: string; date?: string; notes?: string; install: () => Promise<void> }
     | { kind: "current" }
     | { kind: "error"; message: string }
 
@@ -461,7 +461,13 @@ describe("SettingsModal", () => {
 
     test("Updates section offers Install & Restart when an update is available", async () => {
         const install = mock(async () => {})
-        nextUpdateResult = { kind: "available", version: "0.2.0", install }
+        nextUpdateResult = {
+            kind: "available",
+            version: "0.2.0",
+            date: "2026-06-22T03:17:20Z",
+            notes: "### Changes\n- Added Windows portable zip",
+            install,
+        }
         act(() => v2Store.setState({
             stOpen: true,
             stSec: "updates",
@@ -473,6 +479,9 @@ describe("SettingsModal", () => {
 
         const installButton = await view.findByRole("button", { name: "Install & Restart" })
         expect(view.getByText("更新 0.2.0 可用")).toBeTruthy()
+        expect(view.getByText("2026-06-22T03:17:20Z")).toBeTruthy()
+        expect(view.getByText("### Changes")).toBeTruthy()
+        expect(view.getByText("- Added Windows portable zip")).toBeTruthy()
         expect(v2Store.getState().toast).toBe("更新 0.2.0 可用")
 
         fireEvent.click(installButton)

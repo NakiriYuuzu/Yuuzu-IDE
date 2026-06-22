@@ -1,6 +1,8 @@
 export type UpdaterCheckResult = {
     available: true
     version: string
+    date?: string
+    body?: string
     downloadAndInstall: () => Promise<void>
 } | {
     available?: false
@@ -11,7 +13,7 @@ export type UpdaterCheckFn = () => Promise<UpdaterCheckResult | null>
 export type UpdaterRelaunchFn = () => Promise<void>
 
 export type UpdateCheck =
-    | { kind: "available"; version: string; install: () => Promise<void> }
+    | { kind: "available"; version: string; date?: string; notes?: string; install: () => Promise<void> }
     | { kind: "current" }
     | { kind: "error"; message: string }
 
@@ -28,6 +30,8 @@ export async function resolveUpdateCheck(
         return {
             kind: "available",
             version: update.version,
+            date: update.date,
+            notes: update.body,
             install: async () => {
                 await update.downloadAndInstall()
                 await relaunchFn()

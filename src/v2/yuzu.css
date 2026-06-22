@@ -719,6 +719,24 @@
 .yz2-db-table .nm { flex: 1; font-size: 12px; color: var(--yz-8b97a7); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
 .yz2-db-table .ct { font-size: 10px; color: var(--yz-5a6675); }
 .yz2-panel-note { margin: 14px 8px; font-size: 11px; color: var(--yz-5a6675); line-height: 1.7; }
+.yz2-update-date {
+  margin: 8px 8px 0;
+  font-size: 11px;
+  color: var(--yz-8a96a8);
+}
+.yz2-update-notes {
+  margin: 10px 8px 0;
+  max-height: 180px;
+  overflow: auto;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--yz-c8d3e1);
+  background: var(--yz-11151c);
+  border: 1px solid var(--yz-253041);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
 .yz2-db-add-empty {
     display: block;
     margin-top: 8px;

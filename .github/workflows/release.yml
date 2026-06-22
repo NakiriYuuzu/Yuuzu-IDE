@@ -47,6 +47,19 @@ jobs:
       - name: Install frontend deps
         run: bun install
 
+      - name: Extract release notes
+        id: release_notes
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}
+        run: |
+          notes="$(node scripts/extract-release-notes.mjs "$RELEASE_TAG")"
+          {
+            echo "body<<EOF"
+            printf "%s\n" "$notes"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build, sign and release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -56,6 +69,7 @@ jobs:
         with:
           tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}
           releaseName: Yuuzu-IDE ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}
+          releaseBody: ${{ steps.release_notes.outputs.body }}
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}

@@ -23,6 +23,9 @@
 | `src/v2/updater-core.ts` | 更新檢查結果轉換與 toast 訊息的純邏輯 | 新增 |
 | `src/v2/updater.ts` | 薄 Tauri 包裝（`checkForUpdate`、`updateToastMessage` re-export） | 新增 |
 | `src/v2/updater.test.ts` | `updater-core.ts` 的單元測試 | 新增 |
+| `CHANGELOG.md` | GitHub Release / updater notes source | 新增 |
+| `scripts/extract-release-notes.mjs` | 擷取 tag 對應 changelog 段落 | 新增 |
+| `scripts/extract-release-notes.test.mjs` | release notes 擷取測試 | 新增 |
 | `src/v2/v2-model.ts` | `SETTINGS_CONFIG` 新增 "Updates" section | 修改 |
 | `src/v2/Overlays.tsx` | `UpdatesSection` 元件 + 接進 `SettingsModal` | 修改 |
 | `src/v2/Workbench.tsx` | 啟動時 silent 更新檢查 | 修改 |
@@ -862,7 +865,7 @@ git tag v0.1.0 && git push origin v0.1.0
 - CI 驗證（spec §4.2）→ Task 9 ✓
 - Updater + process plugin（spec §4.3）→ Task 1, 2 ✓
 - Minisign 金鑰（spec §4.4）→ Task 6 ✓
-- 前端 updater + UX（spec §4.5）→ Task 3, 4, 5 ✓
+- 前端 updater + UX（spec §4.5）→ Task 3, 4, 5 ✓；release notes/date 顯示已補上
 - 版本管理（spec §4.6）→ Task 10 ✓；Task 11 pending release validation
 - 文件更新（spec §4.7）→ Task 10 ✓
 - tauri.conf.json updater（spec §4.3）→ Task 7 ✓
