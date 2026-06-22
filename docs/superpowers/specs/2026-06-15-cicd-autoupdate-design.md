@@ -1,6 +1,6 @@
 # CI/CD Release Pipeline 與 Auto-Update 設計
 
-> 🟡 **實作狀態:部分實作**（2026-06-22 核對）— CI/CD workflow、updater/process plugin、Settings › Updates UI、啟動 silent check、updater artifacts、macOS ad-hoc signing、Windows portable `.zip` release asset 與文件已落地並通過本地驗證。尚未完成：owner 產生 minisign 金鑰、設定 GitHub Secrets、把 `plugins.updater.pubkey` / endpoint 寫入 `tauri.conf.json`、以及 GitHub release 乾跑與端到端更新驗證。對應 plan：`docs/superpowers/plans/2026-06-15-cicd-autoupdate.md`
+> 🟡 **實作狀態:部分實作**（2026-06-22 核對）— CI/CD workflow、updater/process plugin、Settings › Updates UI、啟動 silent check、updater artifacts、macOS ad-hoc signing、Windows portable `.zip` release asset、minisign GitHub Secrets、`plugins.updater` endpoint/public key 與文件已落地並通過本地驗證。尚未完成：GitHub release 乾跑與端到端更新驗證。對應 plan：`docs/superpowers/plans/2026-06-15-cicd-autoupdate.md`
 
 - **日期**：2026-06-15
 - **狀態**：部分實作，待簽章金鑰與 release 端到端驗證
@@ -303,7 +303,7 @@ UI 接點（沿用 v2 既有元件，不新造 UI 框架）：
 | `.github/workflows/ci.yml` | 新增 |
 | `src-tauri/Cargo.toml` | 加 `tauri-plugin-updater`、`tauri-plugin-process` |
 | `src-tauri/src/lib.rs` | 註冊兩個 plugin |
-| `src-tauri/tauri.conf.json` | 已加 `bundle.createUpdaterArtifacts`、`bundle.macOS.signingIdentity`；`plugins.updater` 待 owner 提供 minisign 公鑰後補上 |
+| `src-tauri/tauri.conf.json` | 加 `bundle.createUpdaterArtifacts`、`bundle.macOS.signingIdentity`、`plugins.updater` endpoint/public key |
 | `src/v2/updater-core.ts` | 新增（可測的 updater 結果轉換與 toast 訊息邏輯） |
 | `src-tauri/gen/schemas/*` | Tauri generated schema 同步新增 updater/process permissions |
 | `src-tauri/capabilities/default.json` | 加 `updater:default`、`process:allow-restart` |
@@ -319,5 +319,4 @@ UI 接點（沿用 v2 既有元件，不新造 UI 框架）：
 
 1. 本機跑 `bun run tauri signer generate` 產生 minisign 金鑰對。
 2. 到 GitHub repo Settings → Secrets 設定兩個簽章 secret。
-3. 公鑰填進 `tauri.conf.json`。
-4. 首次需手動 publish 一個含 `latest.json` 的 release，auto-update endpoint 才會生效。
+3. 首次需手動 publish 一個含 `latest.json` 的 release，auto-update endpoint 才會生效。

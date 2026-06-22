@@ -12,7 +12,7 @@
 
 **Git 慣例：** 依本 repo owner 慣例，**staging 與 commit 由 owner 負責**。每個 Task 末尾的 commit 指令是「建議指令」——由 owner 執行，或明確授權執行的 agent 對該 Task 列出的檔案 stage。commit message 結尾固定 `Co-Authored-By: Yuuzu <yuuzu@yuuzu.net>`，**不得**加入任何 AI 作者。
 
-**目前狀態（2026-06-22 實作核對）：** Task 1-5、Task 7 Step 1、Task 8-10 已由本輪實作並通過本地驗證。Task 6（minisign 金鑰與 GitHub Secrets）、Task 7 Step 2（`plugins.updater.pubkey` / endpoint）、Task 11（GitHub release 乾跑與端到端更新）仍需 owner 手動完成。
+**目前狀態（2026-06-22 實作核對）：** Task 1-10 已由本輪實作並通過本地/GitHub PR CI 驗證。Task 11（GitHub release 乾跑與端到端更新）仍需完成。
 
 ---
 
@@ -30,7 +30,7 @@
 | `src-tauri/src/lib.rs` | 註冊兩個 plugin | 修改 |
 | `src-tauri/capabilities/default.json` | 加 updater / process 權限 | 修改 |
 | `src-tauri/gen/schemas/*` | Tauri generated schema 同步 updater / process 權限 | 修改 |
-| `src-tauri/tauri.conf.json` | `createUpdaterArtifacts: true` + macOS ad-hoc signing；`plugins.updater` 待公鑰後補 | 修改 |
+| `src-tauri/tauri.conf.json` | `createUpdaterArtifacts: true` + macOS ad-hoc signing + `plugins.updater` endpoint/public key | 修改 |
 | `package.json` | 加兩個 JS plugin 套件 | 修改 |
 | `.github/workflows/release.yml` | 發版 pipeline | 新增 |
 | `.github/workflows/ci.yml` | push/PR 驗證 | 新增 |
@@ -453,19 +453,19 @@ Co-Authored-By: Yuuzu <yuuzu@yuuzu.net>"
 
 > 這個 Task 由 owner 在本機手動執行，無法由程式碼代勞。私鑰**絕不進 git**。
 
-- [ ] **Step 1: 產生金鑰對**
+- [x] **Step 1: 產生金鑰對**
 
 Run: `bun run tauri signer generate -w ~/.tauri/yuuzu-ide.key`
 過程會要求輸入密碼（可空，但建議設）。完成後得到：
 - `~/.tauri/yuuzu-ide.key`（私鑰）
 - `~/.tauri/yuuzu-ide.key.pub`（公鑰）
 
-- [ ] **Step 2: 取得公鑰內容（Task 7 要用）**
+- [x] **Step 2: 取得公鑰內容（Task 7 要用）**
 
 Run: `cat ~/.tauri/yuuzu-ide.key.pub`
 複製整段內容備用。
 
-- [ ] **Step 3: 設定 GitHub repo secrets**
+- [x] **Step 3: 設定 GitHub repo secrets**
 
 用 `gh`（或 GitHub 網頁 Settings → Secrets and variables → Actions）：
 
@@ -474,12 +474,12 @@ gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/yuuzu-ide.key
 gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD   # 互動輸入剛剛的密碼;若空密碼則設為空字串
 ```
 
-- [ ] **Step 4: 驗證 secrets 存在**
+- [x] **Step 4: 驗證 secrets 存在**
 
 Run: `gh secret list`
 Expected: 看到 `TAURI_SIGNING_PRIVATE_KEY` 與 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
 
-- [ ] **Step 5: 備份私鑰**
+- [x] **Step 5: 備份私鑰**
 
 把 `~/.tauri/yuuzu-ide.key` 與密碼存進密碼管理器。遺失 = 無法再發出能被現有 app 接受的更新。
 
@@ -488,7 +488,7 @@ Expected: 看到 `TAURI_SIGNING_PRIVATE_KEY` 與 `TAURI_SIGNING_PRIVATE_KEY_PASS
 ## Task 7: tauri.conf.json — updater 設定
 
 **Files:**
-- Modify: `src-tauri/tauri.conf.json:30-40`（bundle）, 待公鑰後新增 `plugins` 區塊
+- Modify: `src-tauri/tauri.conf.json:30-40`（bundle）, 新增 `plugins` 區塊
 
 > 依賴 Task 6 的公鑰。
 
@@ -516,9 +516,7 @@ Expected: 看到 `TAURI_SIGNING_PRIVATE_KEY` 與 `TAURI_SIGNING_PRIVATE_KEY_PASS
 
 說明：`createUpdaterArtifacts: true` 產生 Tauri updater 支援的簽章更新 artifacts。Windows portable `.zip` 不是 Tauri updater artifact，會在 release workflow 另行打包上傳。macOS `signingIdentity: "-"` 是 ad-hoc signing，不是 Developer ID/notarization。
 
-- [ ] **Step 2: 加入 plugins.updater**
-
-Status: blocked until Task 6 provides the minisign public key. Do not commit a placeholder `pubkey`; without the real public key the updater config is not useful and may mislead release validation.
+- [x] **Step 2: 加入 plugins.updater**
 
 在 `bundle` 區塊之後（`}` 結尾與最外層 `}` 之間）加入 `plugins` 頂層鍵，`pubkey` 填入 Task 6 Step 2 的公鑰：
 
@@ -533,7 +531,7 @@ Status: blocked until Task 6 provides the minisign public key. Do not commit a p
   }
 ```
 
-- [ ] **Step 3: 驗證 JSON 合法 + schema**
+- [x] **Step 3: 驗證 JSON 合法 + schema**
 
 Run: `bun run tauri build --help >/dev/null && python3 -c "import json;json.load(open('src-tauri/tauri.conf.json'))"`
 Expected: 無錯誤輸出（JSON 解析成功）。
@@ -863,11 +861,11 @@ git tag v0.1.0 && git push origin v0.1.0
 - Release pipeline（spec §4.1）→ Task 8 ✓
 - CI 驗證（spec §4.2）→ Task 9 ✓
 - Updater + process plugin（spec §4.3）→ Task 1, 2 ✓
-- Minisign 金鑰（spec §4.4）→ Task 6 pending owner
+- Minisign 金鑰（spec §4.4）→ Task 6 ✓
 - 前端 updater + UX（spec §4.5）→ Task 3, 4, 5 ✓
 - 版本管理（spec §4.6）→ Task 10 ✓；Task 11 pending release validation
 - 文件更新（spec §4.7）→ Task 10 ✓
-- tauri.conf.json updater（spec §4.3）→ Task 7 partial（bundle artifacts/ad-hoc signing done；`plugins.updater` pending public key）
+- tauri.conf.json updater（spec §4.3）→ Task 7 ✓
 - 端到端（spec §7）→ Task 11 pending manual release/update validation
 
 型別一致性：`UpdateCheck`、`checkForUpdate`、`updateToastMessage` 在 Task 3 定義，Task 4/5 沿用同名同簽章 ✓。
