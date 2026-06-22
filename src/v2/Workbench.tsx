@@ -26,6 +26,7 @@ import { DbConnDialog } from "./DbConnDialog"
 import { SftpView } from "./SftpView"
 import { AgentZone } from "./AgentZone"
 import { CodeActionsOverlay, CommandPalette, ConfirmModal, ContextMenu, ReferencesOverlay, SettingsModal, Toast, runPaletteAction } from "./Overlays"
+import { checkForUpdate, updateToastMessage } from "./updater"
 
 function TitleBar() {
     const meta = useV2Store((s) => s.meta[s.active] as typeof s.meta[string] | undefined)
@@ -426,6 +427,19 @@ export function WorkbenchV2() {
             const store = v2Store.getState()
             if (!store.stab.metric) store.refreshMetric()
         })
+        return () => {
+            disposed = true
+        }
+    }, [])
+
+    useEffect(() => {
+        let disposed = false
+        void (async () => {
+            const result = await checkForUpdate()
+            if (disposed) return
+            const message = updateToastMessage(result, true)
+            if (message) v2Store.getState().showToast(message)
+        })()
         return () => {
             disposed = true
         }

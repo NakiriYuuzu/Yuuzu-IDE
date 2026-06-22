@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 讓 Yuuzu-IDE 在 push 版本 tag 後自動於 macOS + Windows build 並簽章 release artifacts 上傳 GitHub Release，且 app 能在啟動時 / 從 Settings 手動檢查、下載、安裝並重啟更新。
+**Goal:** 讓 Yuuzu-IDE 在 push 版本 tag 後自動於 macOS Apple Silicon (`darwin-aarch64`) + Windows x64 (`windows-x86_64`) build 並簽章 release artifacts 上傳 GitHub Release；Windows release 需包含 portable `.zip`；app 能在啟動時 / 從 Settings 手動檢查、下載、安裝並重啟更新。
 
 **Architecture:** 採方案 A——官方 `tauri-plugin-updater` + GitHub Releases + `tauri-action`。CI 用 minisign 私鑰簽章、產生 `latest.json`；app 內建公鑰驗章。前端把可測的決策邏輯（要不要顯示、顯示什麼 toast）抽成純函式，Tauri 整合維持薄包裝。
 
@@ -12,21 +12,28 @@
 
 **Git 慣例：** 依本 repo owner 慣例，**staging 與 commit 由 owner 負責**。每個 Task 末尾的 commit 指令是「建議指令」——由 owner 執行，或明確授權執行的 agent 對該 Task 列出的檔案 stage。commit message 結尾固定 `Co-Authored-By: Yuuzu <yuuzu@yuuzu.net>`，**不得**加入任何 AI 作者。
 
+**目前狀態（2026-06-22 實作核對）：** Task 1-10 已由本輪實作並通過本地/GitHub PR CI 驗證。Task 11（GitHub release 乾跑與端到端更新）仍需完成。
+
 ---
 
 ## File Structure
 
 | 檔案 | 責任 | 動作 |
 |------|------|------|
-| `src/v2/updater.ts` | 更新檢查的純邏輯 + 薄 Tauri 包裝（`checkForUpdate`、`updateToastMessage`） | 新增 |
-| `src/v2/updater.test.ts` | `updater.ts` 的單元測試 | 新增 |
+| `src/v2/updater-core.ts` | 更新檢查結果轉換與 toast 訊息的純邏輯 | 新增 |
+| `src/v2/updater.ts` | 薄 Tauri 包裝（`checkForUpdate`、`updateToastMessage` re-export） | 新增 |
+| `src/v2/updater.test.ts` | `updater-core.ts` 的單元測試 | 新增 |
+| `CHANGELOG.md` | GitHub Release / updater notes source | 新增 |
+| `scripts/extract-release-notes.mjs` | 擷取 tag 對應 changelog 段落 | 新增 |
+| `scripts/extract-release-notes.test.mjs` | release notes 擷取測試 | 新增 |
 | `src/v2/v2-model.ts` | `SETTINGS_CONFIG` 新增 "Updates" section | 修改 |
 | `src/v2/Overlays.tsx` | `UpdatesSection` 元件 + 接進 `SettingsModal` | 修改 |
 | `src/v2/Workbench.tsx` | 啟動時 silent 更新檢查 | 修改 |
 | `src-tauri/Cargo.toml` | 加 updater / process plugin crate | 修改 |
 | `src-tauri/src/lib.rs` | 註冊兩個 plugin | 修改 |
 | `src-tauri/capabilities/default.json` | 加 updater / process 權限 | 修改 |
-| `src-tauri/tauri.conf.json` | `createUpdaterArtifacts` + `plugins.updater` | 修改 |
+| `src-tauri/gen/schemas/*` | Tauri generated schema 同步 updater / process 權限 | 修改 |
+| `src-tauri/tauri.conf.json` | `createUpdaterArtifacts: true` + macOS ad-hoc signing + `plugins.updater` endpoint/public key | 修改 |
 | `package.json` | 加兩個 JS plugin 套件 | 修改 |
 | `.github/workflows/release.yml` | 發版 pipeline | 新增 |
 | `.github/workflows/ci.yml` | push/PR 驗證 | 新增 |
@@ -41,7 +48,7 @@
 - Modify: `src-tauri/src/lib.rs:31`
 - Modify: `src-tauri/capabilities/default.json:8-12`
 
-- [ ] **Step 1: 加入 Cargo 相依**
+- [x] **Step 1: 加入 Cargo 相依**
 
 在 `src-tauri/Cargo.toml` 的 `tauri-plugin-dialog = "2.7.1"`（第 24 行）下方加入：
 
@@ -50,7 +57,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 ```
 
-- [ ] **Step 2: 在 builder 註冊 plugin**
+- [x] **Step 2: 在 builder 註冊 plugin**
 
 `src-tauri/src/lib.rs` 第 31 行 `.plugin(tauri_plugin_dialog::init())` 改成：
 
@@ -60,7 +67,7 @@ tauri-plugin-process = "2"
         .plugin(tauri_plugin_process::init())
 ```
 
-- [ ] **Step 3: 加入 capability 權限**
+- [x] **Step 3: 加入 capability 權限**
 
 `src-tauri/capabilities/default.json` 的 `permissions` 陣列改成：
 
@@ -74,7 +81,7 @@ tauri-plugin-process = "2"
   ]
 ```
 
-- [ ] **Step 4: 編譯驗證**
+- [x] **Step 4: 編譯驗證**
 
 Run: `. "$HOME/.cargo/env" && cargo build --manifest-path src-tauri/Cargo.toml`
 Expected: 編譯成功（會下載 `tauri-plugin-updater`、`tauri-plugin-process` 新 crate）。
@@ -99,12 +106,12 @@ Co-Authored-By: Yuuzu <yuuzu@yuuzu.net>"
 **Files:**
 - Modify: `package.json`（dependencies）
 
-- [ ] **Step 1: 安裝套件**
+- [x] **Step 1: 安裝套件**
 
 Run: `bun add @tauri-apps/plugin-updater @tauri-apps/plugin-process`
 Expected: `package.json` 的 `dependencies` 多出 `@tauri-apps/plugin-updater` 與 `@tauri-apps/plugin-process`（^2），`bun.lock` 更新。
 
-- [ ] **Step 2: 驗證安裝**
+- [x] **Step 2: 驗證安裝**
 
 Run: `grep -E "plugin-updater|plugin-process" package.json`
 Expected: 兩行都出現。
@@ -120,13 +127,14 @@ Co-Authored-By: Yuuzu <yuuzu@yuuzu.net>"
 
 ---
 
-## Task 3: 前端核心邏輯 `updater.ts`（TDD）
+## Task 3: 前端核心邏輯 `updater-core.ts` + `updater.ts` wrapper（TDD）
 
 **Files:**
+- Create: `src/v2/updater-core.ts`
 - Create: `src/v2/updater.ts`
 - Test: `src/v2/updater.test.ts`
 
-- [ ] **Step 1: 先寫失敗測試**
+- [x] **Step 1: 先寫失敗測試**
 
 建立 `src/v2/updater.test.ts`：
 
@@ -189,12 +197,18 @@ describe("checkForUpdate", () => {
 })
 ```
 
-- [ ] **Step 2: 跑測試確認失敗**
+- [x] **Step 2: 跑測試確認失敗**
 
 Run: `bun test src/v2/updater.test.ts`
 Expected: FAIL — 找不到模組 `./updater`（Cannot find module）。
 
-- [ ] **Step 3: 寫最小實作**
+- [x] **Step 3: 寫最小實作**
+
+實際落地時拆成兩層：
+- `src/v2/updater-core.ts`：可測純邏輯（`resolveUpdateCheck`、`updateToastMessage`、型別）。
+- `src/v2/updater.ts`：薄 Tauri wrapper，注入 `@tauri-apps/plugin-updater` 的 `check` 與 `@tauri-apps/plugin-process` 的 `relaunch`，並 re-export `updateToastMessage` / `UpdateCheck`。
+
+這個拆分避免 `Workbench.test.tsx` / `Overlays.test.tsx` 對 `./updater` 的 module mock 污染 `updater.test.ts` 的 full-suite 執行。
 
 建立 `src/v2/updater.ts`：
 
@@ -241,15 +255,15 @@ export function updateToastMessage(result: UpdateCheck, silent: boolean): string
 }
 ```
 
-- [ ] **Step 4: 跑測試確認通過**
+- [x] **Step 4: 跑測試確認通過**
 
 Run: `bun test src/v2/updater.test.ts`
-Expected: PASS — 9 個測試全綠。
+Expected: PASS — 6 個測試全綠。
 
 - [ ] **Step 5: 建議 commit（owner 執行）**
 
 ```bash
-git add src/v2/updater.ts src/v2/updater.test.ts
+git add src/v2/updater-core.ts src/v2/updater.ts src/v2/updater.test.ts
 git commit -m "feat(ui): 🚀 add updater check logic with toast messaging
 
 - checkForUpdate maps Tauri updater result to a tagged union
@@ -267,7 +281,7 @@ Co-Authored-By: Yuuzu <yuuzu@yuuzu.net>"
 - Modify: `src/v2/v2-model.ts:829`（type）, `:875`（config）
 - Modify: `src/v2/Overlays.tsx`（import、`UpdatesSection`、`SettingsModal` 分支）
 
-- [ ] **Step 1: 擴充 `custom` 型別**
+- [x] **Step 1: 擴充 `custom` 型別**
 
 `src/v2/v2-model.ts` 第 829 行：
 
@@ -275,7 +289,7 @@ Co-Authored-By: Yuuzu <yuuzu@yuuzu.net>"
     custom?: "performance" | "diagnostics" | "recovery" | "updates"
 ```
 
-- [ ] **Step 2: 加入 Updates section**
+- [x] **Step 2: 加入 Updates section**
 
 `src/v2/v2-model.ts` 在 `recovery` 那一筆（第 875 行）之後、陣列結尾 `]` 之前加入：
 
@@ -283,7 +297,7 @@ Co-Authored-By: Yuuzu <yuuzu@yuuzu.net>"
     { id: "updates", label: "Updates", glyph: "⟳", desc: "Check for and install Yuuzu-IDE updates.", rows: [], custom: "updates" },
 ```
 
-- [ ] **Step 3: 在 Overlays 匯入 updater**
+- [x] **Step 3: 在 Overlays 匯入 updater**
 
 `src/v2/Overlays.tsx` 第 24 行 `import { writeToSession } from "./controller"` 之後加入：
 
@@ -291,7 +305,7 @@ Co-Authored-By: Yuuzu <yuuzu@yuuzu.net>"
 import { checkForUpdate, updateToastMessage, type UpdateCheck } from "./updater"
 ```
 
-- [ ] **Step 4: 新增 `UpdatesSection` 元件**
+- [x] **Step 4: 新增 `UpdatesSection` 元件**
 
 `src/v2/Overlays.tsx` 在 `export function SettingsModal()`（第 531 行）**之前**插入：
 
@@ -347,7 +361,7 @@ function UpdatesSection() {
 }
 ```
 
-- [ ] **Step 5: 接進 SettingsModal 的 custom 分支**
+- [x] **Step 5: 接進 SettingsModal 的 custom 分支**
 
 `src/v2/Overlays.tsx` 第 577-579 行的 recovery 分支：
 
@@ -367,7 +381,7 @@ function UpdatesSection() {
                         ) : (
 ```
 
-- [ ] **Step 6: 型別檢查 + build**
+- [x] **Step 6: 型別檢查 + build**
 
 Run: `bun run build`
 Expected: `tsc` 無錯、`vite build` 成功。
@@ -392,7 +406,7 @@ Co-Authored-By: Yuuzu <yuuzu@yuuzu.net>"
 **Files:**
 - Modify: `src/v2/Workbench.tsx:10`（import）, `:413-415`（effect 旁）
 
-- [ ] **Step 1: 匯入 updater**
+- [x] **Step 1: 匯入 updater**
 
 `src/v2/Workbench.tsx` 第 10 行 `import { useV2Store, v2Store } from "./v2-store"` 之後（緊接下一行）加入：
 
@@ -400,7 +414,7 @@ Co-Authored-By: Yuuzu <yuuzu@yuuzu.net>"
 import { checkForUpdate, updateToastMessage } from "./updater"
 ```
 
-- [ ] **Step 2: 加入啟動檢查 effect**
+- [x] **Step 2: 加入啟動檢查 effect**
 
 `src/v2/Workbench.tsx` 在現有 bootstrap effect（第 413-415 行）之後插入：
 
@@ -416,12 +430,12 @@ import { checkForUpdate, updateToastMessage } from "./updater"
 
 說明：在 demo/web 或 `tauri dev`（updater 停用）時，`check()` 會 reject → `checkForUpdate` 回 `{kind:"error"}` → silent 下 `updateToastMessage` 回 `null` → 不顯示，符合預期。
 
-- [ ] **Step 3: 型別檢查 + build**
+- [x] **Step 3: 型別檢查 + build**
 
 Run: `bun run build`
 Expected: 成功，無 TS 錯誤。
 
-- [ ] **Step 4: 全量前端測試（確認沒打壞既有）**
+- [x] **Step 4: 全量前端測試（確認沒打壞既有）**
 
 Run: `bun test`
 Expected: 既有測試 + `updater.test.ts` 全綠。
@@ -442,19 +456,19 @@ Co-Authored-By: Yuuzu <yuuzu@yuuzu.net>"
 
 > 這個 Task 由 owner 在本機手動執行，無法由程式碼代勞。私鑰**絕不進 git**。
 
-- [ ] **Step 1: 產生金鑰對**
+- [x] **Step 1: 產生金鑰對**
 
 Run: `bun run tauri signer generate -w ~/.tauri/yuuzu-ide.key`
 過程會要求輸入密碼（可空，但建議設）。完成後得到：
 - `~/.tauri/yuuzu-ide.key`（私鑰）
 - `~/.tauri/yuuzu-ide.key.pub`（公鑰）
 
-- [ ] **Step 2: 取得公鑰內容（Task 7 要用）**
+- [x] **Step 2: 取得公鑰內容（Task 7 要用）**
 
 Run: `cat ~/.tauri/yuuzu-ide.key.pub`
 複製整段內容備用。
 
-- [ ] **Step 3: 設定 GitHub repo secrets**
+- [x] **Step 3: 設定 GitHub repo secrets**
 
 用 `gh`（或 GitHub 網頁 Settings → Secrets and variables → Actions）：
 
@@ -463,12 +477,12 @@ gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/yuuzu-ide.key
 gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD   # 互動輸入剛剛的密碼;若空密碼則設為空字串
 ```
 
-- [ ] **Step 4: 驗證 secrets 存在**
+- [x] **Step 4: 驗證 secrets 存在**
 
 Run: `gh secret list`
 Expected: 看到 `TAURI_SIGNING_PRIVATE_KEY` 與 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
 
-- [ ] **Step 5: 備份私鑰**
+- [x] **Step 5: 備份私鑰**
 
 把 `~/.tauri/yuuzu-ide.key` 與密碼存進密碼管理器。遺失 = 無法再發出能被現有 app 接受的更新。
 
@@ -481,15 +495,18 @@ Expected: 看到 `TAURI_SIGNING_PRIVATE_KEY` 與 `TAURI_SIGNING_PRIVATE_KEY_PASS
 
 > 依賴 Task 6 的公鑰。
 
-- [ ] **Step 1: 開啟 updater artifacts**
+- [x] **Step 1: 開啟 updater artifacts + macOS ad-hoc signing**
 
-`src-tauri/tauri.conf.json` 的 `bundle` 區塊（第 30-40 行）加入 `createUpdaterArtifacts`：
+`src-tauri/tauri.conf.json` 的 `bundle` 區塊（第 30-40 行）加入 `createUpdaterArtifacts` 與 macOS ad-hoc signing：
 
 ```jsonc
   "bundle": {
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
+    "macOS": {
+      "signingIdentity": "-"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -500,7 +517,9 @@ Expected: 看到 `TAURI_SIGNING_PRIVATE_KEY` 與 `TAURI_SIGNING_PRIVATE_KEY_PASS
   },
 ```
 
-- [ ] **Step 2: 加入 plugins.updater**
+說明：`createUpdaterArtifacts: true` 產生 Tauri updater 支援的簽章更新 artifacts。Windows portable `.zip` 不是 Tauri updater artifact，會在 release workflow 另行打包上傳。macOS `signingIdentity: "-"` 是 ad-hoc signing，不是 Developer ID/notarization。
+
+- [x] **Step 2: 加入 plugins.updater**
 
 在 `bundle` 區塊之後（`}` 結尾與最外層 `}` 之間）加入 `plugins` 頂層鍵，`pubkey` 填入 Task 6 Step 2 的公鑰：
 
@@ -515,7 +534,7 @@ Expected: 看到 `TAURI_SIGNING_PRIVATE_KEY` 與 `TAURI_SIGNING_PRIVATE_KEY_PASS
   }
 ```
 
-- [ ] **Step 3: 驗證 JSON 合法 + schema**
+- [x] **Step 3: 驗證 JSON 合法 + schema**
 
 Run: `bun run tauri build --help >/dev/null && python3 -c "import json;json.load(open('src-tauri/tauri.conf.json'))"`
 Expected: 無錯誤輸出（JSON 解析成功）。
@@ -538,7 +557,7 @@ Co-Authored-By: Yuuzu <yuuzu@yuuzu.net>"
 **Files:**
 - Create: `.github/workflows/release.yml`
 
-- [ ] **Step 1: 建立 workflow**
+- [x] **Step 1: 建立 workflow**
 
 ```yaml
 name: release
@@ -548,6 +567,11 @@ on:
     tags:
       - 'v*.*.*'
   workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Release tag to build, e.g. v0.2.0'
+        required: true
+        type: string
 
 jobs:
   build:
@@ -556,16 +580,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        include:
+          - os: macos-26
+            rustTarget: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - os: windows-2025
+            rustTarget: x86_64-pc-windows-msvc
+            args: --target x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rustTarget }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -582,13 +616,29 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Yuuzu-IDE ${{ github.ref_name }}'
+          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}
+          releaseName: 'Yuuzu-IDE ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}'
           releaseDraft: true
           prerelease: false
+          args: ${{ matrix.args }}
+
+      - name: Upload Windows portable zip
+        if: matrix.os == 'windows-2025'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}
+        run: |
+          $version = $env:RELEASE_TAG.TrimStart("v")
+          $portableDir = "dist-portable/Yuuzu-IDE-$version-windows-x64"
+          New-Item -ItemType Directory -Force $portableDir | Out-Null
+          Copy-Item "src-tauri/target/x86_64-pc-windows-msvc/release/yuuzu-ide.exe" "$portableDir/Yuuzu-IDE.exe"
+          $zip = "Yuuzu-IDE_${version}_windows_x64_portable.zip"
+          Compress-Archive -Path "$portableDir/*" -DestinationPath $zip -Force
+          gh release upload $env:RELEASE_TAG $zip --clobber
 ```
 
-- [ ] **Step 2: 驗證 YAML**
+- [x] **Step 2: 驗證 YAML**
 
 Run: `python3 -c "import yaml;yaml.safe_load(open('.github/workflows/release.yml'))"`
 Expected: 無錯誤（YAML 合法）。若本機有 `actionlint`，再跑 `actionlint .github/workflows/release.yml`。
@@ -609,7 +659,7 @@ Co-Authored-By: Yuuzu <yuuzu@yuuzu.net>"
 **Files:**
 - Create: `.github/workflows/ci.yml`
 
-- [ ] **Step 1: 建立 workflow**
+- [x] **Step 1: 建立 workflow**
 
 ```yaml
 name: ci
@@ -622,7 +672,7 @@ on:
 
 jobs:
   verify:
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 
@@ -658,7 +708,7 @@ jobs:
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 ```
 
-- [ ] **Step 2: 驗證 YAML**
+- [x] **Step 2: 驗證 YAML**
 
 Run: `python3 -c "import yaml;yaml.safe_load(open('.github/workflows/ci.yml'))"`
 Expected: 無錯誤。
@@ -679,7 +729,7 @@ Co-Authored-By: Yuuzu <yuuzu@yuuzu.net>"
 **Files:**
 - Modify: `docs/release/update-strategy.md`（整檔改寫）
 
-- [ ] **Step 1: 改寫文件**
+- [x] **Step 1: 改寫文件**
 
 把整個檔案內容換成：
 
@@ -687,7 +737,9 @@ Co-Authored-By: Yuuzu <yuuzu@yuuzu.net>"
 # Update Strategy
 
 Yuuzu-IDE 透過 GitHub Releases 自動發版，並由 app 內建的 `tauri-plugin-updater`
-進行更新。更新完整性由 minisign 簽章保證（與 OS code signing 無關）。
+進行更新。發版目標是 macOS Apple Silicon (`darwin-aarch64`) 與 Windows x64
+(`windows-x86_64`)；Windows release 需包含 portable `.zip`。更新完整性由
+minisign 簽章保證（與 OS code signing 無關）。
 
 ## 發版流程
 
@@ -698,10 +750,11 @@ Yuuzu-IDE 透過 GitHub Releases 自動發版，並由 app 內建的 `tauri-plug
 2. 跑下方「發版前驗證」確認綠燈。
 3. commit 版號變更。
 4. 打 tag 並 push：`git tag vX.Y.Z && git push origin vX.Y.Z`。
-5. GitHub Actions `release.yml` 會在 macOS 與 Windows 各自 build、簽章、
+5. GitHub Actions `release.yml` 會在 `macos-26` 與 `windows-2025` 各自 build、簽章、
    上傳到一個 **draft** Release，並產生 `latest.json`。
-6. 到 GitHub Releases 檢查 draft（兩平台 artifacts + `latest.json` 都在）後，
-   手動 **Publish**。發布後 auto-update endpoint 才會生效。
+6. 到 GitHub Releases 檢查 draft：macOS 需有 Apple Silicon artifact，Windows 需有
+   x64 installer / updater `.sig`、portable `.zip`，且 `latest.json` 都在。
+7. 手動 **Publish**。發布後 auto-update endpoint 才會生效。
 
 ## 發版前驗證
 
@@ -722,6 +775,10 @@ bun run build
 - Endpoint：`https://github.com/NakiriYuuzu/Yuuzu-IDE/releases/latest/download/latest.json`
   ——只會解析到**最新已 publish 的非 prerelease** release，故 draft 不影響使用者。
 - App 內建 minisign 公鑰驗證 `latest.json` 的簽章，驗章失敗即拒絕安裝。
+- Windows `windows-x86_64` entry 應指向 Tauri updater 支援的 signed installer
+  artifact（例如 `Yuuzu-IDE_0.2.0_x64-setup.exe`），不是 portable zip。
+- Windows portable zip（例如 `Yuuzu-IDE_0.2.0_windows_x64_portable.zip`）是免安裝
+  release asset，解壓後直接執行；portable 版更新方式是手動下載新版 zip 並替換。
 
 ## 簽章金鑰
 
@@ -734,7 +791,8 @@ bun run build
 
 - 未做 OS code signing：macOS 首次安裝會被 Gatekeeper 擋（右鍵→打開），
   Windows 首次安裝跳 SmartScreen「不明發行者」。
-- macOS 不簽章下偶有 quarantine 眉角；根治需 Apple Developer notarization。
+- macOS 使用 ad-hoc signing identity `"-"` 降低 Apple Silicon 下載後被判定 damaged
+  的風險；根治仍需 Apple Developer notarization。
 - macOS 自動更新要求 app 安裝在可寫位置（通常 `/Applications`）。
 
 ## Rollback Path
@@ -767,11 +825,19 @@ Co-Authored-By: Yuuzu <yuuzu@yuuzu.net>"
 ```bash
 git tag v0.1.0 && git push origin v0.1.0
 ```
-到 GitHub Actions 看 `release.yml`：macOS + Windows 兩個 job 都應綠燈，並在 Releases 產生一個 **draft** `Yuuzu-IDE v0.1.0`，內含兩平台安裝檔 + `*.sig` + `latest.json`。
+到 GitHub Actions 看 `release.yml`：`macos-26` + `windows-2025` 兩個 job 都應綠燈，並在 Releases 產生一個 **draft** `Yuuzu-IDE v0.1.0`，內含：
+- macOS Apple Silicon artifacts（含 updater bundle 與 `.sig`）。
+- Windows x64 installer artifacts。
+- Windows x64 portable `.zip`（例如 `Yuuzu-IDE_0.1.0_windows_x64_portable.zip`）。
+- `latest.json`。
 
 - [ ] **Step 3: 檢查 latest.json**
 
-下載 draft 裡的 `latest.json`，確認 `platforms` 含 `darwin-aarch64` 與 `windows-x86_64`，各有 `signature` 與 `url`。
+下載 draft 裡的 `latest.json`，確認 `platforms` 含 `darwin-aarch64` 與 `windows-x86_64`，各有 `signature` 與 `url`。`windows-x86_64.url` 必須指向 Tauri updater 支援的 signed installer artifact（例如 NSIS `.exe` 或 MSI），不可指向 portable `.zip`。
+
+- [ ] **Step 3a: 檢查 Windows portable zip**
+
+下載 Windows portable `.zip`，確認解壓後包含 `Yuuzu-IDE.exe`。若未來加入 sidecar binary 或外部 resource，這一步也要確認 portable zip 內含完整執行所需檔案。
 
 - [ ] **Step 4: 安裝基準版並 publish 下一版**
 
@@ -799,10 +865,10 @@ git tag v0.1.0 && git push origin v0.1.0
 - CI 驗證（spec §4.2）→ Task 9 ✓
 - Updater + process plugin（spec §4.3）→ Task 1, 2 ✓
 - Minisign 金鑰（spec §4.4）→ Task 6 ✓
-- 前端 updater + UX（spec §4.5）→ Task 3, 4, 5 ✓
-- 版本管理（spec §4.6）→ Task 10, 11 ✓
+- 前端 updater + UX（spec §4.5）→ Task 3, 4, 5 ✓；release notes/date 顯示已補上
+- 版本管理（spec §4.6）→ Task 10 ✓；Task 11 pending release validation
 - 文件更新（spec §4.7）→ Task 10 ✓
 - tauri.conf.json updater（spec §4.3）→ Task 7 ✓
-- 端到端（spec §7）→ Task 11 ✓
+- 端到端（spec §7）→ Task 11 pending manual release/update validation
 
 型別一致性：`UpdateCheck`、`checkForUpdate`、`updateToastMessage` 在 Task 3 定義，Task 4/5 沿用同名同簽章 ✓。

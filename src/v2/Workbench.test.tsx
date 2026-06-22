@@ -1,9 +1,33 @@
 /// <reference types="bun-types" />
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { cleanup, fireEvent, render } from "@testing-library/react"
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react"
 
 import { ensureTestDom } from "../test/test-dom"
+
+type TestUpdateCheck =
+    | { kind: "available"; version: string; install: () => Promise<void> }
+    | { kind: "current" }
+    | { kind: "error"; message: string }
+
+let nextUpdateResult: TestUpdateCheck = { kind: "current" }
+const checkForUpdateMock = mock(async () => nextUpdateResult)
+const updateToastMessageMock = mock((result: TestUpdateCheck, silent: boolean) => {
+    if (result.kind === "available") {
+        return silent
+            ? "更新 " + result.version + " 可用 — 前往 Settings › Updates 安裝"
+            : "更新 " + result.version + " 可用"
+    }
+    if (silent) return null
+    if (result.kind === "current") return "已是最新版本"
+    return "檢查更新失敗：" + result.message
+})
+
+mock.module("./updater", () => ({
+    checkForUpdate: checkForUpdateMock,
+    updateToastMessage: updateToastMessageMock,
+}))
+
 import { defaultDbDialogState } from "./db-dialog"
 import { registerRealDelegate, v2Store } from "./v2-store"
 import { WorkbenchV2 } from "./Workbench"
@@ -19,6 +43,7 @@ const initialWorkbenchState = {
     pal: structuredClone(v2Store.getState().pal),
     stVals: structuredClone(v2Store.getState().stVals),
     stab: structuredClone(v2Store.getState().stab),
+    toast: v2Store.getState().toast,
 }
 const baselineMetric = {
     memoryBytes: 184 * 1024 * 1024,
@@ -31,6 +56,9 @@ const baselineMetric = {
 
 beforeEach(() => {
     cleanup()
+    nextUpdateResult = { kind: "current" }
+    checkForUpdateMock.mockClear()
+    updateToastMessageMock.mockClear()
     v2Store.setState({
         mode: "demo",
         active: "api",
@@ -41,6 +69,7 @@ beforeEach(() => {
         pal: structuredClone(initialWorkbenchState.pal),
         stVals: structuredClone(initialWorkbenchState.stVals),
         stab: { ...structuredClone(initialWorkbenchState.stab), metric: { ...baselineMetric } },
+        toast: null,
     })
 })
 
@@ -56,6 +85,7 @@ afterEach(() => {
         pal: structuredClone(initialWorkbenchState.pal),
         stVals: structuredClone(initialWorkbenchState.stVals),
         stab: structuredClone(initialWorkbenchState.stab),
+        toast: initialWorkbenchState.toast,
     })
     registerRealDelegate(null)
 })
@@ -104,6 +134,35 @@ describe("WorkbenchV2", () => {
         const view = render(<WorkbenchV2 />)
 
         expect(view.getByRole("dialog", { name: "新增連線" })).toBeTruthy()
+    })
+
+    test("shows a silent update toast when an update is available", async () => {
+        nextUpdateResult = { kind: "available", version: "0.2.0", install: async () => {} }
+
+        render(<WorkbenchV2 />)
+
+        await waitFor(() => expect(v2Store.getState().toast).toBe("更新 0.2.0 可用 — 前往 Settings › Updates 安裝"))
+        expect(checkForUpdateMock).toHaveBeenCalledTimes(1)
+        expect(updateToastMessageMock).toHaveBeenCalledWith(nextUpdateResult, true)
+    })
+
+    test("does not show a silent update toast for current or failed checks", async () => {
+        nextUpdateResult = { kind: "current" }
+        render(<WorkbenchV2 />)
+
+        await waitFor(() => expect(checkForUpdateMock).toHaveBeenCalledTimes(1))
+        expect(v2Store.getState().toast).toBeNull()
+
+        cleanup()
+        checkForUpdateMock.mockClear()
+        updateToastMessageMock.mockClear()
+        nextUpdateResult = { kind: "error", message: "offline" }
+        v2Store.setState({ toast: null })
+
+        render(<WorkbenchV2 />)
+
+        await waitFor(() => expect(checkForUpdateMock).toHaveBeenCalledTimes(1))
+        expect(v2Store.getState().toast).toBeNull()
     })
 
     test("shows only memory from performance metrics in the left status bar", () => {
