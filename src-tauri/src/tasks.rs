@@ -76,6 +76,13 @@ pub fn detect_tasks(workspace_root: &Path) -> Result<Vec<WorkspaceTask>, String>
 
     if root.join("pyproject.toml").is_file() {
         tasks.push(WorkspaceTask {
+            id: "uv:sync".to_string(),
+            label: "uv sync".to_string(),
+            command: "uv sync".to_string(),
+            cwd: root.clone(),
+            source: "pyproject.toml".to_string(),
+        });
+        tasks.push(WorkspaceTask {
             id: "uv:run-python".to_string(),
             label: "uv run python".to_string(),
             command: "uv run python".to_string(),
@@ -634,6 +641,7 @@ mod tests {
         assert!(labels.contains(&("package:build", "bun run build")));
         assert!(labels.contains(&("cargo:test", "cargo test")));
         assert!(labels.contains(&("cargo:build", "cargo build")));
+        assert!(labels.contains(&("uv:sync", "uv sync")));
         assert!(labels.contains(&("uv:run-python", "uv run python")));
         assert!(tasks.iter().all(|task| task.cwd == canonical_root));
         assert!(tasks

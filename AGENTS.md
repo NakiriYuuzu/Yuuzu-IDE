@@ -128,6 +128,12 @@ risk.
   tokens in frontend state, logs, or plain JSON.
 - For database work, preserve read-only and mutating-SQL confirmation semantics.
 - For git work, preserve typed confirmations for destructive actions.
+- Centralize Python toolchain detection and command resolution in Rust/Tauri
+  helpers that can be shared by LSP, debug adapters, and task discovery. Avoid
+  diverging frontend hardcoded Python or uv command strings.
+- For uv-backed Python workspaces, keep environment mutation explicit: prefer a
+  visible task/action such as `uv sync`, and avoid implicit background sync when
+  starting long-running IDE services unless a task specifically requires it.
 
 ## Docs And Roadmap
 

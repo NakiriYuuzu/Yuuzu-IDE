@@ -4,6 +4,7 @@ import { html } from "@codemirror/lang-html"
 import { javascript } from "@codemirror/lang-javascript"
 import { json } from "@codemirror/lang-json"
 import { markdown } from "@codemirror/lang-markdown"
+import { python } from "@codemirror/lang-python"
 import { rust } from "@codemirror/lang-rust"
 import { xml } from "@codemirror/lang-xml"
 import { yaml } from "@codemirror/lang-yaml"
@@ -21,6 +22,7 @@ export type CodeMirrorLanguageId =
     | "json"
     | "javascript"
     | "typescript"
+    | "python"
     | "plaintext"
 
 export function codeMirrorLanguageIdForPath(path: string): CodeMirrorLanguageId {
@@ -35,6 +37,7 @@ export function codeMirrorLanguageIdForPath(path: string): CodeMirrorLanguageId 
     if (lower.endsWith(".json") || lower.endsWith(".jsonc")) return "json"
     if (lower.endsWith(".ts") || lower.endsWith(".tsx") || lower.endsWith(".mts") || lower.endsWith(".cts")) return "typescript"
     if (lower.endsWith(".js") || lower.endsWith(".jsx") || lower.endsWith(".mjs") || lower.endsWith(".cjs")) return "javascript"
+    if (lower.endsWith(".py") || lower.endsWith(".pyw") || lower.endsWith(".pyi")) return "python"
     return "plaintext"
 }
 
@@ -60,6 +63,8 @@ export function codeMirrorLanguageForPath(path: string): Extension[] {
             return [javascript({ jsx: path.toLowerCase().endsWith(".tsx"), typescript: true })]
         case "javascript":
             return [javascript({ jsx: path.toLowerCase().endsWith(".jsx") })]
+        case "python":
+            return [python()]
         case "plaintext":
             return []
     }

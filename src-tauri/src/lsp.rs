@@ -59,6 +59,7 @@ pub struct LanguageServerProfile {
     pub display_name: String,
     pub command: String,
     pub args: Vec<String>,
+    pub cwd: Option<PathBuf>,
 }
 
 pub fn detect_language(path: &str) -> Option<LanguageId> {
@@ -146,38 +147,65 @@ pub fn server_profile(language: LanguageId) -> LanguageServerProfile {
             display_name: "Rust Analyzer".to_string(),
             command: "rust-analyzer".to_string(),
             args: Vec::new(),
+            cwd: None,
         },
         LanguageId::TypeScript => LanguageServerProfile {
             language,
             display_name: "TypeScript Language Server".to_string(),
             command: "typescript-language-server".to_string(),
             args: vec!["--stdio".to_string()],
+            cwd: None,
         },
         LanguageId::JavaScript => LanguageServerProfile {
             language,
             display_name: "JavaScript Language Server".to_string(),
             command: "typescript-language-server".to_string(),
             args: vec!["--stdio".to_string()],
+            cwd: None,
         },
         LanguageId::Python => LanguageServerProfile {
             language,
             display_name: "Python LSP Server".to_string(),
             command: "pylsp".to_string(),
             args: Vec::new(),
+            cwd: None,
         },
         LanguageId::CSharp => LanguageServerProfile {
             language,
             display_name: "C# Language Server".to_string(),
             command: "csharp-ls".to_string(),
             args: Vec::new(),
+            cwd: None,
         },
         LanguageId::Kotlin => LanguageServerProfile {
             language,
             display_name: "Kotlin Language Server".to_string(),
             command: "kotlin-language-server".to_string(),
             args: Vec::new(),
+            cwd: None,
         },
     }
+}
+
+pub fn server_profile_for_workspace(
+    language: LanguageId,
+    workspace_root: &str,
+) -> LanguageServerProfile {
+    let mut profile = server_profile(language);
+    let root = Path::new(workspace_root);
+    if language == LanguageId::Python && is_uv_python_workspace(root) {
+        profile.command = "uv".to_string();
+        profile.args = ["run", "--no-sync", "--with", "python-lsp-server", "pylsp"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        profile.cwd = Some(root.to_path_buf());
+    }
+    profile
+}
+
+fn is_uv_python_workspace(root: &Path) -> bool {
+    root.join("pyproject.toml").is_file() || root.join("uv.lock").is_file()
 }
 
 pub fn encode_lsp_message(value: &serde_json::Value) -> Result<Vec<u8>, String> {
@@ -649,6 +677,9 @@ impl StdioTransport {
             &path_env,
         ));
         command.args(&profile.args);
+        if let Some(cwd) = &profile.cwd {
+            command.current_dir(cwd);
+        }
         command.env("PATH", path_env);
         command.stdin(Stdio::piped());
         command.stdout(Stdio::piped());
@@ -1577,7 +1608,7 @@ impl LanguageServerManager {
             let Some(profile) = state.test_profiles.get(&key.language).cloned() else {
                 continue;
             };
-            let server_profile = server_profile(key.language);
+            let server_profile = server_profile_for_workspace(key.language, &key.workspace_root);
             let Some(record) = state.servers.get_mut(&key) else {
                 continue;
             };
@@ -1638,7 +1669,7 @@ impl LanguageServerManager {
                 available: false,
             });
 
-        let server_profile = server_profile(language);
+        let server_profile = server_profile_for_workspace(language, workspace_root);
         let key = LanguageServerKey {
             workspace_id: workspace_id.to_string(),
             workspace_root: workspace_root.to_string(),
@@ -1719,7 +1750,7 @@ impl LanguageServerManager {
                 language,
                 available: false,
             });
-        let server_profile = server_profile(language);
+        let server_profile = server_profile_for_workspace(language, &workspace_root);
         let key = LanguageServerKey {
             workspace_id: workspace_id.clone(),
             workspace_root: workspace_root.clone(),
@@ -1843,7 +1874,7 @@ impl LanguageServerManager {
                 available: false,
             });
         let profile_available = profile.available;
-        let server_profile = server_profile(language);
+        let server_profile = server_profile_for_workspace(language, workspace_root);
 
         let log_line = {
             let entry = state.servers.entry(key.clone()).or_insert_with(|| {
@@ -1976,12 +2007,13 @@ impl LanguageServerManager {
                         language,
                         available: false,
                     });
+            let display_name = server_profile_for_workspace(language, &workspace_root).display_name;
 
             LanguageServerStatus {
                 workspace_id,
                 workspace_root,
                 language,
-                display_name: server_profile(language).display_name,
+                display_name,
                 state: if profile.available {
                     ServerState::Stopped
                 } else {
@@ -2120,7 +2152,7 @@ impl LanguageServerManager {
             workspace_id: workspace_id.to_string(),
             workspace_root: workspace_root.to_string(),
             language,
-            display_name: server_profile(language).display_name,
+            display_name: server_profile_for_workspace(language, workspace_root).display_name,
             state: if profile.available {
                 ServerState::Stopped
             } else {
@@ -2590,6 +2622,44 @@ mod tests {
         );
         assert!(server_profile(LanguageId::CSharp).args.is_empty());
         assert!(server_profile(LanguageId::Kotlin).args.is_empty());
+    }
+
+    #[test]
+    fn python_profile_uses_uv_in_uv_workspace() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        std::fs::write(
+            workspace.path().join("pyproject.toml"),
+            "[project]\nname = \"demo\"\n",
+        )
+        .expect("pyproject");
+
+        let profile =
+            server_profile_for_workspace(LanguageId::Python, &workspace.path().to_string_lossy());
+
+        assert_eq!(profile.command, "uv");
+        assert_eq!(
+            profile.args,
+            vec![
+                "run".to_string(),
+                "--no-sync".to_string(),
+                "--with".to_string(),
+                "python-lsp-server".to_string(),
+                "pylsp".to_string(),
+            ]
+        );
+        assert_eq!(profile.cwd.as_deref(), Some(workspace.path()));
+    }
+
+    #[test]
+    fn python_profile_keeps_pylsp_for_non_uv_workspace() {
+        let workspace = tempfile::tempdir().expect("workspace");
+
+        let profile =
+            server_profile_for_workspace(LanguageId::Python, &workspace.path().to_string_lossy());
+
+        assert_eq!(profile.command, "pylsp");
+        assert!(profile.args.is_empty());
+        assert_eq!(profile.cwd, None);
     }
 
     #[test]
@@ -3951,6 +4021,7 @@ write_message({
             display_name: "mock-lsp".to_string(),
             command: "python3".to_string(),
             args: vec![script_path.to_string_lossy().to_string()],
+            cwd: None,
         };
         let mut transport = StdioTransport::new(&profile).expect("create transport");
 

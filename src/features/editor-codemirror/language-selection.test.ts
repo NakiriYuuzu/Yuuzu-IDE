@@ -18,6 +18,9 @@ describe("codeMirrorLanguageIdForPath", () => {
         ["index.jsx", "javascript"],
         ["index.ts", "typescript"],
         ["index.tsx", "typescript"],
+        ["scripts/tool.py", "python"],
+        ["scripts/tool.pyw", "python"],
+        ["types/tool.pyi", "python"],
     ] as const)("%s maps to %s", (path, expected) => {
         expect(codeMirrorLanguageIdForPath(path)).toBe(expected)
     })
