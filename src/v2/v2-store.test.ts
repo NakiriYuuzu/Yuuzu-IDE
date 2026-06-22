@@ -464,7 +464,7 @@ describe("tabs", () => {
         expect(store.getState().ui.api.activeTab).toBe(editorTab!.id)
         expect(store.getState().ui.api.tabs.some((tab) => tab.type === "browser" && tab.path === "public/index.html")).toBe(false)
 
-        store.getState().openFileInBrowser("public/index.html")
+        ;(store.getState() as any).openFileInBrowser("public/index.html")
 
         const opened = store.getState().ui.api.tabs.find((tab) => tab.type === "browser" && tab.path === "public/index.html")
         expect(opened).toBeDefined()
@@ -473,7 +473,7 @@ describe("tabs", () => {
         expect(opened?.htmlPreview).toContain("<!doctype html>")
         expect(store.getState().ui.api.activeTab).toBe(opened!.id)
 
-        store.getState().openFileInBrowser("public/index.html")
+        ;(store.getState() as any).openFileInBrowser("public/index.html")
 
         const after = store.getState().ui.api
         expect(after.tabs.filter((tab) => tab.type === "browser" && tab.path === "public/index.html")).toHaveLength(1)

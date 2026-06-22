@@ -87,7 +87,7 @@ export type RealDelegate = {
     doCommit: (message: string) => void
     openShell: (host: SshHost) => void
     toggleDbConn: (idx: number) => void
-    addNode: (dirPath: string, kind: "file" | "dir") => void
+    addNode: (dirPath: string, kind: "file" | "dir", name: string) => void
     deleteNode: (displayPath: string) => void
     selectCommit: (hash: string) => void
     saveFile: (tabId: number, force?: boolean) => void
@@ -366,6 +366,13 @@ export type ConfirmState = {
     action: () => void
 }
 
+export type NodeNameDialogState = {
+    dirPath: string
+    kind: "file" | "dir"
+    value: string
+    error: string | null
+}
+
 export type StabilityState = {
     metric: MetricSnapshot | null
     events: DiagEvent[]
@@ -393,6 +400,7 @@ export type V2State = {
     azColsOverride: number | null
     azSplitRatio: number
     confirm: ConfirmState | null
+    nodeNameDialog: NodeNameDialogState | null
     cursor: { ln: number; col: number } | null
     stab: StabilityState
 
@@ -572,6 +580,9 @@ export type V2State = {
     discardBackup: (id: string) => void
     openConfirm: (confirm: ConfirmState) => void
     closeConfirm: () => void
+    setNodeNameValue: (value: string) => void
+    closeNodeNameDialog: () => void
+    submitNodeNameDialog: () => void
 }
 
 const THEME_KEY = "yuuzu-ide-theme"
@@ -886,6 +897,7 @@ export function createV2Store() {
             azColsOverride: null,
             azSplitRatio: azSplitRatioFromSettings(initialSettings),
             confirm: null,
+            nodeNameDialog: null,
             cursor: null,
             stab: { metric: null, events: [], backups: [], loading: false },
 
@@ -1067,7 +1079,16 @@ export function createV2Store() {
 
             addNode: (dirPath, kind) => {
                 if (get().mode === "real") {
-                    realDelegate?.addNode(dirPath, kind)
+                    set({
+                        nodeNameDialog: {
+                            dirPath,
+                            kind,
+                            value: kind === "file" ? "untitled.ts" : "new-folder",
+                            error: null,
+                        },
+                        ctx: null,
+                        plusMenu: null,
+                    })
                     return
                 }
                 let created = ""
@@ -2840,6 +2861,25 @@ export function createV2Store() {
 
             openConfirm: (confirm) => set({ confirm, ctx: null, plusMenu: null }),
             closeConfirm: () => set({ confirm: null }),
+            setNodeNameValue: (value) => set((s) => s.nodeNameDialog
+                ? { nodeNameDialog: { ...s.nodeNameDialog, value, error: null } }
+                : {}),
+            closeNodeNameDialog: () => set({ nodeNameDialog: null }),
+            submitNodeNameDialog: () => {
+                const dialog = get().nodeNameDialog
+                if (!dialog) return
+                const name = dialog.value.trim()
+                if (!name) {
+                    set({ nodeNameDialog: { ...dialog, error: "Name is required" } })
+                    return
+                }
+                if (name.includes("/") || name.includes("\\")) {
+                    set({ nodeNameDialog: { ...dialog, error: "Name must be a single path segment" } })
+                    return
+                }
+                set({ nodeNameDialog: null })
+                if (get().mode === "real") realDelegate?.addNode(dialog.dirPath, dialog.kind, name)
+            },
         }
     })
 }

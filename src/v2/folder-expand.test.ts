@@ -354,6 +354,7 @@ async function ensureMockWorkspace(): Promise<void> {
             mode: "real",
             active: "demo",
             order: ["demo"],
+            nodeNameDialog: null,
             meta: {
                 ...s.meta,
                 demo: {
@@ -473,10 +474,19 @@ describe("real folder expansion", () => {
     test("creates a named folder through the real delegate and refreshes git", async () => {
         await ensureMockWorkspace()
         const originalPrompt = window.prompt
-        window.prompt = () => "feature"
+        window.prompt = () => {
+            throw new Error("window.prompt must not be used for Explorer creation")
+        }
 
         try {
             v2Store.getState().addNode("src", "dir")
+            expect(v2Store.getState().nodeNameDialog).toMatchObject({
+                dirPath: "src",
+                kind: "dir",
+                value: "new-folder",
+            })
+            v2Store.getState().setNodeNameValue("feature")
+            v2Store.getState().submitNodeNameDialog()
 
             await waitFor(() => createDirectoryCalls.length === 1)
             await waitFor(() => gitStatusCalls.length > 0)
@@ -489,18 +499,19 @@ describe("real folder expansion", () => {
 
     test("creates a named file through the real delegate instead of hardcoded untitled.ts", async () => {
         await ensureMockWorkspace()
-        const originalPrompt = window.prompt
-        window.prompt = () => "named.ts"
 
-        try {
-            v2Store.getState().addNode("src", "file")
+        v2Store.getState().addNode("src", "file")
+        expect(v2Store.getState().nodeNameDialog).toMatchObject({
+            dirPath: "src",
+            kind: "file",
+            value: "untitled.ts",
+        })
+        v2Store.getState().setNodeNameValue("named.ts")
+        v2Store.getState().submitNodeNameDialog()
 
-            await waitFor(() => createTextFileCalls.length === 1)
-            expect(createTextFileCalls[0]).toEqual({ workspaceRoot: ROOT, relativePath: "src/named.ts" })
-            expect(createTextFileCalls[0].relativePath).not.toBe("src/untitled.ts")
-        } finally {
-            window.prompt = originalPrompt
-        }
+        await waitFor(() => createTextFileCalls.length === 1)
+        expect(createTextFileCalls[0]).toEqual({ workspaceRoot: ROOT, relativePath: "src/named.ts" })
+        expect(createTextFileCalls[0].relativePath).not.toBe("src/untitled.ts")
     })
 
     test("opens workspace html files in the built-in browser only from the explicit browser action", async () => {
@@ -525,7 +536,7 @@ describe("real folder expansion", () => {
         expect(v2Store.getState().ui.demo.activeTab).toBe(editorTab.id)
         expect(v2Store.getState().ui.demo.tabs.some((item) => item.type === "browser" && item.path === "public/index.html")).toBe(false)
 
-        v2Store.getState().openFileInBrowser("public/index.html")
+        ;(v2Store.getState() as any).openFileInBrowser("public/index.html")
 
         await waitFor(() => Boolean(v2Store.getState().ui.demo.tabs.find((tab) => tab.type === "browser" && tab.path === "public/index.html")?.htmlPreview))
         const tab = v2Store.getState().ui.demo.tabs.find((item) => item.type === "browser" && item.path === "public/index.html")!
@@ -536,7 +547,7 @@ describe("real folder expansion", () => {
         expect(v2Store.getState().ui.demo.activeTab).toBe(tab.id)
         expect(v2Store.getState().ui.demo.tabs.some((item) => item.type === "file" && item.path === "public/index.html")).toBe(true)
 
-        v2Store.getState().openFileInBrowser("public/index.html")
+        ;(v2Store.getState() as any).openFileInBrowser("public/index.html")
 
         expect(v2Store.getState().ui.demo.tabs.filter((item) => item.type === "browser" && item.path === "public/index.html")).toHaveLength(1)
         expect(v2Store.getState().ui.demo.activeTab).toBe(tab.id)

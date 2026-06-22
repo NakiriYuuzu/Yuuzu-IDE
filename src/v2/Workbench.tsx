@@ -25,7 +25,7 @@ import { DbTableView } from "./DbTableView"
 import { DbConnDialog } from "./DbConnDialog"
 import { SftpView } from "./SftpView"
 import { AgentZone } from "./AgentZone"
-import { CodeActionsOverlay, CommandPalette, ConfirmModal, ContextMenu, ReferencesOverlay, SettingsModal, Toast, runPaletteAction } from "./Overlays"
+import { CodeActionsOverlay, CommandPalette, ConfirmModal, ContextMenu, NodeNameModal, ReferencesOverlay, SettingsModal, Toast, runPaletteAction } from "./Overlays"
 import { checkForUpdate, updateToastMessage } from "./updater"
 
 function TitleBar() {
@@ -517,6 +517,7 @@ export function WorkbenchV2() {
             <CodeActionsOverlay />
             <CommandPalette />
             <SettingsModal />
+            <NodeNameModal />
             <ConfirmModal />
             <Toast />
         </div>

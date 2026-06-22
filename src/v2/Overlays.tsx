@@ -976,6 +976,56 @@ export function Toast() {
     return <div className="yz2-toast">{toast}</div>
 }
 
+export function NodeNameModal() {
+    const dialog = useV2Store((s) => s.nodeNameDialog)
+    const setNodeNameValue = useV2Store((s) => s.setNodeNameValue)
+    const closeNodeNameDialog = useV2Store((s) => s.closeNodeNameDialog)
+    const submitNodeNameDialog = useV2Store((s) => s.submitNodeNameDialog)
+    if (!dialog) return null
+    const title = dialog.kind === "file" ? "New file" : "New folder"
+    const label = dialog.kind === "file" ? "Create file" : "Create folder"
+    const target = dialog.dirPath || "workspace root"
+    return (
+        <>
+            <div className="yz2-modal-backdrop" style={{ zIndex: 410 }} onClick={closeNodeNameDialog} />
+            <form
+                className="yz2-node-name"
+                onSubmit={(event) => {
+                    event.preventDefault()
+                    submitNodeNameDialog()
+                }}
+            >
+                <div className="yz2-node-name-title">{title}</div>
+                <div className="yz2-node-name-body">Create inside {target}</div>
+                <label className="yz2-node-name-field">
+                    <span>Name</span>
+                    <input
+                        aria-label="Name"
+                        autoFocus
+                        value={dialog.value}
+                        onChange={(event) => setNodeNameValue(event.currentTarget.value)}
+                        onKeyDown={(event) => {
+                            if (event.key === "Escape") {
+                                event.preventDefault()
+                                closeNodeNameDialog()
+                            }
+                        }}
+                    />
+                </label>
+                {dialog.error ? <div className="yz2-node-name-error">{dialog.error}</div> : null}
+                <div className="yz2-node-name-acts">
+                    <button type="button" className="yz2-btn-ghost" onClick={closeNodeNameDialog}>
+                        Cancel
+                    </button>
+                    <button type="submit" className="yz2-btn-accent">
+                        {label}
+                    </button>
+                </div>
+            </form>
+        </>
+    )
+}
+
 export function ConfirmModal() {
     const confirm = useV2Store((s) => s.confirm)
     const closeConfirm = useV2Store((s) => s.closeConfirm)

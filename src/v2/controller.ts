@@ -192,23 +192,6 @@ function savedLineEndingForBackup(value: unknown): LineEnding | null {
     return value === "lf" || value === "crlf" ? value : null
 }
 
-function promptForNodeName(kind: "file" | "dir"): string | null {
-    const label = kind === "file" ? "New file name:" : "New folder name:"
-    const fallback = kind === "file" ? "untitled.ts" : "new-folder"
-    const value = window.prompt(label, fallback)
-    if (value === null) return null
-    const trimmed = value.trim()
-    if (!trimmed) {
-        store().showToast("Name is required")
-        return null
-    }
-    if (trimmed.includes("/") || trimmed.includes("\\")) {
-        store().showToast("Name must be a single path segment")
-        return null
-    }
-    return trimmed
-}
-
 function remoteCommandToast(command: string, exitCode: number | null, stdout: string, stderr: string): string {
     const output = (stdout.trim() || stderr.trim() || "(no output)").replace(/\s+/g, " ")
     const preview = output.length > 120 ? output.slice(0, 117) + "..." : output
@@ -1005,6 +988,9 @@ const delegate = {
         const root = rootOf(pid)
         const p = store().ui[pid]
         if (!root || !p) return
+        const node = findNode(p.treeData, displayPath)
+        const realPath = node?.p ?? displayPath
+        const name = fileNameForPath(displayPath)
         const existing = p.tabs.find((t) => t.type === "file" && t.path === displayPath)
         if (existing) {
             patchProject(pid, (q) => {
@@ -1015,9 +1001,6 @@ const delegate = {
             })
             return
         }
-        const node = findNode(p.treeData, displayPath)
-        const realPath = node?.p ?? displayPath
-        const name = fileNameForPath(displayPath)
         const id = tabId()
         patchProject(pid, (q) => {
             q.tabs = [
@@ -1243,20 +1226,27 @@ const delegate = {
         })()
     },
 
-    addNode(dirPath: string, kind: "file" | "dir") {
+    addNode(dirPath: string, kind: "file" | "dir", name: string) {
         const pid = store().active
         const root = rootOf(pid)
         if (!root) return
-        const name = promptForNodeName(kind)
-        if (name === null) return
+        const trimmed = name.trim()
+        if (!trimmed) {
+            store().showToast("Name is required")
+            return
+        }
+        if (trimmed.includes("/") || trimmed.includes("\\")) {
+            store().showToast("Name must be a single path segment")
+            return
+        }
         const siblings = dirPath
             ? findNode(store().ui[pid].treeData, dirPath)?.d ?? []
             : store().ui[pid].treeData
-        if (siblings.find((n) => n.n === name)) {
-            store().showToast("Name already exists: " + name)
+        if (siblings.find((n) => n.n === trimmed)) {
+            store().showToast("Name already exists: " + trimmed)
             return
         }
-        const rel = dirPath ? dirPath + "/" + name : name
+        const rel = dirPath ? dirPath + "/" + trimmed : trimmed
         void (async () => {
             try {
                 if (kind === "dir") await createDirectory(root, rel)

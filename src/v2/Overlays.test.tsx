@@ -28,7 +28,7 @@ mock.module("./updater", () => ({
     updateToastMessage: updateToastMessageMock,
 }))
 
-import { CodeActionsOverlay, ConfirmModal, ContextMenu, ReferencesOverlay, SettingsModal } from "./Overlays"
+import { CodeActionsOverlay, ConfirmModal, ContextMenu, NodeNameModal, ReferencesOverlay, SettingsModal } from "./Overlays"
 import { v2Store } from "./v2-store"
 
 ensureTestDom()
@@ -62,6 +62,7 @@ afterEach(() => {
         stSec: initialOverlayState.stSec,
         toast: initialOverlayState.toast,
         confirm: null,
+        nodeNameDialog: null,
         ctx: null,
     })
 })
@@ -100,13 +101,13 @@ describe("ContextMenu", () => {
     test("html file context menu opens the file in the built-in browser", () => {
         const previous = {
             ctx: v2Store.getState().ctx,
-            openFileInBrowser: v2Store.getState().openFileInBrowser,
+            openFileInBrowser: (v2Store.getState() as any).openFileInBrowser,
         }
         const opened: string[] = []
 
         act(() => v2Store.setState({
             openFileInBrowser: (path: string) => opened.push(path),
-        }))
+        } as any))
 
         try {
             act(() => v2Store.getState().openCtx({ kind: "file", x: 12, y: 20, path: "public/index.html" }))
@@ -122,7 +123,49 @@ describe("ContextMenu", () => {
             act(() => v2Store.setState({
                 ctx: previous.ctx,
                 openFileInBrowser: previous.openFileInBrowser,
-            }))
+            } as any))
+        }
+    })
+
+    test("new folder uses the in-app name modal instead of browser prompt", () => {
+        const previousAddNode = v2Store.getState().addNode
+        const calls: Array<Parameters<typeof previousAddNode>> = []
+        const originalPrompt = window.prompt
+        window.prompt = () => {
+            throw new Error("window.prompt must not be used for Explorer creation")
+        }
+
+        act(() => v2Store.setState({
+            mode: "real",
+            addNode: (...args: Parameters<typeof previousAddNode>) => {
+                calls.push(args)
+                previousAddNode(...args)
+            },
+        }))
+
+        try {
+            act(() => v2Store.getState().openCtx({ kind: "root", x: 12, y: 20 }))
+            const menu = render(<ContextMenu />)
+            fireEvent.click(menu.getByRole("button", { name: "New folder" }))
+            menu.unmount()
+
+            expect(calls).toEqual([["", "dir"]])
+            expect(v2Store.getState().nodeNameDialog).toMatchObject({
+                dirPath: "",
+                kind: "dir",
+                value: "new-folder",
+            })
+
+            const modal = render(<NodeNameModal />)
+            const input = modal.getByLabelText("Name") as HTMLInputElement
+            expect(input.value).toBe("new-folder")
+            fireEvent.change(input, { target: { value: "feature" } })
+            fireEvent.click(modal.getByRole("button", { name: "Create folder" }))
+
+            expect(v2Store.getState().nodeNameDialog).toBeNull()
+        } finally {
+            window.prompt = originalPrompt
+            act(() => v2Store.setState({ addNode: previousAddNode, nodeNameDialog: null }))
         }
     })
 
