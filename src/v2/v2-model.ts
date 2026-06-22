@@ -6,6 +6,7 @@ import type { GitBlameFile, GitBranchFull, GitChangeKind, GitConflictFile, GitSt
 import type { GitDiffHunks } from "../features/git/git-diff-model"
 import type { LanguageCodeAction, LanguageServerStatus, LspDiagnostic } from "../features/language/language-model"
 import type { DatabaseProfile, QueryKind } from "../features/database/database-model"
+import type { RemoteHostProfile } from "../features/remote/remote-model"
 import type { DbDialogState } from "./db-dialog"
 
 export type FnMode = "files" | "git" | "db" | "ssh" | "agent" | "lang"
@@ -302,6 +303,7 @@ export type ProjectUI = {
     dbProfiles: DatabaseProfile[]
     dbDialog: DbDialogState
     sshHosts: SshHost[]
+    sshProfiles: RemoteHostProfile[]
     treeLoaded: boolean
     gitLoaded: boolean
     gitDetail: GitDetail | null

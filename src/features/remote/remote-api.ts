@@ -77,6 +77,14 @@ export function writeSshTerminal(
   return call<void>("write_ssh_terminal", { sessionId, data });
 }
 
+export function resizeSshTerminal(
+  sessionId: string,
+  rows: number,
+  cols: number,
+): Promise<void> {
+  return call<void>("resize_ssh_terminal", { sessionId, rows, cols });
+}
+
 export function closeSshTerminalSession(
   sessionId: string,
 ): Promise<SshTerminalSessionInfo> {

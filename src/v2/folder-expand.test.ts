@@ -24,16 +24,27 @@ const dbHistoryCalls: any[] = []
 const remoteConnectCalls: any[] = []
 const remoteDisconnectCalls: any[] = []
 const remoteCommandCalls: any[] = []
+const saveRemoteHostCalls: any[] = []
+const deleteRemoteHostCalls: any[] = []
+const terminalSpawnCalls: any[] = []
+const terminalWriteCalls: any[] = []
+const sshSpawnCalls: any[] = []
+const sshWriteCalls: any[] = []
+const sshResizeCalls: any[] = []
 const browserCaptureCalls: any[] = []
 const createTextFileCalls: any[] = []
 const createDirectoryCalls: any[] = []
 const deletePathCalls: any[] = []
 const gitStatusCalls: any[] = []
+const eventHandlers: Record<string, Array<(payload: any) => void>> = {}
+let remoteHosts: any[] = []
+let sshTerminalSessions: any[] = []
 let workspaceDiagnostics: any[] = []
 let renameEdit: unknown = null
 let ensureReadiness: "Ready" | "MissingCommand" | "Error" = "Ready"
 let blockEnsure = false
 const ensureResolvers: Array<() => void> = []
+let sshSpawnSeq = 0
 
 function mockDiff(path: string, staged: boolean) {
     return {
@@ -101,6 +112,33 @@ mock.module("@tauri-apps/api/core", () => ({
                 await new Promise<void>((resolve) => writeResolvers.push(resolve))
             }
             return { path: args.path, version: { modified_ms: 20, len: String(args.content).length } }
+        }
+        if (cmd === "spawn_terminal_session") {
+            terminalSpawnCalls.push(args)
+            return { id: "term-local-1", workspace_id: args.workspaceId, name: args.name, running: true }
+        }
+        if (cmd === "write_terminal_session") {
+            terminalWriteCalls.push(args)
+            return null
+        }
+        if (cmd === "spawn_ssh_terminal") {
+            sshSpawnCalls.push(args)
+            sshSpawnSeq += 1
+            return {
+                id: "ssh-" + sshSpawnSeq,
+                host_id: args.profileId,
+                workspace_id: args.workspaceId,
+                name: "deploy@example.com",
+                running: true,
+            }
+        }
+        if (cmd === "write_ssh_terminal") {
+            sshWriteCalls.push(args)
+            return null
+        }
+        if (cmd === "resize_ssh_terminal") {
+            sshResizeCalls.push(args)
+            return null
         }
         if (cmd === "save_unsaved_backup") {
             savedBackups.push({ path: args.path, content: args.content })
@@ -298,7 +336,33 @@ mock.module("@tauri-apps/api/core", () => ({
                 row_count: null,
             }]
         }
-        if (cmd === "list_remote_hosts") return []
+        if (cmd === "list_remote_hosts") return remoteHosts
+        if (cmd === "save_remote_host") {
+            saveRemoteHostCalls.push(args)
+            const input = args.input
+            const profile = {
+                id: input.id ?? "host-" + (remoteHosts.length + 1),
+                workspace_root: input.workspace_root,
+                name: input.name,
+                host: input.host,
+                port: input.port,
+                username: input.username,
+                auth: input.auth_kind === "Agent" ? "Agent" : { Password: { secret_id: "secret" } },
+                default_remote_path: input.default_remote_path,
+                keepalive_seconds: input.keepalive_seconds,
+                connect_timeout_seconds: input.connect_timeout_seconds,
+                created_ms: 1,
+                updated_ms: 2,
+            }
+            remoteHosts = [...remoteHosts.filter((host) => host.id !== profile.id), profile]
+            return profile
+        }
+        if (cmd === "delete_remote_host") {
+            deleteRemoteHostCalls.push(args)
+            remoteHosts = remoteHosts.filter((host) => host.id !== args.profileId)
+            return null
+        }
+        if (cmd === "list_ssh_terminal_sessions") return sshTerminalSessions
         if (cmd === "connect_remote_host") {
             remoteConnectCalls.push(args)
             return { host_id: args.profileId, status: "Connected", message: null, checked_ms: 10 }
@@ -358,11 +422,24 @@ mock.module("@tauri-apps/plugin-dialog", () => ({
     open: async () => pickedFolder,
 }))
 
+mock.module("@tauri-apps/api/event", () => ({
+    listen: async (event: string, handler: (event: { payload: any }) => void) => {
+        const handlers = eventHandlers[event] ?? []
+        const wrapped = (payload: any) => handler({ payload })
+        handlers.push(wrapped)
+        eventHandlers[event] = handlers
+        return () => {
+            eventHandlers[event] = (eventHandlers[event] ?? []).filter((item) => item !== wrapped)
+        }
+    },
+}))
+
 ;(window as any).__TAURI_INTERNALS__ = {}
 
-const { bootstrapV2 } = await import("./controller")
+const { bootstrapV2, handleSshTerminalExit, handleSshTerminalOutput, resizeSession, restoreSshTerminalSessions, writeToSession } = await import("./controller")
 const { emptyUI, v2Store } = await import("./v2-store")
 const { findNode } = await import("./bridge")
+const { replayTerminalOutput } = await import("../features/terminal/terminal-replay-buffer")
 
 async function ensureMockWorkspace(): Promise<void> {
     await bootstrapV2()
@@ -382,6 +459,16 @@ async function ensureMockWorkspace(): Promise<void> {
     remoteConnectCalls.length = 0
     remoteDisconnectCalls.length = 0
     remoteCommandCalls.length = 0
+    saveRemoteHostCalls.length = 0
+    deleteRemoteHostCalls.length = 0
+    terminalSpawnCalls.length = 0
+    terminalWriteCalls.length = 0
+    sshSpawnCalls.length = 0
+    sshWriteCalls.length = 0
+    sshResizeCalls.length = 0
+    sshSpawnSeq = 0
+    remoteHosts = []
+    sshTerminalSessions = []
     browserCaptureCalls.length = 0
     createTextFileCalls.length = 0
     createDirectoryCalls.length = 0
@@ -421,6 +508,7 @@ async function ensureMockWorkspace(): Promise<void> {
                     split: null,
                     sftp: base.sftp,
                     sshHosts: [],
+                    sshProfiles: [],
                     treeData: [{ n: "src", d: [], p: ROOT + "/src", loaded: false }],
                     treeLoaded: true,
                     diagnosticsByPath: {},
@@ -790,6 +878,191 @@ describe("real folder expansion", () => {
         expect(sf.remotePath).toBe("/other")
         expect(sf.remote).toEqual([])
         expect(v2Store.getState().toast ?? "").not.toContain("uploaded via SFTP")
+    })
+
+    test("ssh host profile save and delete delegate to remote APIs and refresh v2 hosts", async () => {
+        await ensureMockWorkspace()
+
+        await (v2Store.getState() as any).saveSshHost({
+            name: "edge",
+            host: "edge.example.com",
+            port: 2222,
+            username: "deploy",
+            auth_kind: "Agent",
+            default_remote_path: "/srv/app",
+            keepalive_seconds: 30,
+            connect_timeout_seconds: 10,
+        })
+
+        await waitFor(() => saveRemoteHostCalls.length === 1 && v2Store.getState().ui.demo.sshHosts.length === 1)
+        expect(saveRemoteHostCalls).toEqual([{
+            input: {
+                workspace_root: ROOT,
+                name: "edge",
+                host: "edge.example.com",
+                port: 2222,
+                username: "deploy",
+                auth_kind: "Agent",
+                default_remote_path: "/srv/app",
+                keepalive_seconds: 30,
+                connect_timeout_seconds: 10,
+            },
+        }])
+        expect(v2Store.getState().ui.demo.sshHosts[0]).toMatchObject({
+            label: "deploy@edge.example.com",
+            hostId: "host-1",
+            remotePath: "/srv/app",
+        })
+        expect(v2Store.getState().ui.demo.sshProfiles[0]).toMatchObject({
+            id: "host-1",
+            host: "edge.example.com",
+        })
+
+        await (v2Store.getState() as any).deleteSshHost("host-1")
+
+        await waitFor(() => deleteRemoteHostCalls.length === 1 && v2Store.getState().ui.demo.sshHosts.length === 0)
+        expect(deleteRemoteHostCalls).toEqual([{ workspaceRoot: ROOT, profileId: "host-1" }])
+        expect(v2Store.getState().ui.demo.sshProfiles).toEqual([])
+    })
+
+    test("ssh shell opens a Rust-owned remote terminal session", async () => {
+        await ensureMockWorkspace()
+        const host = { label: "deploy@example.com", sub: "prod", live: false, hostId: "host-1", remotePath: "/srv/app" }
+        patchDemoProject((project) => {
+            project.fn = "ssh"
+            project.sshHosts = [host]
+        })
+
+        v2Store.getState().openShell(host)
+
+        await waitFor(() => terminalSpawnCalls.length + sshSpawnCalls.length > 0)
+        expect(sshSpawnCalls).toEqual([{
+            workspaceId: "demo",
+            workspaceRoot: ROOT,
+            profileId: "host-1",
+            rows: 24,
+            cols: 80,
+        }])
+        expect(terminalSpawnCalls).toEqual([])
+        expect(terminalWriteCalls).toEqual([])
+        expect(v2Store.getState().ui.demo.sshHosts[0].live).toBe(true)
+        expect(v2Store.getState().ui.demo.tabs[0]).toMatchObject({
+            type: "cmd",
+            title: "deploy@example.com",
+            sessionId: "ssh-1",
+        })
+
+        writeToSession("ssh-1", "ls\n")
+
+        expect(sshWriteCalls).toEqual([{ sessionId: "ssh-1", data: "ls\n" }])
+        expect(terminalWriteCalls).toEqual([])
+
+        resizeSession("ssh-1", 40, 120)
+
+        expect(sshResizeCalls).toEqual([{ sessionId: "ssh-1", rows: 40, cols: 120 }])
+    })
+
+    test("ssh terminal events feed the v2 terminal replay and exit state", async () => {
+        await ensureMockWorkspace()
+        const host = { label: "deploy@example.com", sub: "prod", live: false, hostId: "host-1", remotePath: "/srv/app" }
+        patchDemoProject((project) => {
+            project.sshHosts = [host]
+        })
+
+        v2Store.getState().openShell(host)
+
+        await waitFor(() => sshSpawnCalls.length === 1)
+        handleSshTerminalOutput({
+            session_id: "ssh-1",
+            chunk: "remote ready\n",
+        })
+        handleSshTerminalExit({
+            session_id: "ssh-1",
+            exit_code: 0,
+        })
+
+        expect(replayTerminalOutput("ssh-1")).toContain("remote ready")
+        expect(v2Store.getState().ui.demo.tabs[0]?.exited).toBe(true)
+        expect(v2Store.getState().ui.demo.sshHosts[0].live).toBe(false)
+    })
+
+    test("ssh exit keeps the host live while sftp is still connected", async () => {
+        await ensureMockWorkspace()
+        const host = { label: "deploy@example.com", sub: "prod", live: true, hostId: "host-1", remotePath: "/srv/app" }
+        patchDemoProject((project) => {
+            project.sshHosts = [host]
+            project.sftp = {
+                host: "deploy@example.com",
+                hostId: "host-1",
+                localPath: ROOT,
+                localRel: "",
+                remotePath: "/srv/app",
+                local: [],
+                remote: [],
+                sel: null,
+                clip: null,
+                focus: "remote",
+                connected: true,
+                loading: false,
+            }
+        })
+
+        v2Store.getState().openShell(host)
+
+        await waitFor(() => sshSpawnCalls.length === 1)
+        handleSshTerminalExit({
+            session_id: "ssh-1",
+            exit_code: 0,
+        })
+
+        expect(v2Store.getState().ui.demo.tabs[0]?.exited).toBe(true)
+        expect(v2Store.getState().ui.demo.sshHosts[0].live).toBe(true)
+    })
+
+    test("ssh terminal sessions can be restored into v2 tabs after bootstrap", async () => {
+        await ensureMockWorkspace()
+        remoteHosts = [{
+            id: "host-1",
+            workspace_root: ROOT,
+            name: "edge",
+            host: "edge.example.com",
+            port: 22,
+            username: "deploy",
+            auth: "Agent",
+            default_remote_path: "/srv/app",
+            keepalive_seconds: 30,
+            connect_timeout_seconds: 10,
+            created_ms: 1,
+            updated_ms: 2,
+        }]
+        sshTerminalSessions = [{
+            id: "host-1:ssh-7",
+            host_id: "host-1",
+            workspace_id: "demo",
+            name: "deploy@edge.example.com",
+            running: true,
+        }]
+        patchDemoProject((project) => {
+            project.sshProfiles = remoteHosts
+            project.sshHosts = []
+        })
+
+        await restoreSshTerminalSessions("demo")
+
+        const project = v2Store.getState().ui.demo
+        expect(project.sshHosts[0]).toMatchObject({
+            hostId: "host-1",
+            label: "deploy@edge.example.com",
+            live: true,
+        })
+        expect(project.tabs[0]).toMatchObject({
+            type: "cmd",
+            title: "deploy@edge.example.com",
+            sessionId: "host-1:ssh-7",
+        })
+
+        writeToSession("host-1:ssh-7", "pwd\n")
+        expect(sshWriteCalls).toEqual([{ sessionId: "host-1:ssh-7", data: "pwd\n" }])
     })
 
     test("browser capture delegate stores the returned screenshot on the browser tab", async () => {

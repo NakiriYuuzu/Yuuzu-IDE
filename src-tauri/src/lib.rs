@@ -123,6 +123,7 @@ pub fn run() {
             commands::list_ssh_terminal_sessions,
             commands::spawn_ssh_terminal,
             commands::write_ssh_terminal,
+            commands::resize_ssh_terminal,
             commands::close_ssh_terminal,
             commands::run_remote_command,
             commands::list_sftp_directory,

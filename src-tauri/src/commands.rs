@@ -1581,6 +1581,18 @@ pub async fn write_ssh_terminal(
 }
 
 #[tauri::command]
+pub async fn resize_ssh_terminal(
+    remote_state: State<'_, crate::remote::RemoteState>,
+    session_id: String,
+    rows: u16,
+    cols: u16,
+) -> Result<(), String> {
+    remote_state
+        .resize_ssh_terminal(&session_id, rows, cols)
+        .await
+}
+
+#[tauri::command]
 pub async fn close_ssh_terminal(
     remote_state: State<'_, crate::remote::RemoteState>,
     session_id: String,
@@ -3686,6 +3698,32 @@ mod tests {
                 workspace_id,
                 workspace_root,
                 profile_id,
+                rows,
+                cols,
+            ));
+        }
+
+        let _ = assert_flat_signature;
+    }
+
+    #[test]
+    fn resize_ssh_terminal_preserves_flat_command_signature() {
+        fn assert_future<F>(_: F)
+        where
+            F: std::future::Future<Output = Result<(), String>>,
+        {
+        }
+
+        #[allow(dead_code)]
+        fn assert_flat_signature(
+            remote_state: State<'_, crate::remote::RemoteState>,
+            session_id: String,
+            rows: u16,
+            cols: u16,
+        ) {
+            assert_future(super::resize_ssh_terminal(
+                remote_state,
+                session_id,
                 rows,
                 cols,
             ));

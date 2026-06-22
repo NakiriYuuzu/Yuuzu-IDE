@@ -664,6 +664,11 @@ pub trait RemoteBackend: Send + Sync {
         Err("SSH terminal write backend is unavailable".to_string())
     }
 
+    async fn resize_terminal(&self, session_id: &str, rows: u16, cols: u16) -> Result<(), String> {
+        let _ = (session_id, rows, cols);
+        Err("SSH terminal resize backend is unavailable".to_string())
+    }
+
     async fn close_terminal(&self, session_id: &str) -> Result<RemoteTerminalSessionInfo, String> {
         let _ = session_id;
         Err("SSH terminal close backend is unavailable".to_string())
@@ -780,6 +785,7 @@ struct RusshTerminalWriter {
 
 enum TerminalWriteCommand {
     Data(Vec<u8>),
+    Resize { rows: u16, cols: u16 },
     Close,
 }
 
@@ -1082,6 +1088,11 @@ impl RemoteBackend for RusshRemoteBackend {
                     TerminalWriteCommand::Data(chunk) => {
                         let _ = writer.data_bytes(chunk).await;
                     }
+                    TerminalWriteCommand::Resize { rows, cols } => {
+                        let _ = writer
+                            .window_change(cols.max(1) as u32, rows.max(1) as u32, 0, 0)
+                            .await;
+                    }
                     TerminalWriteCommand::Close => {
                         let _ = writer.close().await;
                         break;
@@ -1105,6 +1116,17 @@ impl RemoteBackend for RusshRemoteBackend {
             .ok_or_else(|| format!("terminal session not found: {session_id}"))?;
         sender
             .send(TerminalWriteCommand::Data(data.as_bytes().to_vec()))
+            .map_err(|_| format!("terminal session closed: {session_id}"))
+    }
+
+    async fn resize_terminal(&self, session_id: &str, rows: u16, cols: u16) -> Result<(), String> {
+        let terminal_writers = self.terminal_writers.lock().await;
+        let sender = terminal_writers
+            .get(session_id)
+            .map(|writer| writer.sender.clone())
+            .ok_or_else(|| format!("terminal session not found: {session_id}"))?;
+        sender
+            .send(TerminalWriteCommand::Resize { rows, cols })
             .map_err(|_| format!("terminal session closed: {session_id}"))
     }
 
@@ -1464,6 +1486,28 @@ impl RemoteState {
         }
 
         self.backend.write_terminal(session_id, data).await
+    }
+
+    pub async fn resize_ssh_terminal(
+        &self,
+        session_id: &str,
+        rows: u16,
+        cols: u16,
+    ) -> Result<(), String> {
+        let running = self
+            .terminal_sessions
+            .lock()
+            .map_err(|err| err.to_string())?
+            .get(session_id)
+            .map(|session| session.running)
+            .ok_or_else(|| format!("terminal session not found: {session_id}"))?;
+        if !running {
+            return Err(format!("terminal session not running: {session_id}"));
+        }
+
+        self.backend
+            .resize_terminal(session_id, rows.max(1), cols.max(1))
+            .await
     }
 
     pub async fn close_ssh_terminal(
@@ -1914,6 +1958,7 @@ mod runtime_tests {
     struct MockRemoteBackend {
         connected: Mutex<Vec<String>>,
         written: Mutex<Vec<(String, String)>>,
+        resized: Mutex<Vec<(String, u16, u16)>>,
     }
 
     #[async_trait::async_trait]
@@ -1964,6 +2009,20 @@ mod runtime_tests {
                 .lock()
                 .map_err(|err| err.to_string())?
                 .push((session_id.to_string(), data.to_string()));
+            Ok(())
+        }
+
+        async fn resize_terminal(
+            &self,
+            session_id: &str,
+            rows: u16,
+            cols: u16,
+        ) -> Result<(), String> {
+            self.resized.lock().map_err(|err| err.to_string())?.push((
+                session_id.to_string(),
+                rows,
+                cols,
+            ));
             Ok(())
         }
 
@@ -2291,6 +2350,34 @@ mod runtime_tests {
         assert!(
             backend.written.lock().expect("written").is_empty(),
             "unregistered writes should not reach backend"
+        );
+    }
+
+    #[tokio::test]
+    async fn resize_ssh_terminal_forwards_dimensions_to_running_backend_session() {
+        let backend = Arc::new(MockRemoteBackend::default());
+        let state = RemoteState::new_with_backend(backend.clone());
+        let secrets = super::tests::MemoryRemoteSecretStore::default();
+        let session = state
+            .spawn_ssh_terminal(
+                "workspace",
+                &profile(),
+                &secrets,
+                Arc::new(NoopRemoteTerminalEventSink),
+                24,
+                80,
+            )
+            .await
+            .expect("spawn");
+
+        state
+            .resize_ssh_terminal(&session.id, 40, 120)
+            .await
+            .expect("resize");
+
+        assert_eq!(
+            backend.resized.lock().expect("resized").as_slice(),
+            [(session.id, 40, 120)],
         );
     }
 
