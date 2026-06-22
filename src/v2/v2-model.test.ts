@@ -27,6 +27,7 @@ import {
     gitFor,
     hlLine,
     langLabel,
+    metricRefreshIntervalMs,
     normSeverity,
     refChipStyle,
     resolveAzCols,
@@ -392,6 +393,19 @@ describe("stability helpers", () => {
         expect(fmtUptime(5_000)).toBe("5s")
         expect(tsLabel(0)).toBe("pending")
         expect(fmtBackupSize(1234)).toContain("1,234")
+    })
+
+    test("maps metric refresh interval settings to bounded timer delays", () => {
+        const refreshRow = SETTINGS_CONFIG.flatMap((section) => section.rows).find((row) => row.k === "metricRefreshInterval")
+        expect(settingDefault("metricRefreshInterval")).toBe("off")
+        expect(refreshRow?.choice).toEqual(["off", "5s", "10s", "30s", "60s"])
+        expect(metricRefreshIntervalMs(undefined)).toBeNull()
+        expect(metricRefreshIntervalMs("off")).toBeNull()
+        expect(metricRefreshIntervalMs("5s")).toBe(5_000)
+        expect(metricRefreshIntervalMs("10s")).toBe(10_000)
+        expect(metricRefreshIntervalMs("30s")).toBe(30_000)
+        expect(metricRefreshIntervalMs("60s")).toBe(60_000)
+        expect(metricRefreshIntervalMs("1s")).toBeNull()
     })
 
     test("maps diagnostic levels to existing design tokens", () => {

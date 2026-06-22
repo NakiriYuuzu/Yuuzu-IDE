@@ -5,7 +5,7 @@ import { cleanup, fireEvent, render } from "@testing-library/react"
 
 import { ensureTestDom } from "../test/test-dom"
 import { defaultDbDialogState } from "./db-dialog"
-import { v2Store } from "./v2-store"
+import { registerRealDelegate, v2Store } from "./v2-store"
 import { WorkbenchV2 } from "./Workbench"
 
 ensureTestDom()
@@ -13,8 +13,11 @@ ensureTestDom()
 const initialWorkbenchState = {
     mode: v2Store.getState().mode,
     active: v2Store.getState().active,
+    order: [...v2Store.getState().order],
     meta: structuredClone(v2Store.getState().meta),
     ui: structuredClone(v2Store.getState().ui),
+    pal: structuredClone(v2Store.getState().pal),
+    stVals: structuredClone(v2Store.getState().stVals),
     stab: structuredClone(v2Store.getState().stab),
 }
 const baselineMetric = {
@@ -31,9 +34,12 @@ beforeEach(() => {
     v2Store.setState({
         mode: "demo",
         active: "api",
+        order: [...initialWorkbenchState.order],
         panelOpen: true,
         meta: structuredClone(initialWorkbenchState.meta),
         ui: structuredClone(initialWorkbenchState.ui),
+        pal: structuredClone(initialWorkbenchState.pal),
+        stVals: structuredClone(initialWorkbenchState.stVals),
         stab: { ...structuredClone(initialWorkbenchState.stab), metric: { ...baselineMetric } },
     })
 })
@@ -43,11 +49,15 @@ afterEach(() => {
     v2Store.setState({
         mode: initialWorkbenchState.mode,
         active: initialWorkbenchState.active,
+        order: [...initialWorkbenchState.order],
         panelOpen: true,
         meta: structuredClone(initialWorkbenchState.meta),
         ui: structuredClone(initialWorkbenchState.ui),
+        pal: structuredClone(initialWorkbenchState.pal),
+        stVals: structuredClone(initialWorkbenchState.stVals),
         stab: structuredClone(initialWorkbenchState.stab),
     })
+    registerRealDelegate(null)
 })
 
 describe("WorkbenchV2", () => {
@@ -118,5 +128,73 @@ describe("WorkbenchV2", () => {
         expect(status?.textContent).not.toContain("Uptime")
         expect(status?.textContent).not.toContain("Files")
         expect(status?.textContent).not.toContain("PID")
+    })
+
+    test("renders the real bootstrap empty workspace state", () => {
+        v2Store.setState({
+            mode: "real",
+            active: "",
+            order: [],
+            meta: {},
+            ui: {},
+            pal: { open: true, q: "" },
+        })
+
+        const view = render(<WorkbenchV2 />)
+
+        expect(view.getByText("No project folders yet.")).toBeTruthy()
+        expect(view.getByText("Search or run a command")).toBeTruthy()
+        expect(view.getByText("COMMANDS")).toBeTruthy()
+    })
+
+    test("starts background metric refresh from the configured performance interval", () => {
+        let calls = 0
+        const captured: { delay: number; callback?: () => void } = { delay: 0 }
+        const originalSetInterval = globalThis.setInterval
+        const originalClearInterval = globalThis.clearInterval
+        globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
+            captured.callback = callback as () => void
+            captured.delay = Number(delay)
+            return 42 as unknown as ReturnType<typeof setInterval>
+        }) as unknown as typeof setInterval
+        globalThis.clearInterval = (() => undefined) as unknown as typeof clearInterval
+        registerRealDelegate({ refreshMetric: () => { calls += 1 } } as any)
+        v2Store.setState((s) => ({
+            mode: "real",
+            stVals: { ...s.stVals, metricRefreshInterval: "5s" },
+        }))
+
+        try {
+            render(<WorkbenchV2 />)
+            expect(captured.delay).toBe(5_000)
+            expect(calls).toBe(0)
+            const tick = captured.callback
+            if (!tick) throw new Error("expected metric refresh interval callback")
+            tick()
+            expect(calls).toBe(1)
+        } finally {
+            globalThis.setInterval = originalSetInterval
+            globalThis.clearInterval = originalClearInterval
+        }
+    })
+
+    test("does not start background metric refresh when the performance interval is off", () => {
+        let intervalStarted = false
+        const originalSetInterval = globalThis.setInterval
+        globalThis.setInterval = (() => {
+            intervalStarted = true
+            return 42 as unknown as ReturnType<typeof setInterval>
+        }) as unknown as typeof setInterval
+        v2Store.setState((s) => ({
+            mode: "real",
+            stVals: { ...s.stVals, metricRefreshInterval: "off" },
+        }))
+
+        try {
+            render(<WorkbenchV2 />)
+            expect(intervalStarted).toBe(false)
+        } finally {
+            globalThis.setInterval = originalSetInterval
+        }
     })
 })

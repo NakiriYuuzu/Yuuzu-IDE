@@ -392,6 +392,33 @@ describe("ContextMenu", () => {
 })
 
 describe("SettingsModal", () => {
+    test("Performance section configures background metric refresh interval", () => {
+        const previous = {
+            stOpen: v2Store.getState().stOpen,
+            stSec: v2Store.getState().stSec,
+            stVals: structuredClone(v2Store.getState().stVals),
+            stab: structuredClone(v2Store.getState().stab),
+        }
+
+        act(() => v2Store.setState((s) => ({
+            stOpen: true,
+            stSec: "performance",
+            stVals: { ...s.stVals, metricRefreshInterval: "off" },
+        })))
+
+        try {
+            const view = render(<SettingsModal />)
+
+            expect(view.getByText("Background refresh")).toBeTruthy()
+            expect(view.getByText("Update status-bar memory without loading diagnostics")).toBeTruthy()
+            fireEvent.click(view.getByRole("button", { name: "10s" }))
+
+            expect(v2Store.getState().stVals.metricRefreshInterval).toBe("10s")
+        } finally {
+            act(() => v2Store.setState(previous))
+        }
+    })
+
     test("Language Servers section tolerates bootstrap no-workspace state", () => {
         const previous = {
             mode: v2Store.getState().mode,

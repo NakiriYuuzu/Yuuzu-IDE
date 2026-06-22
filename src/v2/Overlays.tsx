@@ -442,7 +442,8 @@ export function CommandPalette() {
     const pal = store.pal
     if (!pal.open) return null
 
-    const files = filterPaletteFiles(store.ui[store.active].treeData, pal.q)
+    const project = store.ui[store.active]
+    const files = project ? filterPaletteFiles(project.treeData, pal.q) : []
     const cmds = filterPaletteCommands(pal.q)
 
     return (
@@ -514,8 +515,30 @@ export function CommandPalette() {
 function PerformanceSection() {
     const store = useV2Store()
     const metric = store.stab.metric
+    const refreshInterval = typeof store.stVals.metricRefreshInterval === "string"
+        ? store.stVals.metricRefreshInterval
+        : settingDefault("metricRefreshInterval")
+    const refreshOptions = ["off", "5s", "10s", "30s", "60s"]
     return (
         <div className="yz2-stab">
+            <div className="yz2-setting-row">
+                <div className="info-col">
+                    <span className="lbl">Background refresh</span>
+                    <span className="dsc">Update status-bar memory without loading diagnostics</span>
+                </div>
+                <div className="yz2-choice-group">
+                    {refreshOptions.map((option) => (
+                        <button
+                            key={option}
+                            type="button"
+                            className={"yz2-choice" + (refreshInterval === option ? " is-on" : "")}
+                            onClick={() => store.setSetting("metricRefreshInterval", option)}
+                        >
+                            {option}
+                        </button>
+                    ))}
+                </div>
+            </div>
             <div className="yz2-stab-refresh">
                 <button type="button" className="yz2-btn-ghost" onClick={store.refreshMetric}>
                     ⟳ Refresh

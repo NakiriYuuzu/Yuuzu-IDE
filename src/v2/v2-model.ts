@@ -904,7 +904,9 @@ export const SETTINGS_CONFIG: SettingSection[] = [
         { label: "SFTP copy / paste", desc: "Transfer the selected file", info: "⌘C · ⌘V" },
     ] },
     { id: "language", label: "Language Servers", glyph: "◇", desc: "Language servers, diagnostics and logs for the active workspace.", rows: [], custom: "language" },
-    { id: "performance", label: "Performance", glyph: "◷", desc: "Live process metrics — memory, uptime and index sizes.", rows: [], custom: "performance" },
+    { id: "performance", label: "Performance", glyph: "◷", desc: "Live process metrics — memory, uptime and index sizes.", rows: [
+        { k: "metricRefreshInterval", label: "Background refresh", desc: "Update status-bar memory without loading diagnostics", choice: ["off", "5s", "10s", "30s", "60s"], def: "off" },
+    ], custom: "performance" },
     { id: "diagnostics", label: "Diagnostics", glyph: "◉", desc: "Recent IDE action log written by the backend.", rows: [], custom: "diagnostics" },
     { id: "recovery", label: "Recovery", glyph: "↺", desc: "Unsaved edits backed up automatically.", rows: [], custom: "recovery" },
 ]
@@ -915,6 +917,14 @@ export function settingDefault(key: string): string | boolean | null {
             if (row.k === key) return row.def ?? null
         }
     }
+    return null
+}
+
+export function metricRefreshIntervalMs(value: unknown): number | null {
+    if (value === "5s") return 5_000
+    if (value === "10s") return 10_000
+    if (value === "30s") return 30_000
+    if (value === "60s") return 60_000
     return null
 }
 

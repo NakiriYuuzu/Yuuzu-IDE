@@ -6,7 +6,7 @@ import { useEffect } from "react"
 import { type UnlistenFn } from "@tauri-apps/api/event"
 
 import "./yuzu.css"
-import { filterPaletteCommands, filterPaletteFiles, fmtBytes, langLabel } from "./v2-model"
+import { filterPaletteCommands, filterPaletteFiles, fmtBytes, langLabel, metricRefreshIntervalMs } from "./v2-model"
 import { useV2Store, v2Store } from "./v2-store"
 import { bootstrapV2 } from "./controller"
 import { onWorkspaceFileChanged, unwatchWorkspace, watchWorkspace, type WatchWorkspaceHandle } from "../features/files/file-api"
@@ -413,6 +413,9 @@ export function WorkbenchV2() {
     const hasProject = useV2Store((s) => s.order.length > 0 && !!s.ui[s.active])
     const fontSize = useV2Store((s) => (typeof s.stVals.fontSize === "string" ? s.stVals.fontSize : "13"))
     const blink = useV2Store((s) => s.stVals.blink !== false)
+    const mode = useV2Store((s) => s.mode)
+    const metricRefreshInterval = useV2Store((s) => s.stVals.metricRefreshInterval)
+    const refreshMetric = useV2Store((s) => s.refreshMetric)
     useGlobalKeys()
     useWorkspaceFileWatcher()
 
@@ -427,6 +430,16 @@ export function WorkbenchV2() {
             disposed = true
         }
     }, [])
+
+    useEffect(() => {
+        if (mode !== "real") return
+        const intervalMs = metricRefreshIntervalMs(metricRefreshInterval)
+        if (intervalMs === null) return
+        const timer = setInterval(() => {
+            refreshMetric()
+        }, intervalMs)
+        return () => clearInterval(timer)
+    }, [mode, metricRefreshInterval, refreshMetric])
 
     return (
         <div
