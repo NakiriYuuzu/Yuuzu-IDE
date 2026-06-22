@@ -1,8 +1,9 @@
-import { useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react"
+import { useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent, type ReactNode } from "react"
 
+import type { RemoteAuthKind, RemoteHostProfile } from "../features/remote/remote-model"
 import { DIR_CHIP, chipFor, LANE_COLORS } from "./v2-model"
 import type { FnMode, GitFile, TreeNode } from "./v2-model"
-import { SIDE_PANEL_MAX_WIDTH, SIDE_PANEL_MIN_WIDTH, useV2Store } from "./v2-store"
+import { SIDE_PANEL_MAX_WIDTH, SIDE_PANEL_MIN_WIDTH, useV2Store, type SshHostProfileDraft } from "./v2-store"
 
 function FnIcon({ children }: { children: ReactNode }) {
     return (
@@ -350,23 +351,204 @@ function DbBody() {
     )
 }
 
+type SshHostFormState = {
+    id?: string
+    name: string
+    target: string
+    remotePath: string
+    authKind: RemoteAuthKind
+    password: string
+    keyPath: string
+    keyPassphrase: string
+    error: string | null
+}
+
+function emptySshHostForm(): SshHostFormState {
+    return {
+        name: "",
+        target: "",
+        remotePath: "/",
+        authKind: "Agent",
+        password: "",
+        keyPath: "",
+        keyPassphrase: "",
+        error: null,
+    }
+}
+
+function authKindForProfile(profile: RemoteHostProfile): RemoteAuthKind {
+    if (profile.auth === "Agent") return "Agent"
+    return "Password" in profile.auth ? "Password" : "Key"
+}
+
+function sshHostFormFromProfile(profile: RemoteHostProfile): SshHostFormState {
+    return {
+        id: profile.id,
+        name: profile.name,
+        target: profile.username + "@" + profile.host + (profile.port === 22 ? "" : ":" + profile.port),
+        remotePath: profile.default_remote_path || "/",
+        authKind: authKindForProfile(profile),
+        password: "",
+        keyPath: typeof profile.auth === "object" && "Key" in profile.auth ? profile.auth.Key.key_path : "",
+        keyPassphrase: "",
+        error: null,
+    }
+}
+
+function parseSshTarget(target: string): { username: string; host: string; port: number } | null {
+    const match = target.trim().match(/^([^@\s]+)@([^:\s/]+)(?::([0-9]{1,5}))?$/)
+    if (!match) return null
+    const port = match[3] ? Number(match[3]) : 22
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return null
+    return { username: match[1], host: match[2], port }
+}
+
+function sshDraftFromForm(form: SshHostFormState): SshHostProfileDraft | null {
+    const parsed = parseSshTarget(form.target)
+    if (!parsed) return null
+    const draft: SshHostProfileDraft = {
+        id: form.id,
+        name: form.name.trim() || parsed.host,
+        host: parsed.host,
+        port: parsed.port,
+        username: parsed.username,
+        auth_kind: form.authKind,
+        default_remote_path: form.remotePath.trim() || "/",
+        keepalive_seconds: 30,
+        connect_timeout_seconds: 10,
+    }
+    if (form.authKind === "Password" && form.password) draft.password = form.password
+    if (form.authKind === "Key") {
+        draft.key_path = form.keyPath.trim()
+        if (form.keyPassphrase) draft.key_passphrase = form.keyPassphrase
+    }
+    return draft
+}
+
 function SshBody() {
     const hosts = useV2Store((s) => s.ui[s.active].sshHosts)
+    const profiles = useV2Store((s) => s.ui[s.active].sshProfiles)
     const openSftp = useV2Store((s) => s.openSftp)
     const openShell = useV2Store((s) => s.openShell)
+    const saveSshHost = useV2Store((s) => s.saveSshHost)
+    const deleteSshHost = useV2Store((s) => s.deleteSshHost)
     const openCtx = useV2Store((s) => s.openCtx)
+    const [form, setForm] = useState<SshHostFormState | null>(null)
+
+    const renderForm = () => {
+        if (!form) return null
+        const submit = (event: FormEvent) => {
+            event.preventDefault()
+            const draft = sshDraftFromForm(form)
+            if (!draft) {
+                setForm({ ...form, error: "Use user@hostname[:port]" })
+                return
+            }
+            void saveSshHost(draft).then(() => setForm(null))
+        }
+        return (
+            <form className="yz2-ssh-form" onSubmit={submit}>
+                <label>
+                    <span>Name</span>
+                    <input
+                        aria-label="SSH host name"
+                        value={form.name}
+                        onChange={(event) => setForm({ ...form, name: event.currentTarget.value, error: null })}
+                    />
+                </label>
+                <label>
+                    <span>Target</span>
+                    <input
+                        aria-label="SSH target"
+                        placeholder="deploy@edge.example.com:22"
+                        value={form.target}
+                        onChange={(event) => setForm({ ...form, target: event.currentTarget.value, error: null })}
+                    />
+                </label>
+                <label>
+                    <span>Remote path</span>
+                    <input
+                        aria-label="Default remote path"
+                        value={form.remotePath}
+                        onChange={(event) => setForm({ ...form, remotePath: event.currentTarget.value, error: null })}
+                    />
+                </label>
+                <label>
+                    <span>Auth</span>
+                    <select
+                        aria-label="SSH auth"
+                        value={form.authKind}
+                        onChange={(event) => setForm({ ...form, authKind: event.currentTarget.value as RemoteAuthKind, error: null })}
+                    >
+                        <option value="Agent">Agent</option>
+                        <option value="Password">Password</option>
+                        <option value="Key">Key</option>
+                    </select>
+                </label>
+                {form.authKind === "Password" ? (
+                    <label>
+                        <span>Password</span>
+                        <input
+                            aria-label="SSH password"
+                            type="password"
+                            value={form.password}
+                            onChange={(event) => setForm({ ...form, password: event.currentTarget.value, error: null })}
+                        />
+                    </label>
+                ) : null}
+                {form.authKind === "Key" ? (
+                    <>
+                        <label>
+                            <span>Key path</span>
+                            <input
+                                aria-label="SSH key path"
+                                value={form.keyPath}
+                                onChange={(event) => setForm({ ...form, keyPath: event.currentTarget.value, error: null })}
+                            />
+                        </label>
+                        <label>
+                            <span>Passphrase</span>
+                            <input
+                                aria-label="SSH key passphrase"
+                                type="password"
+                                value={form.keyPassphrase}
+                                onChange={(event) => setForm({ ...form, keyPassphrase: event.currentTarget.value, error: null })}
+                            />
+                        </label>
+                    </>
+                ) : null}
+                {form.error ? <div className="yz2-ssh-form-error">{form.error}</div> : null}
+                <div className="yz2-ssh-form-actions">
+                    <button type="submit" className="yz2-btn-accent" aria-label="Save SSH host">Save</button>
+                    <button type="button" className="yz2-btn-ghost" onClick={() => setForm(null)}>Cancel</button>
+                </div>
+            </form>
+        )
+    }
 
     if (!hosts.length) {
         return (
             <>
-                <div className="yz2-sec-label">SSH · SFTP</div>
+                <div className="yz2-sec-head">
+                    <span className="yz2-sec-label">SSH · SFTP</span>
+                    <button type="button" className="yz2-db-add-mini" aria-label="+ 新增 SSH Host" onClick={() => setForm(emptySshHostForm())}>
+                        +
+                    </button>
+                </div>
+                {renderForm()}
                 <div className="yz2-panel-note">No SSH hosts saved for this project.</div>
             </>
         )
     }
     return (
         <>
-            <div className="yz2-sec-label">SSH · SFTP</div>
+            <div className="yz2-sec-head">
+                <span className="yz2-sec-label">SSH · SFTP</span>
+                <button type="button" className="yz2-db-add-mini" aria-label="+ 新增 SSH Host" onClick={() => setForm(emptySshHostForm())}>
+                    +
+                </button>
+            </div>
+            {renderForm()}
             {hosts.map((h) => (
                 <div
                     key={h.label}
@@ -379,11 +561,35 @@ function SshBody() {
                     <div className="row1">
                         <span className="d" style={{ background: h.live ? "var(--yz-a8e23f)" : "var(--yz-3d4654)" }} />
                         <span className="lbl">{h.label}</span>
+                        {h.hostId ? (
+                            <button
+                                type="button"
+                                className="yz2-host-forget"
+                                aria-label={"Forget " + h.label}
+                                title="Forget host"
+                                onClick={() => void deleteSshHost(h.hostId!)}
+                            >
+                                ×
+                            </button>
+                        ) : null}
                     </div>
                     <div className="sub">{h.sub}</div>
                     <div className="acts">
                         <button type="button" className="yz2-btn-accent" onClick={() => openSftp(h)}>⇅ SFTP</button>
                         <button type="button" className="yz2-btn-ghost" onClick={() => openShell(h)}>❯ Shell</button>
+                        {h.hostId ? (
+                            <button
+                                type="button"
+                                className="yz2-btn-ghost"
+                                aria-label={"Edit " + h.label}
+                                onClick={() => {
+                                    const profile = profiles.find((item) => item.id === h.hostId)
+                                    setForm(profile ? sshHostFormFromProfile(profile) : { ...emptySshHostForm(), id: h.hostId, target: h.label, remotePath: h.remotePath ?? "/" })
+                                }}
+                            >
+                                Edit
+                            </button>
+                        ) : null}
                     </div>
                 </div>
             ))}

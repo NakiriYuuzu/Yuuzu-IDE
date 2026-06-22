@@ -168,4 +168,105 @@ describe("SidePanel", () => {
 
         expect(calls).toEqual([[]])
     })
+
+    test("ssh panel creates and forgets host profiles", async () => {
+        const saveCalls: unknown[] = []
+        const deleteCalls: string[] = []
+        const previousSaveSshHost = (v2Store.getState() as any).saveSshHost
+        const previousDeleteSshHost = (v2Store.getState() as any).deleteSshHost
+        restoreActions = () => {
+            v2Store.setState({
+                saveSshHost: previousSaveSshHost,
+                deleteSshHost: previousDeleteSshHost,
+            } as any)
+        }
+        act(() => {
+            v2Store.setState((s) => ({
+                active: "api",
+                saveSshHost: async (input: unknown) => {
+                    saveCalls.push(input)
+                },
+                deleteSshHost: async (profileId: string) => {
+                    deleteCalls.push(profileId)
+                },
+                ui: {
+                    ...s.ui,
+                    api: {
+                        ...s.ui.api,
+                        fn: "ssh",
+                        sshHosts: [],
+                        sshProfiles: [],
+                    },
+                },
+            } as any))
+        })
+
+        const view = render(<SidePanel />)
+
+        fireEvent.click(view.getByRole("button", { name: "+ 新增 SSH Host" }))
+        fireEvent.change(view.getByLabelText("SSH target"), { target: { value: "deploy@edge.example.com:2222" } })
+        fireEvent.change(view.getByLabelText("Default remote path"), { target: { value: "/srv/app" } })
+        await act(async () => {
+            fireEvent.click(view.getByRole("button", { name: "Save SSH host" }))
+        })
+
+        expect(saveCalls).toEqual([{
+            name: "edge.example.com",
+            host: "edge.example.com",
+            port: 2222,
+            username: "deploy",
+            auth_kind: "Agent",
+            default_remote_path: "/srv/app",
+            keepalive_seconds: 30,
+            connect_timeout_seconds: 10,
+        }])
+
+        act(() => {
+            v2Store.setState((s) => ({
+                ui: {
+                    ...s.ui,
+                    api: {
+                        ...s.ui.api,
+                        sshHosts: [{ label: "deploy@edge.example.com", sub: "edge · port 2222", live: false, hostId: "host-1", remotePath: "/srv/app" }],
+                        sshProfiles: [{
+                            id: "host-1",
+                            workspace_root: "/ws/api",
+                            name: "edge",
+                            host: "edge.example.com",
+                            port: 2222,
+                            username: "deploy",
+                            auth: "Agent",
+                            default_remote_path: "/srv/app",
+                            keepalive_seconds: 30,
+                            connect_timeout_seconds: 10,
+                            created_ms: 1,
+                            updated_ms: 2,
+                        }],
+                    },
+                },
+            }))
+        })
+
+        fireEvent.click(view.getByRole("button", { name: "Edit deploy@edge.example.com" }))
+        expect((view.getByLabelText("SSH target") as HTMLInputElement).value).toBe("deploy@edge.example.com:2222")
+        fireEvent.change(view.getByLabelText("Default remote path"), { target: { value: "/opt/app" } })
+        await act(async () => {
+            fireEvent.click(view.getByRole("button", { name: "Save SSH host" }))
+        })
+        expect(saveCalls[saveCalls.length - 1]).toEqual({
+            id: "host-1",
+            name: "edge",
+            host: "edge.example.com",
+            port: 2222,
+            username: "deploy",
+            auth_kind: "Agent",
+            default_remote_path: "/opt/app",
+            keepalive_seconds: 30,
+            connect_timeout_seconds: 10,
+        })
+
+        fireEvent.click(view.getByRole("button", { name: "Forget deploy@edge.example.com" }))
+
+        expect(deleteCalls).toEqual(["host-1"])
+    })
 })

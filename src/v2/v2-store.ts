@@ -10,6 +10,7 @@ import type { BrowserPreviewBounds } from "../features/browser/browser-model"
 import type { FileVersion } from "../features/files/file-model"
 import type { ConnectionTestResult, DatabaseProfile, DatabaseProfileInput } from "../features/database/database-model"
 import type { LanguageCompletionItem, LanguageHover, LanguageSymbol } from "../features/language/language-model"
+import type { RemoteHostProfileInput } from "../features/remote/remote-model"
 import { evictHlCache } from "./hl-cache"
 import { externallyChangedTabIds } from "./file-watch"
 import { dbProfileToDialog, defaultDbDialogState, newDbDialogState } from "./db-dialog"
@@ -59,6 +60,8 @@ import type {
 
 let demoDbProfileSeq = 0
 
+export type SshHostProfileDraft = Omit<RemoteHostProfileInput, "workspace_root"> & { workspace_root?: string }
+
 function nextDemoDbProfileId(existing: DatabaseProfile[]): string {
     const existingIds = new Set(existing.map((profile) => profile.id))
     let profileId = ""
@@ -106,6 +109,8 @@ export type RealDelegate = {
     dbTestConn: (input: DatabaseProfileInput) => Promise<ConnectionTestResult>
     dbSaveConn: (input: DatabaseProfileInput) => Promise<void>
     dbDeleteConn: (profileId: string) => Promise<void>
+    saveSshHost: (input: SshHostProfileDraft) => Promise<void>
+    deleteSshHost: (profileId: string) => Promise<void>
     sftpOpen: (host: SshHost) => void
     sftpDisconnect: () => void
     sftpReconnect: () => void
@@ -308,6 +313,7 @@ export function defUI(pid: string): ProjectUI {
         dbProfiles: [],
         dbDialog: defaultDbDialogState(),
         sshHosts: hostsFor(pid).map((h) => ({ ...h })),
+        sshProfiles: [],
         treeLoaded: true,
         gitLoaded: true,
         gitDetail: null,
@@ -343,6 +349,7 @@ export function emptyUI(): ProjectUI {
         dbProfiles: [],
         dbDialog: defaultDbDialogState(),
         sshHosts: [],
+        sshProfiles: [],
         treeLoaded: false,
         gitLoaded: false,
         gitDetail: null,
@@ -445,6 +452,8 @@ export type V2State = {
     testDbConn: (input: DatabaseProfileInput) => Promise<ConnectionTestResult | null>
     saveDbConn: (input: DatabaseProfileInput) => Promise<void>
     deleteDbConn: (profileId: string) => Promise<void>
+    saveSshHost: (input: SshHostProfileDraft) => Promise<void>
+    deleteSshHost: (profileId: string) => Promise<void>
     openSftp: (host: SshHost) => void
     sftpDisconnect: () => void
     sftpReconnect: () => void
@@ -1371,6 +1380,33 @@ export function createV2Store() {
                 } catch (error) {
                     const message = error instanceof Error ? error.message : String(error)
                     get().showToast("Delete connection: " + message)
+                }
+            },
+
+            saveSshHost: async (input) => {
+                try {
+                    if (get().mode === "real" && realDelegate) {
+                        await realDelegate.saveSshHost(input)
+                        return
+                    }
+                    get().showToast("SSH host profiles need a real workspace")
+                } catch (error) {
+                    get().showToast("Save SSH host: " + messageFromError(error))
+                }
+            },
+
+            deleteSshHost: async (profileId) => {
+                try {
+                    if (get().mode === "real" && realDelegate) {
+                        await realDelegate.deleteSshHost(profileId)
+                        return
+                    }
+                    upd((p) => {
+                        p.sshHosts = p.sshHosts.filter((host) => host.hostId !== profileId)
+                        p.sshProfiles = p.sshProfiles.filter((profile) => profile.id !== profileId)
+                    })
+                } catch (error) {
+                    get().showToast("Delete SSH host: " + messageFromError(error))
                 }
             },
 

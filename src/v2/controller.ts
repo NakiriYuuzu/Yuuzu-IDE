@@ -81,14 +81,26 @@ import {
 } from "../features/database/database-api"
 import type { ConnectionTestResult, DatabaseProfile, DatabaseProfileInput, DatabaseQueryResult } from "../features/database/database-model"
 import {
+    closeSshTerminalSession,
     connectRemoteHost,
+    deleteRemoteHost,
     disconnectRemoteHost,
     downloadSftpFile,
+    listSshTerminalSessions,
+    listenSshTerminalExit,
+    listenSshTerminalOutput,
     listRemoteHosts,
     listSftpDirectory,
     runRemoteCommand,
+    saveRemoteHost,
+    spawnSshTerminal,
     uploadSftpFile,
+    resizeSshTerminal,
+    writeSshTerminal,
+    type SshTerminalExitEvent,
+    type SshTerminalOutputEvent,
 } from "../features/remote/remote-api"
+import type { RemoteHostProfile } from "../features/remote/remote-model"
 import { captureBrowserPreview, validateBrowserUrl } from "../features/browser/browser-api"
 import type { BrowserPreviewBounds } from "../features/browser/browser-model"
 import { appendDiagnosticEvent, listDiagnosticEvents, metricSnapshot } from "../features/diagnostics/diagnostics-api"
@@ -145,9 +157,10 @@ import {
 } from "./bridge"
 import { detectLineEnding, flattenTree, isHtmlDocumentPath, normalizeEditorContent, serializeEditorContent, tabIsDirty, workspaceBrowserUrlForPath } from "./v2-model"
 import type { FnMode, LineEnding, ProjectUI, SftpPane, SshHost, Tab } from "./v2-model"
-import { registerRealDelegate, settingLimit, v2Store, emptyUI } from "./v2-store"
+import { registerRealDelegate, settingLimit, v2Store, emptyUI, type SshHostProfileDraft } from "./v2-store"
 
 let bootstrapped = false
+const sshTerminalHostBySessionId = new Map<string, string>()
 
 function store() {
     return v2Store.getState()
@@ -678,13 +691,36 @@ async function ensureConnections(pid: string): Promise<void> {
         patchProject(pid, (p) => {
             p.dbProfiles = profiles
             if (!p.dbConns.length) p.dbConns = mapDbProfiles(profiles)
-            if (!p.sshHosts.length) p.sshHosts = mapRemoteHosts(hosts)
+            p.sshProfiles = hosts
+            if (!p.sshHosts.length) p.sshHosts = mapSshHostsPreservingLive(hosts, p.sshHosts)
         })
         // Connections rendered expanded should show their schema right away.
         inspectExpandedDbConns(pid)
     } catch (error) {
         store().showToast("Connections: " + errMsg(error))
     }
+}
+
+function mapSshHostsPreservingLive(profiles: RemoteHostProfile[], existing: SshHost[]): SshHost[] {
+    return mapRemoteHosts(profiles).map((host) => {
+        const current = existing.find((item) => item.hostId === host.hostId)
+        return current ? { ...host, live: current.live } : host
+    })
+}
+
+async function reloadSshHosts(pid: string): Promise<RemoteHostProfile[]> {
+    const root = rootOf(pid)
+    if (!root) return []
+    const profiles = await listRemoteHosts(root)
+    patchProject(pid, (p) => {
+        const ids = new Set(profiles.map((profile) => profile.id))
+        p.sshProfiles = profiles
+        p.sshHosts = mapSshHostsPreservingLive(profiles, p.sshHosts)
+        if (p.sftp.hostId && !ids.has(p.sftp.hostId)) {
+            p.sftp = { ...p.sftp, connected: false, loading: false }
+        }
+    })
+    return profiles
 }
 
 function inspectExpandedDbConns(pid: string): void {
@@ -772,15 +808,30 @@ async function spawnSession(pid: string, name: string): Promise<{ sessionId: str
 }
 
 export function writeToSession(sessionId: string, data: string): void {
+    if (sshTerminalHostBySessionId.has(sessionId)) {
+        void writeSshTerminal(sessionId, data).catch(() => {})
+        return
+    }
     void writeTerminalSession(sessionId, data).catch(() => {})
 }
 
 export function resizeSession(sessionId: string, rows: number, cols: number): void {
+    if (sshTerminalHostBySessionId.has(sessionId)) {
+        void resizeSshTerminal(sessionId, rows, cols).catch(() => {})
+        return
+    }
     void resizeTerminalSession(sessionId, rows, cols).catch(() => {})
 }
 
 export function applyOscTitle(sessionId: string, title: string): void {
     store().applyOscTitle(sessionId, title)
+}
+
+function recordTerminalOutput(sessionId: string, chunk: string): void {
+    for (const title of extractTerminalOscTitles(sessionId, chunk)) {
+        applyOscTitle(sessionId, title)
+    }
+    appendTerminalReplayOutput(sessionId, chunk)
 }
 
 function markSessionExited(sessionId: string): void {
@@ -800,6 +851,81 @@ function markSessionExited(sessionId: string): void {
             }
         }
         return changed ? { ui } : {}
+    })
+}
+
+function setSshHostLive(hostId: string, live: boolean): void {
+    v2Store.setState((s) => {
+        const ui = { ...s.ui }
+        let changed = false
+        for (const pid of Object.keys(ui)) {
+            const p = ui[pid]
+            const nextLive = live ||
+                (p.sftp.hostId === hostId && p.sftp.connected === true) ||
+                p.tabs.some((tab) =>
+                    tab.type === "cmd" &&
+                    tab.sessionId &&
+                    sshTerminalHostBySessionId.get(tab.sessionId) === hostId &&
+                    !tab.exited
+                )
+            if (!p.sshHosts.some((host) => host.hostId === hostId && host.live !== nextLive)) continue
+            changed = true
+            ui[pid] = {
+                ...p,
+                sshHosts: p.sshHosts.map((host) => (host.hostId === hostId ? { ...host, live: nextLive } : host)),
+            }
+        }
+        return changed ? { ui } : {}
+    })
+}
+
+function markSshSessionExited(sessionId: string): void {
+    markSessionExited(sessionId)
+    const hostId = sshTerminalHostBySessionId.get(sessionId)
+    if (hostId) setSshHostLive(hostId, false)
+}
+
+export function handleSshTerminalOutput(event: SshTerminalOutputEvent): void {
+    recordTerminalOutput(event.session_id, event.chunk)
+}
+
+export function handleSshTerminalExit(event: SshTerminalExitEvent): void {
+    markSshSessionExited(event.session_id)
+}
+
+function closeSshSession(sessionId: string): void {
+    void closeSshTerminalSession(sessionId)
+        .then(() => {
+            markSshSessionExited(sessionId)
+            sshTerminalHostBySessionId.delete(sessionId)
+        })
+        .catch(() => {})
+}
+
+export async function restoreSshTerminalSessions(pid: string): Promise<void> {
+    const root = rootOf(pid)
+    if (!root) return
+    const [profiles, sessions] = await Promise.all([
+        listRemoteHosts(root).catch(() => store().ui[pid]?.sshProfiles ?? []),
+        listSshTerminalSessions(pid).catch(() => []),
+    ])
+    const runningSessions = sessions.filter((session) => session.running)
+    patchProject(pid, (p) => {
+        p.sshProfiles = profiles
+        p.sshHosts = mapSshHostsPreservingLive(profiles, p.sshHosts)
+        for (const session of runningSessions) {
+            sshTerminalHostBySessionId.set(session.id, session.host_id)
+            const host = p.sshHosts.find((item) => item.hostId === session.host_id)
+            const title = session.name || host?.label || "SSH"
+            p.sshHosts = p.sshHosts.map((item) => (
+                item.hostId === session.host_id ? { ...item, live: true } : item
+            ))
+            if (!p.tabs.some((tab) => tab.type === "cmd" && tab.sessionId === session.id)) {
+                const nt: Tab = { id: tabId(), type: "cmd", title, sessionId: session.id }
+                p.tabs = [...p.tabs, nt]
+                if (p.activeTab == null) p.activeTab = nt.id
+            }
+        }
     })
 }
 
@@ -1155,7 +1281,9 @@ const delegate = {
                 }).catch(() => {})
             }
         }
-        if (tab.type === "cmd" && tab.sessionId && !tab.exited) {
+        if (tab.type === "cmd" && tab.sessionId && !tab.exited && sshTerminalHostBySessionId.has(tab.sessionId)) {
+            closeSshSession(tab.sessionId)
+        } else if (tab.type === "cmd" && tab.sessionId && !tab.exited) {
             void closeTerminalSession(tab.sessionId).catch(() => {})
         }
         if (tab.type === "db") lastDbResults.delete(tab.id)
@@ -1214,15 +1342,30 @@ const delegate = {
     openShell(host: SshHost) {
         const pid = store().active
         void (async () => {
-            const spawned = await spawnSession(pid, host.label)
-            if (!spawned) return
-            patchProject(pid, (q) => {
-                const nt: Tab = { id: tabId(), type: "cmd", title: host.label, sessionId: spawned.sessionId }
-                q.tabs = [...q.tabs, nt]
-                q.activeTab = nt.id
-                if (q.fn === "agent") q.fn = "ssh"
-            })
-            writeToSession(spawned.sessionId, "ssh " + host.label + "\r")
+            const root = rootOf(pid)
+            if (!root || !host.hostId) {
+                store().showToast("SSH needs a saved host profile")
+                return
+            }
+            try {
+                const spawned = await spawnSshTerminal({
+                    workspaceId: pid,
+                    workspaceRoot: root,
+                    profileId: host.hostId,
+                    rows: 24,
+                    cols: 80,
+                })
+                sshTerminalHostBySessionId.set(spawned.id, host.hostId)
+                patchProject(pid, (q) => {
+                    const nt: Tab = { id: tabId(), type: "cmd", title: host.label, sessionId: spawned.id }
+                    q.tabs = [...q.tabs, nt]
+                    q.activeTab = nt.id
+                    q.sshHosts = q.sshHosts.map((item) => (item.hostId === host.hostId ? { ...item, live: true } : item))
+                    if (q.fn === "agent") q.fn = "ssh"
+                })
+            } catch (error) {
+                store().showToast("SSH: " + errMsg(error))
+            }
         })()
     },
 
@@ -1346,6 +1489,24 @@ const delegate = {
         await deleteDatabaseProfile(root, profileId)
         await reloadDatabaseProfiles(pid)
         store().showToast("Deleted database connection")
+    },
+
+    async saveSshHost(input: SshHostProfileDraft): Promise<void> {
+        const pid = store().active
+        const root = rootOf(pid)
+        if (!root) return
+        await saveRemoteHost({ ...input, workspace_root: root })
+        await reloadSshHosts(pid)
+        store().showToast("Saved SSH host " + input.name)
+    },
+
+    async deleteSshHost(profileId: string): Promise<void> {
+        const pid = store().active
+        const root = rootOf(pid)
+        if (!root) return
+        await deleteRemoteHost(root, profileId)
+        await reloadSshHosts(pid)
+        store().showToast("Deleted SSH host")
     },
 
     // ------------------------------------------------------------ editor
@@ -1588,8 +1749,8 @@ const delegate = {
                 patchProject(pid, (p) => {
                     if (p.sftp.hostId !== hostId) return
                     p.sftp = { ...p.sftp, connected: false, loading: false }
-                    p.sshHosts = p.sshHosts.map((h) => (h.hostId === hostId ? { ...h, live: false } : h))
                 })
+                setSshHostLive(hostId, false)
                 if (store().ui[pid]?.sftp.hostId === hostId) {
                     store().showToast("Disconnected " + (sf.host ?? "SFTP"))
                 }
@@ -2919,6 +3080,11 @@ const delegate = {
     },
 
     termKill(sessionId: string) {
+        if (sshTerminalHostBySessionId.has(sessionId)) {
+            closeSshSession(sessionId)
+            logDiag("info", "terminal", "killed ssh session")
+            return
+        }
         void closeTerminalSession(sessionId).catch(() => {})
         logDiag("info", "terminal", "killed session")
     },
@@ -2955,15 +3121,12 @@ export async function bootstrapV2(): Promise<void> {
     registerRealDelegate(delegate)
     v2Store.setState({ mode: "real", order: [], active: "", meta: {}, ui: {} })
 
-    void onTerminalOutput((event) => {
-        for (const title of extractTerminalOscTitles(event.session_id, event.chunk)) {
-            applyOscTitle(event.session_id, title)
-        }
-        appendTerminalReplayOutput(event.session_id, event.chunk)
-    })
+    void onTerminalOutput((event) => recordTerminalOutput(event.session_id, event.chunk))
     void onTerminalExit((event) => {
         markSessionExited(event.session_id)
     })
+    void listenSshTerminalOutput(handleSshTerminalOutput)
+    void listenSshTerminalExit(handleSshTerminalExit)
 
     try {
         await loadRegistry(true)
@@ -2972,5 +3135,5 @@ export async function bootstrapV2(): Promise<void> {
         return
     }
     const pid = store().active
-    if (pid) void ensureActiveProjectData(pid)
+    if (pid) void ensureActiveProjectData(pid).then(() => restoreSshTerminalSessions(pid))
 }
