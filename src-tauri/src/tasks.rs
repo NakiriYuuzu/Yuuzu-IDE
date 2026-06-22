@@ -14,6 +14,8 @@ use std::{
 };
 use tauri::{AppHandle, Emitter};
 
+use crate::background_process::background_command;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct WorkspaceTask {
     pub id: String,
@@ -211,7 +213,7 @@ fn shell_command_spec(command: &str) -> ShellCommandSpec {
 
 fn task_command(command: &str, cwd: &Path) -> Command {
     let spec = shell_command_spec(command);
-    let mut task = Command::new(spec.program);
+    let mut task = background_command(spec.program);
     task.args(spec.args)
         .current_dir(cwd)
         .stdout(Stdio::piped())
@@ -577,7 +579,7 @@ fn unix_process_group_signal_target(process_group_id: u32) -> String {
 
 #[cfg(windows)]
 fn kill_process(process: &TaskProcess) -> Result<(), String> {
-    let status = Command::new("taskkill")
+    let status = background_command("taskkill")
         .args(["/PID", &process.pid.to_string(), "/T", "/F"])
         .status()
         .map_err(|err| err.to_string())?;

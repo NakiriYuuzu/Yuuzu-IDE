@@ -5,6 +5,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+use crate::background_process::background_command;
+
 pub const GIT_DIFF_LIMIT_BYTES: usize = 240 * 1024;
 const DIFF_TRUNCATED_MARKER: &str = "... diff truncated ...\n";
 
@@ -93,7 +95,7 @@ pub fn diff_file(workspace_root: &Path, path: &str, staged: bool) -> Result<GitD
         .first()
         .ok_or_else(|| "git diff path is required".to_string())?;
 
-    let mut command = Command::new("git");
+    let mut command = background_command("git");
     command.env("GIT_LITERAL_PATHSPECS", "1");
     command.arg("-C").arg(&repository_root).arg("diff");
     if staged {
@@ -506,7 +508,7 @@ pub(crate) fn require_confirmation(actual: &str, expected: &str) -> Result<(), S
 }
 
 fn git_command(repository_root: &Path) -> Command {
-    let mut command = Command::new("git");
+    let mut command = background_command("git");
     command.arg("-C").arg(repository_root);
     command
 }
@@ -525,7 +527,7 @@ fn run_git<'a, I>(working_dir: &Path, args: I) -> Result<Vec<u8>, String>
 where
     I: IntoIterator<Item = &'a &'a str>,
 {
-    let output = Command::new("git")
+    let output = background_command("git")
         .arg("-C")
         .arg(working_dir)
         .args(args)
@@ -540,7 +542,7 @@ where
 }
 
 pub(crate) fn run_git_in(working_dir: &Path, args: &[String]) -> Result<Vec<u8>, String> {
-    let output = Command::new("git")
+    let output = background_command("git")
         .arg("-C")
         .arg(working_dir)
         .args(args)
@@ -1879,7 +1881,7 @@ pub(crate) mod tests {
         repo.write_file("f.txt", "ours\n");
         repo.run(["add", "."]);
         repo.run(["commit", "-m", "ours"]);
-        let merge = std::process::Command::new("git")
+        let merge = background_command("git")
             .arg("-C")
             .arg(repo.path())
             .args(["merge", "feat"])
@@ -1935,7 +1937,7 @@ pub(crate) mod tests {
         }
 
         pub(crate) fn run<const N: usize>(&self, args: [&str; N]) {
-            let output = std::process::Command::new("git")
+            let output = background_command("git")
                 .arg("-C")
                 .arg(self.path())
                 .args(args)
@@ -1958,7 +1960,7 @@ pub(crate) mod tests {
     }
 
     fn run_git_test_command(repo: &Path, args: &[&str]) {
-        let output = Command::new("git")
+        let output = background_command("git")
             .arg("-C")
             .arg(repo)
             .args(args)

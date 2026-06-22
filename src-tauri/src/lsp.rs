@@ -3,7 +3,7 @@ use std::{
     ffi::{OsStr, OsString},
     io::{ErrorKind, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, Command, Stdio},
+    process::{Child, ChildStdin, Stdio},
     sync::{
         mpsc::{self, RecvTimeoutError, TryRecvError},
         Arc, Mutex,
@@ -15,6 +15,8 @@ use std::{
 use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::background_process::background_command;
 
 const DEFAULT_LSP_REQUEST_TIMEOUT_MS: u64 = 10_000;
 const INTERACTIVE_LSP_REQUEST_TIMEOUT_MS: u64 = 2_000;
@@ -642,7 +644,7 @@ struct StdioTransport {
 impl StdioTransport {
     fn new(profile: &LanguageServerProfile) -> Result<Self, String> {
         let path_env = lsp_child_path_env();
-        let mut command = Command::new(resolve_lsp_command_path_with_path(
+        let mut command = background_command(resolve_lsp_command_path_with_path(
             &profile.command,
             &path_env,
         ));

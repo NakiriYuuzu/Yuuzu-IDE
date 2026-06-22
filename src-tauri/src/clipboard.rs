@@ -1,7 +1,6 @@
-use std::{
-    io::Write,
-    process::{Command, Stdio},
-};
+use std::{io::Write, process::Stdio};
+
+use crate::background_process::background_command;
 
 pub fn write_text(text: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
@@ -28,7 +27,7 @@ pub fn write_text(text: &str) -> Result<(), String> {
 }
 
 fn write_text_with_command(program: &str, args: &[&str], text: &str) -> Result<(), String> {
-    let mut child = Command::new(program)
+    let mut child = background_command(program)
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())

@@ -14,6 +14,8 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
+use crate::background_process::background_command;
+
 pub const DEBUG_LOG_LIMIT: usize = 120_000;
 pub const DAP_MESSAGE_BODY_LIMIT: usize = 120_000;
 pub const DEBUG_SESSION_EVENT: &str = "workspace://debug-session";
@@ -1798,7 +1800,7 @@ mod real_adapter {
 
     impl DapClient {
         fn spawn(program: String, args: Vec<String>, cwd: &Path) -> Result<Self, String> {
-            let mut command = Command::new(&program);
+            let mut command = background_command(&program);
             command
                 .args(&args)
                 .current_dir(cwd)
