@@ -1749,6 +1749,11 @@ pub async fn browser_capture_preview(
 }
 
 #[tauri::command]
+pub async fn write_clipboard_text(text: String) -> Result<(), String> {
+    run_blocking(move || crate::clipboard::write_text(&text)).await
+}
+
+#[tauri::command]
 pub async fn git_status(
     state: State<'_, AppState>,
     workspace_root: String,
@@ -2384,6 +2389,16 @@ pub fn create_text_file(
 ) -> Result<FileOperationResult, String> {
     let workspace_root = state.trusted_workspace_root(&workspace_root)?;
     file_system::create_text_file(&workspace_root, &relative_path)
+}
+
+#[tauri::command]
+pub fn create_directory(
+    state: State<'_, AppState>,
+    workspace_root: String,
+    relative_path: String,
+) -> Result<FileOperationResult, String> {
+    let workspace_root = state.trusted_workspace_root(&workspace_root)?;
+    file_system::create_directory(&workspace_root, &relative_path)
 }
 
 #[tauri::command]

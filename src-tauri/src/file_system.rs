@@ -311,6 +311,23 @@ pub fn create_text_file(
     })
 }
 
+pub fn create_directory(
+    workspace_root: &Path,
+    relative_path: &str,
+) -> Result<FileOperationResult, String> {
+    let path = workspace_child(
+        workspace_root,
+        Path::new(relative_path),
+        PathResolution::LexicalContained,
+    )?;
+    fs::create_dir(&path).map_err(|err| err.to_string())?;
+
+    Ok(FileOperationResult {
+        version: None,
+        path,
+    })
+}
+
 pub fn rename_path(
     workspace_root: &Path,
     path: &Path,
@@ -668,6 +685,10 @@ mod tests {
         let created = super::create_text_file(root.path(), "src/main.ts").expect("create");
         assert!(created.path.ends_with("src/main.ts"));
 
+        let dir = super::create_directory(root.path(), "src/features").expect("create dir");
+        assert!(dir.path.ends_with("src/features"));
+        assert!(dir.path.is_dir());
+
         let renamed = super::rename_path(root.path(), &created.path, "app.ts").expect("rename");
         assert!(renamed.path.ends_with("src/app.ts"));
 
@@ -720,6 +741,36 @@ mod tests {
         };
         assert!(err.contains("outside workspace"));
         assert!(!outside.exists(), "outside file should not be created");
+    }
+
+    #[test]
+    fn create_directory_rejects_normalized_path_outside_workspace() {
+        let root = tempdir().expect("tempdir");
+        let outside_name = format!(
+            "outside-dir-{}",
+            root.path()
+                .file_name()
+                .and_then(|value| value.to_str())
+                .expect("tempdir name")
+        );
+        let outside = root
+            .path()
+            .parent()
+            .expect("tempdir parent")
+            .join(&outside_name);
+        assert!(!outside.exists(), "test outside dir should not preexist");
+
+        let result = super::create_directory(root.path(), &format!("missing/../../{outside_name}"));
+
+        let err = match result {
+            Ok(value) => {
+                let _ = fs::remove_dir_all(&outside);
+                panic!("expected outside workspace error, got {value:?}");
+            }
+            Err(err) => err,
+        };
+        assert!(err.contains("outside workspace"));
+        assert!(!outside.exists(), "outside dir should not be created");
     }
 
     #[cfg(unix)]

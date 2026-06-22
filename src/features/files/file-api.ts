@@ -46,6 +46,16 @@ export function createTextFile(
   });
 }
 
+export function createDirectory(
+  workspaceRoot: string,
+  relativePath: string,
+): Promise<FileOperationResult> {
+  return call<FileOperationResult>("create_directory", {
+    workspaceRoot,
+    relativePath,
+  });
+}
+
 export function renamePath(
   workspaceRoot: string,
   path: string,

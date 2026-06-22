@@ -138,6 +138,7 @@ export type RealDelegate = {
     gitFileHistory: (path: string) => void
     gitExportCommit: (fullHash: string, short: string, scope: GitExportScope, format: GitExportFormat) => void
     gitOpenCommitFileDiff: (fullHash: string, short: string, path: string) => void
+    copyCommitHash: (hash: string) => void
     browserGo: (tabId: number, url: string) => void
     browserCapture: (tabId: number, bounds: BrowserPreviewBounds) => void
     termKill: (sessionId: string) => void
@@ -168,6 +169,18 @@ export function registerRealDelegate(delegate: RealDelegate | null): void {
 let idSeq = 100
 function nextId(): number {
     return ++idSeq
+}
+
+function messageFromError(error: unknown): string {
+    if (error instanceof Error) return error.message
+    if (typeof error === "string") return error
+    return String(error)
+}
+
+async function writeBrowserClipboardText(text: string): Promise<void> {
+    const clipboard = navigator.clipboard
+    if (!clipboard?.writeText) throw new Error("clipboard API unavailable")
+    await clipboard.writeText(text)
 }
 
 function mkWin(title: string, status: string, lines: string[]): AzWindow {
@@ -1828,12 +1841,13 @@ export function createV2Store() {
                 const c = get().ui[get().active].git.commits[idx]
                 if (!c) return
                 const hash = c.fullHash ?? c.h
-                try {
-                    void navigator.clipboard?.writeText(hash)
-                } catch {
-                    // clipboard is best-effort
+                if (get().mode === "real") {
+                    realDelegate?.copyCommitHash(hash)
+                    return
                 }
-                get().showToast("Copied " + hash)
+                void writeBrowserClipboardText(hash)
+                    .then(() => get().showToast("Copied " + hash))
+                    .catch((error) => get().showToast("Copy hash failed: " + messageFromError(error)))
             },
 
             gitSync: (op) => {

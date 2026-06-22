@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod browser_preview;
+mod clipboard;
 mod commands;
 pub mod database;
 pub mod debug;
@@ -183,9 +184,11 @@ pub fn run() {
             commands::browser_validate_url,
             commands::browser_capture_preview,
             commands::metric_snapshot,
+            commands::write_clipboard_text,
             commands::read_text_file,
             commands::write_text_file,
             commands::create_text_file,
+            commands::create_directory,
             commands::rename_path,
             commands::delete_path
         ])

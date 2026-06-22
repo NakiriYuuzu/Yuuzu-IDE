@@ -12,7 +12,8 @@ import {
     scanWorkspace,
     switchWorkspace,
 } from "../features/workspace/workspace-api"
-import { createTextFile, deletePath, readTextFile, writeTextFile } from "../features/files/file-api"
+import { createDirectory, createTextFile, deletePath, readTextFile, writeTextFile } from "../features/files/file-api"
+import { writeClipboardText } from "../features/clipboard/clipboard-api"
 import { evictHlCache } from "./hl-cache"
 import { externallyChangedTabIds, normalizeFsPath, treeRefreshTarget, mergeTreeChildren } from "./file-watch"
 import type { FileVersion } from "../features/files/file-model"
@@ -65,6 +66,7 @@ import {
     unstageGitPaths,
     unstageGitHunks,
 } from "../features/git/git-api"
+import { shouldRefreshGitAfterFileEvent } from "../features/git/git-model"
 import type { HunkSelection } from "../features/git/git-diff-model"
 import type { GitExportFormat, GitExportScope, GitResetMode } from "../features/git/git-log-model"
 import {
@@ -171,6 +173,23 @@ function errMsg(error: unknown): string {
     return String(error)
 }
 
+function promptForNodeName(kind: "file" | "dir"): string | null {
+    const label = kind === "file" ? "New file name:" : "New folder name:"
+    const fallback = kind === "file" ? "untitled.ts" : "new-folder"
+    const value = window.prompt(label, fallback)
+    if (value === null) return null
+    const trimmed = value.trim()
+    if (!trimmed) {
+        store().showToast("Name is required")
+        return null
+    }
+    if (trimmed.includes("/") || trimmed.includes("\\")) {
+        store().showToast("Name must be a single path segment")
+        return null
+    }
+    return trimmed
+}
+
 function remoteCommandToast(command: string, exitCode: number | null, stdout: string, stderr: string): string {
     const output = (stdout.trim() || stderr.trim() || "(no output)").replace(/\s+/g, " ")
     const preview = output.length > 120 ? output.slice(0, 117) + "..." : output
@@ -250,6 +269,7 @@ const backupTimers = new Map<number, ReturnType<typeof setTimeout>>()
 // bulk git operations so the explorer re-scans each affected dir at most once.
 const treeSyncPending = new Map<string, Set<string>>()
 const treeSyncTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const gitReloadTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 async function syncTreeDir(pid: string, displayDir: string): Promise<void> {
     const root = rootOf(pid)
@@ -295,6 +315,23 @@ function scheduleTreeSync(pid: string, displayDir: string): void {
         for (const dir of dirs) void syncTreeDir(pid, dir)
     }, 120)
     treeSyncTimers.set(pid, timer)
+}
+
+function scheduleGitReload(pid: string): void {
+    if (!rootOf(pid)) return
+    const existing = gitReloadTimers.get(pid)
+    if (existing) clearTimeout(existing)
+    const timer = setTimeout(() => {
+        gitReloadTimers.delete(pid)
+        void reloadGit(pid)
+    }, 160)
+    gitReloadTimers.set(pid, timer)
+}
+
+function relativeWatchPath(workspaceRoot: string, eventPath: string): string {
+    const root = normalizeFsPath(workspaceRoot)
+    const path = normalizeFsPath(eventPath)
+    return path.startsWith(root + "/") ? path.slice(root.length + 1) : path
 }
 
 const lspChangeTimers = new Map<number, ReturnType<typeof setTimeout>>()
@@ -1111,28 +1148,29 @@ const delegate = {
     },
 
     addNode(dirPath: string, kind: "file" | "dir") {
-        if (kind === "dir") {
-            store().showToast("New folder — create a file inside it to materialise the folder")
-            return
-        }
         const pid = store().active
         const root = rootOf(pid)
         if (!root) return
+        const name = promptForNodeName(kind)
+        if (name === null) return
+        const siblings = dirPath
+            ? findNode(store().ui[pid].treeData, dirPath)?.d ?? []
+            : store().ui[pid].treeData
+        if (siblings.find((n) => n.n === name)) {
+            store().showToast("Name already exists: " + name)
+            return
+        }
+        const rel = dirPath ? dirPath + "/" + name : name
         void (async () => {
             try {
-                let name = "untitled.ts"
-                let i = 2
-                const siblings = dirPath
-                    ? findNode(store().ui[pid].treeData, dirPath)?.d ?? []
-                    : store().ui[pid].treeData
-                while (siblings.find((n) => n.n === name)) name = "untitled-" + i++ + ".ts"
-                const rel = dirPath ? dirPath + "/" + name : name
-                await createTextFile(root, rel)
+                if (kind === "dir") await createDirectory(root, rel)
+                else await createTextFile(root, rel)
                 await refreshDir(pid, dirPath)
-                store().showToast("Created file " + rel)
-                delegate.openFile(rel)
+                scheduleGitReload(pid)
+                store().showToast("Created " + (kind === "dir" ? "folder " : "file ") + rel)
+                if (kind === "file") delegate.openFile(rel)
             } catch (error) {
-                store().showToast("New file: " + errMsg(error))
+                store().showToast("New " + (kind === "dir" ? "folder" : "file") + ": " + errMsg(error))
             }
         })()
     },
@@ -1143,34 +1181,49 @@ const delegate = {
         if (!root) return
         const node = findNode(store().ui[pid].treeData, displayPath)
         const target = node?.p ?? displayPath
-        void (async () => {
-            try {
-                await deletePath(root, target)
-                const parent = displayPath.includes("/")
-                    ? displayPath.slice(0, displayPath.lastIndexOf("/"))
-                    : ""
-                await refreshDir(pid, parent)
-                const goneIds = (store().ui[pid]?.tabs ?? [])
-                    .filter((t) => t.path && (t.path === displayPath || t.path.startsWith(displayPath + "/")))
-                    .map((t) => t.id)
-                patchProject(pid, (q) => {
-                    q.tabs = q.tabs.filter(
-                        (t) => !(t.path && (t.path === displayPath || t.path.startsWith(displayPath + "/"))),
-                    )
-                    if (!q.tabs.find((t) => t.id === q.activeTab)) q.activeTab = q.tabs[0]?.id ?? null
-                    if (q.split && !q.tabs.find((t) => t.id === q.split)) q.split = null
-                })
-                for (const id of goneIds) evictHlCache(id)
-                store().showToast("Deleted " + displayPath)
-            } catch (error) {
-                store().showToast("Delete: " + errMsg(error))
-            }
-        })()
+        store().openConfirm({
+            title: "Delete " + displayPath,
+            body: "Delete " + displayPath + " from this workspace? This cannot be undone from Yuuzu-IDE.",
+            label: "Delete",
+            danger: true,
+            action: () => {
+                void (async () => {
+                    try {
+                        await deletePath(root, target)
+                        const parent = displayPath.includes("/")
+                            ? displayPath.slice(0, displayPath.lastIndexOf("/"))
+                            : ""
+                        await refreshDir(pid, parent)
+                        scheduleGitReload(pid)
+                        const goneIds = (store().ui[pid]?.tabs ?? [])
+                            .filter((t) => t.path && (t.path === displayPath || t.path.startsWith(displayPath + "/")))
+                            .map((t) => t.id)
+                        patchProject(pid, (q) => {
+                            q.tabs = q.tabs.filter(
+                                (t) => !(t.path && (t.path === displayPath || t.path.startsWith(displayPath + "/"))),
+                            )
+                            if (!q.tabs.find((t) => t.id === q.activeTab)) q.activeTab = q.tabs[0]?.id ?? null
+                            if (q.split && !q.tabs.find((t) => t.id === q.split)) q.split = null
+                        })
+                        for (const id of goneIds) evictHlCache(id)
+                        store().showToast("Deleted " + displayPath)
+                    } catch (error) {
+                        store().showToast("Delete: " + errMsg(error))
+                    }
+                })()
+            },
+        })
     },
 
     selectCommit(hash: string) {
         const pid = store().active
         void selectCommitInProject(pid, hash)
+    },
+
+    copyCommitHash(hash: string) {
+        void writeClipboardText(hash)
+            .then(() => store().showToast("Copied " + hash))
+            .catch((error) => store().showToast("Copy hash failed: " + errMsg(error)))
     },
 
     toggleDbConn(idx: number) {
@@ -1251,6 +1304,7 @@ const delegate = {
                     }).catch(() => {})
                 }
                 store().showToast("✓ saved " + (tab.path ?? tab.realPath))
+                scheduleGitReload(pid)
                 logDiag("info", "editor", "saved " + (tab.path ?? tab.realPath))
             } catch (error) {
                 patchTab(pid, tabId, (t) => ({ ...t, saving: false }))
@@ -1284,6 +1338,13 @@ const delegate = {
             eventVersion != null
         )
         if (target !== null) scheduleTreeSync(workspaceId, target)
+        if (shouldRefreshGitAfterFileEvent({
+            activeWorkspaceId: store().active,
+            eventWorkspaceId: workspaceId,
+            path: relativeWatchPath(eventWorkspaceRoot, eventPath),
+        })) {
+            scheduleGitReload(workspaceId)
+        }
     },
 
     // ------------------------------------------------------------ database

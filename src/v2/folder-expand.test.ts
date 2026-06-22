@@ -24,6 +24,10 @@ const remoteConnectCalls: any[] = []
 const remoteDisconnectCalls: any[] = []
 const remoteCommandCalls: any[] = []
 const browserCaptureCalls: any[] = []
+const createTextFileCalls: any[] = []
+const createDirectoryCalls: any[] = []
+const deletePathCalls: any[] = []
+const gitStatusCalls: any[] = []
 let workspaceDiagnostics: any[] = []
 let renameEdit: unknown = null
 
@@ -74,6 +78,18 @@ mock.module("@tauri-apps/api/core", () => ({
         }
         if (cmd === "read_text_file") {
             return { path: args.path, content: "disk", version: VERSION, too_large: false }
+        }
+        if (cmd === "create_text_file") {
+            createTextFileCalls.push(args)
+            return { path: args.relativePath, version: VERSION }
+        }
+        if (cmd === "create_directory") {
+            createDirectoryCalls.push(args)
+            return { path: args.relativePath, version: null }
+        }
+        if (cmd === "delete_path") {
+            deletePathCalls.push(args)
+            return null
         }
         if (cmd === "write_text_file") {
             if (blockWrite) {
@@ -216,8 +232,21 @@ mock.module("@tauri-apps/api/core", () => ({
             hunkStageCalls.push(args)
             return null
         }
-        if (cmd === "get_git_status") throw "no git"
-        if (cmd === "get_git_log_page") return { rows: [] }
+        if (cmd === "git_status") {
+            gitStatusCalls.push(args)
+            return {
+                workspace_root: ROOT,
+                repository_root: ROOT,
+                branch: "main",
+                upstream: null,
+                ahead: 0,
+                behind: 0,
+                clean: true,
+                has_conflicts: false,
+                changes: [],
+            }
+        }
+        if (cmd === "git_log_page") return { rows: [], has_more: false, total_loaded: 0, truncated: false }
         if (cmd === "list_database_profiles") return []
         if (cmd === "list_database_query_history") {
             dbHistoryCalls.push(args)
@@ -310,6 +339,10 @@ async function ensureMockWorkspace(): Promise<void> {
     remoteDisconnectCalls.length = 0
     remoteCommandCalls.length = 0
     browserCaptureCalls.length = 0
+    createTextFileCalls.length = 0
+    createDirectoryCalls.length = 0
+    deletePathCalls.length = 0
+    gitStatusCalls.length = 0
     await waitFor(() => Boolean(v2Store.getState().mode))
     v2Store.setState((s) => {
         const base = emptyUI()
@@ -432,6 +465,63 @@ describe("real folder expansion", () => {
         expect(srcNode?.loaded).toBe(true)
         expect(srcNode?.d?.length).toBeGreaterThan(0)
         expect(srcNode?.d?.some((n) => n.n === "v2")).toBe(true)
+    })
+
+    test("creates a named folder through the real delegate and refreshes git", async () => {
+        await ensureMockWorkspace()
+        const originalPrompt = window.prompt
+        window.prompt = () => "feature"
+
+        try {
+            v2Store.getState().addNode("src", "dir")
+
+            await waitFor(() => createDirectoryCalls.length === 1)
+            await waitFor(() => gitStatusCalls.length > 0)
+            expect(createDirectoryCalls[0]).toEqual({ workspaceRoot: ROOT, relativePath: "src/feature" })
+            expect(v2Store.getState().toast).toBe("Created folder src/feature")
+        } finally {
+            window.prompt = originalPrompt
+        }
+    })
+
+    test("creates a named file through the real delegate instead of hardcoded untitled.ts", async () => {
+        await ensureMockWorkspace()
+        const originalPrompt = window.prompt
+        window.prompt = () => "named.ts"
+
+        try {
+            v2Store.getState().addNode("src", "file")
+
+            await waitFor(() => createTextFileCalls.length === 1)
+            expect(createTextFileCalls[0]).toEqual({ workspaceRoot: ROOT, relativePath: "src/named.ts" })
+            expect(createTextFileCalls[0].relativePath).not.toBe("src/untitled.ts")
+        } finally {
+            window.prompt = originalPrompt
+        }
+    })
+
+    test("delete opens a confirmation before removing files and refreshes git after confirmation", async () => {
+        await ensureMockWorkspace()
+
+        v2Store.getState().deleteNode("src/v2")
+
+        expect(deletePathCalls).toEqual([])
+        expect(v2Store.getState().confirm?.title).toBe("Delete src/v2")
+        expect(v2Store.getState().confirm?.danger).toBe(true)
+
+        v2Store.getState().confirm?.action()
+        await waitFor(() => deletePathCalls.length === 1)
+        await waitFor(() => gitStatusCalls.length > 0)
+        expect(deletePathCalls[0]).toEqual({ workspaceRoot: ROOT, path: "src/v2" })
+    })
+
+    test("ignores internal git watcher events instead of refreshing the graph repeatedly", async () => {
+        await ensureMockWorkspace()
+
+        v2Store.getState().markExternalFileChange("demo", ROOT, ROOT + "/.git/index.lock", null)
+        await new Promise((resolve) => setTimeout(resolve, 240))
+
+        expect(gitStatusCalls).toEqual([])
     })
 
     test("database history delegate loads real query history into the tab", async () => {

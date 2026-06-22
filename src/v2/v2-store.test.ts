@@ -781,6 +781,45 @@ describe("git commit", () => {
         expect(store.getState().ui.api.git.branchesFull.some((branch) => branch.name === "topic-renamed")).toBe(false)
     })
 
+    test("copyCommitHash reports clipboard failures instead of claiming success", async () => {
+        const store = freshStore()
+        const originalClipboard = navigator.clipboard
+        Object.defineProperty(navigator, "clipboard", {
+            value: {
+                writeText: () => {
+                    throw new Error("clipboard denied")
+                },
+            },
+            configurable: true,
+        })
+
+        try {
+            store.getState().copyCommitHash(0)
+            await Promise.resolve()
+            await Promise.resolve()
+            expect(store.getState().toast).toBe("Copy hash failed: clipboard denied")
+        } finally {
+            Object.defineProperty(navigator, "clipboard", {
+                value: originalClipboard,
+                configurable: true,
+            })
+        }
+    })
+
+    test("copyCommitHash delegates to the real backend in real mode", () => {
+        const store = freshStore()
+        const calls: string[] = []
+        registerRealDelegate({
+            copyCommitHash: (hash: string) => calls.push(hash),
+        } as any)
+        store.setState({ mode: "real" })
+
+        store.getState().copyCommitHash(0)
+
+        const commit = store.getState().ui.api.git.commits[0]
+        expect(calls).toEqual([commit.fullHash ?? commit.h])
+    })
+
     test("stash panel demo supports stash, apply, pop, drop and branch", () => {
         const store = freshStore()
 
