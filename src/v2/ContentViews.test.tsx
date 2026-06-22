@@ -1,7 +1,7 @@
 /// <reference types="bun-types" />
 
 import { afterEach, describe, expect, test } from "bun:test"
-import { cleanup, fireEvent, render } from "@testing-library/react"
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react"
 
 import { ensureTestDom } from "../test/test-dom"
 import { BrowserView, EditorView } from "./ContentViews"
@@ -449,6 +449,45 @@ describe("EditorView", () => {
         await Promise.resolve()
 
         expect(view.container.querySelector(".cm-editor")).toBe(editor)
+    })
+
+    test("CodeMirror does not mark CRLF disk content dirty on mount", async () => {
+        const calls: unknown[][] = []
+        registerRealDelegate({
+            backupTab: (...args: unknown[]) => calls.push(["backup", ...args]),
+            lspChange: (...args: unknown[]) => calls.push(["change", ...args]),
+        } as any)
+        const tab = {
+            id: 9203,
+            type: "file" as const,
+            name: "win.ts",
+            path: "src/win.ts",
+            realPath: "C:\\repo\\src\\win.ts",
+            content: "const alpha = 1\r\nconst beta = 2\r\n",
+            savedContent: "const alpha = 1\r\nconst beta = 2\r\n",
+            lineEnding: "crlf" as const,
+            savedLineEnding: "crlf" as const,
+            contentLang: "ts",
+        }
+        v2Store.setState((s) => ({
+            mode: "real",
+            stVals: { ...s.stVals, editorEngine: "codemirror" },
+            active: "api",
+            ui: {
+                ...s.ui,
+                api: { ...s.ui.api, tabs: [tab], activeTab: tab.id },
+            },
+        }))
+
+        render(<EditorView tab={tab as Tab} />)
+
+        await waitFor(() => {
+            const now = v2Store.getState().ui.api.tabs.find((item) => item.id === tab.id)!
+            expect(now.content).toBe("const alpha = 1\nconst beta = 2\n")
+            expect(now.savedContent).toBe("const alpha = 1\nconst beta = 2\n")
+            expect(now.dirty).toBe(false)
+        })
+        expect(calls).toEqual([])
     })
 })
 

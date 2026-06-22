@@ -245,6 +245,10 @@ Do not silently convert a one-off lesson into a permanent rule.
 - Frontend tests use Bun's test runner with Happy DOM preloaded by `bunfig.toml`.
 - Rust tests live inline in `src-tauri/src/*.rs` and run through
   `src-tauri/Cargo.toml`.
+- Windows path, URI, drive-letter, or `\\?\` verbatim-prefix fixes need focused
+  Windows regression coverage when practical. macOS host results are not
+  authoritative for those bugs; call out when a Windows runner or Windows
+  machine is still required.
 - For UI/runtime regressions, static reasoning is not enough when the issue is
   visual or launch-related. Verify with browser preview or the Tauri app when
   feasible.

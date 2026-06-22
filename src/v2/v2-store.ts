@@ -25,11 +25,14 @@ import {
     execOut,
     fmtK,
     ctxPct,
+    detectLineEnding,
     emptyGitData,
     gitFor,
     hostsFor,
+    normalizeEditorContent,
     registerCode,
     sftpFor,
+    tabIsDirty,
     treeFor,
 } from "./v2-model"
 import type {
@@ -41,6 +44,7 @@ import type {
     DiffRow,
     DiagEvent,
     FnMode,
+    LineEnding,
     MetricSnapshot,
     ProjectMeta,
     ProjectUI,
@@ -146,7 +150,7 @@ export type RealDelegate = {
     refreshMetric: () => void
     restoreBackup: (id: string) => void
     discardBackup: (id: string) => void
-    backupTab: (tabId: number, content: string) => void
+    backupTab: (tabId: number, content: string, lineEnding?: LineEnding) => void
     gotoDefinition: (path: string, line: number, col: number) => void
     findReferences: (path: string, line: number, col: number) => void
     renameSymbol: (path: string, line: number, col: number, newName: string) => void
@@ -419,6 +423,7 @@ export type V2State = {
 
     // editor
     setTabContent: (tabId: number, content: string) => void
+    setTabLineEnding: (tabId: number, lineEnding: LineEnding) => void
     markExternalFileChange: (workspaceId: string, eventWorkspaceRoot: string, eventPath: string, eventVersion: FileVersion | null) => void
     saveTab: (tabId: number) => void
     reloadTab: (tabId: number) => void
@@ -1306,14 +1311,64 @@ export function createV2Store() {
             },
 
             setTabContent: (tabId, content) => {
+                const normalized = normalizeEditorContent(content)
+                let semanticContentChanged = false
                 upd((p) => {
-                    p.tabs = p.tabs.map((t) =>
-                        t.id === tabId ? { ...t, content, dirty: content !== (t.savedContent ?? "") } : t,
-                    )
+                    p.tabs = p.tabs.map((t) => {
+                        if (t.id !== tabId) return t
+                        const previous = typeof t.content === "string" ? normalizeEditorContent(t.content) : t.content
+                        semanticContentChanged = previous !== normalized
+                        const savedContent = typeof t.savedContent === "string"
+                            ? normalizeEditorContent(t.savedContent)
+                            : t.savedContent
+                        const lineEnding = t.lineEnding ?? detectLineEnding(typeof t.content === "string" ? t.content : savedContent)
+                        const savedLineEnding = t.savedLineEnding ?? detectLineEnding(typeof t.savedContent === "string" ? t.savedContent : t.content)
+                        const next = { ...t, content: normalized, savedContent, lineEnding, savedLineEnding }
+                        return { ...next, dirty: tabIsDirty(next) }
+                    })
                 })
-                if (get().mode === "real") {
-                    realDelegate?.backupTab(tabId, content)
+                if (get().mode === "real" && semanticContentChanged) {
+                    const tab = get().ui[get().active]?.tabs.find((t) => t.id === tabId)
+                    realDelegate?.backupTab(tabId, normalized, tab?.lineEnding)
                     realDelegate?.lspChange?.(tabId)
+                }
+            },
+
+            setTabLineEnding: (tabId, lineEnding) => {
+                let changed = false
+                let backupContent: string | null = null
+                upd((p) => {
+                    p.tabs = p.tabs.map((t) => {
+                        if (t.id !== tabId || t.type !== "file") return t
+                        const content = typeof t.content === "string" ? normalizeEditorContent(t.content) : t.content
+                        const savedContent = typeof t.savedContent === "string"
+                            ? normalizeEditorContent(t.savedContent)
+                            : t.savedContent
+                        const currentLineEnding = t.lineEnding ?? detectLineEnding(typeof t.content === "string" ? t.content : savedContent)
+                        if (currentLineEnding === lineEnding) {
+                            const next = {
+                                ...t,
+                                content,
+                                savedContent,
+                                lineEnding: currentLineEnding,
+                                savedLineEnding: t.savedLineEnding ?? detectLineEnding(typeof t.savedContent === "string" ? t.savedContent : t.content),
+                            }
+                            return { ...next, dirty: tabIsDirty(next) }
+                        }
+                        changed = true
+                        if (typeof content === "string") backupContent = content
+                        const next = {
+                            ...t,
+                            content,
+                            savedContent,
+                            lineEnding,
+                            savedLineEnding: t.savedLineEnding ?? detectLineEnding(typeof t.savedContent === "string" ? t.savedContent : t.content),
+                        }
+                        return { ...next, dirty: tabIsDirty(next) }
+                    })
+                })
+                if (get().mode === "real" && changed && backupContent !== null) {
+                    realDelegate?.backupTab(tabId, backupContent, lineEnding)
                 }
             },
 

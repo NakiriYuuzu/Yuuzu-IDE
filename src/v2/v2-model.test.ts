@@ -15,6 +15,7 @@ import {
     diagBadge,
     diagLineSeverity,
     diagLevelStyle,
+    detectLineEnding,
     estTokens,
     execOut,
     filterPaletteCommands,
@@ -28,11 +29,14 @@ import {
     hlLine,
     langLabel,
     metricRefreshIntervalMs,
+    normalizeEditorContent,
     normSeverity,
     refChipStyle,
     resolveAzCols,
+    serializeEditorContent,
     SETTINGS_CONFIG,
     settingDefault,
+    tabIsDirty,
     sizeLabel,
     tsLabel,
     termSegs,
@@ -377,6 +381,35 @@ describe("lsp diagnostic helpers", () => {
 })
 
 describe("stability helpers", () => {
+    test("detects, normalizes, and serializes editor line endings", () => {
+        expect(detectLineEnding("one\r\ntwo\r\n")).toBe("crlf")
+        expect(detectLineEnding("one\ntwo\n")).toBe("lf")
+        expect(normalizeEditorContent("one\r\ntwo\rold\n")).toBe("one\ntwo\nold\n")
+        expect(serializeEditorContent("one\ntwo\n", "crlf")).toBe("one\r\ntwo\r\n")
+        expect(serializeEditorContent("one\r\ntwo\r\n", "lf")).toBe("one\ntwo\n")
+    })
+
+    test("treats content and line ending as the editor dirty baseline", () => {
+        expect(tabIsDirty({
+            content: "one\n",
+            savedContent: "one\n",
+            lineEnding: "crlf",
+            savedLineEnding: "crlf",
+        })).toBe(false)
+        expect(tabIsDirty({
+            content: "one\n",
+            savedContent: "one\n",
+            lineEnding: "lf",
+            savedLineEnding: "crlf",
+        })).toBe(true)
+        expect(tabIsDirty({
+            content: "two\n",
+            savedContent: "one\n",
+            lineEnding: "crlf",
+            savedLineEnding: "crlf",
+        })).toBe(true)
+    })
+
     test("defaults the editable editor engine to CodeMirror", () => {
         const editorEngineRow = SETTINGS_CONFIG.flatMap((section) => section.rows).find((row) => row.k === "editorEngine")
         expect(settingDefault("editorEngine")).toBe("codemirror")

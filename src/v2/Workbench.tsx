@@ -2,7 +2,7 @@
 // Layout: title bar / project rail / side panel / content column / status bar,
 // plus the global overlays and the design's keyboard model.
 
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { type UnlistenFn } from "@tauri-apps/api/event"
 
 import "./yuzu.css"
@@ -91,6 +91,7 @@ function TitleBar() {
 }
 
 function StatusBar() {
+    const [lineEndingOpen, setLineEndingOpen] = useState(false)
     const mode = useV2Store((s) => s.mode)
     const active = useV2Store((s) => s.active)
     const meta = useV2Store((s) => s.meta[s.active] as typeof s.meta[string] | undefined)
@@ -99,6 +100,7 @@ function StatusBar() {
     const cursor = useV2Store((s) => s.cursor)
     const memoryBytes = useV2Store((s) => s.stab.metric?.memoryBytes ?? null)
     const tabSize = useV2Store((s) => (s.stVals.tabSize === "4" ? "4" : "2"))
+    const setTabLineEnding = useV2Store((s) => s.setTabLineEnding)
     const azTotal = order.reduce((n, id) => n + (ui[id]?.wins.length ?? 0), 0)
 
     const p = ui[active]
@@ -111,6 +113,13 @@ function StatusBar() {
     const lnCol = cursor
         ? "Ln " + cursor.ln + ", Col " + cursor.col
         : isReal ? null : "Ln 9, Col 24"
+    const editableFile = at?.type === "file" && typeof at.content === "string" ? at : null
+    const lineEnding = editableFile ? (editableFile.lineEnding ?? editableFile.savedLineEnding ?? "lf") : null
+    const lineEndingLabel = lineEnding === "crlf" ? "CRLF" : "LF"
+
+    useEffect(() => {
+        setLineEndingOpen(false)
+    }, [editableFile?.id])
 
     return (
         <div className="yz2-status">
@@ -135,6 +144,39 @@ function StatusBar() {
                 </span>
             )}
             {lnCol ? <span style={{ padding: "0 9px" }}>{lnCol}</span> : null}
+            {editableFile && lineEnding ? (
+                <span className="yz2-status-pop">
+                    <button
+                        type="button"
+                        className="yz2-status-btn"
+                        aria-label={"Line ending " + lineEndingLabel}
+                        onClick={() => setLineEndingOpen((value) => !value)}
+                    >
+                        {lineEndingLabel}
+                    </button>
+                    {lineEndingOpen ? (
+                        <span className="yz2-status-menu" role="menu">
+                            {(["lf", "crlf"] as const).map((option) => {
+                                const label = option.toUpperCase()
+                                return (
+                                    <button
+                                        key={option}
+                                        type="button"
+                                        role="menuitem"
+                                        className={"yz2-status-menu-item" + (option === lineEnding ? " is-on" : "")}
+                                        onClick={() => {
+                                            setTabLineEnding(editableFile.id, option)
+                                            setLineEndingOpen(false)
+                                        }}
+                                    >
+                                        {label}
+                                    </button>
+                                )
+                            })}
+                        </span>
+                    ) : null}
+                </span>
+            ) : null}
             <span style={{ padding: "0 9px" }}>Spaces: {tabSize}</span>
             <span style={{ padding: "0 9px" }}>UTF-8</span>
             {lang ? <span style={{ padding: "0 12px 0 9px" }}>{lang}</span> : <span style={{ padding: "0 3px" }} />}

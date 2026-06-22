@@ -16,7 +16,7 @@ import type { LanguageSymbol, LspDiagnostic } from "../features/language/languag
 import type { RemoteFileEntry, RemoteHostProfile } from "../features/remote/remote-model"
 
 import { emptyGitData, sizeLabel } from "./v2-model"
-import type { BackupSummary, DbConn, DbGrid, DbHistoryRow, DiffRow, DiagEvent, GitData, GitFile, MetricSnapshot, ProjectMeta, SftpFile, SshHost, TreeNode } from "./v2-model"
+import type { BackupSummary, DbConn, DbGrid, DbHistoryRow, DiffRow, DiagEvent, GitData, GitFile, LineEnding, MetricSnapshot, ProjectMeta, SftpFile, SshHost, TreeNode } from "./v2-model"
 
 export function isTauri(): boolean {
     return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
@@ -639,17 +639,22 @@ type BackupIn = {
     path: string
     content: string
     updated_ms: number
+    line_ending?: LineEnding
 }
 
 export function mapBackups(rows: BackupIn[]): BackupSummary[] {
     return [...rows]
         .sort((left, right) => right.updated_ms === left.updated_ms ? left.path.localeCompare(right.path) : right.updated_ms - left.updated_ms)
-        .map((backup) => ({
-            id: backup.id,
-            path: backup.path,
-            updatedMs: backup.updated_ms,
-            contentLength: backup.content.length,
-        }))
+        .map((backup) => {
+            const summary: BackupSummary = {
+                id: backup.id,
+                path: backup.path,
+                updatedMs: backup.updated_ms,
+                contentLength: backup.content.length,
+            }
+            if (backup.line_ending) summary.lineEnding = backup.line_ending
+            return summary
+        })
 }
 
 // The backend rejects mutating/destructive SQL until the request carries the

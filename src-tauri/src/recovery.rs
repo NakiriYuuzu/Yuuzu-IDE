@@ -18,6 +18,7 @@ pub struct UnsavedBackup {
     pub workspace_root: String,
     pub path: String,
     pub content: String,
+    pub line_ending: Option<String>,
     pub version: Option<FileVersion>,
     pub updated_ms: u64,
 }
@@ -194,6 +195,7 @@ mod tests {
             workspace_root: "/repo-a".to_string(),
             path: path.to_string(),
             content: content.to_string(),
+            line_ending: None,
             version: Some(FileVersion {
                 modified_ms: 7,
                 len: 11,
@@ -217,6 +219,22 @@ mod tests {
         assert_eq!(listed, vec![saved]);
         assert_eq!(listed[0].id, backup_id("workspace-a", "src/main.ts"));
         assert_eq!(listed[0].content, "dirty text");
+    }
+
+    #[test]
+    fn backup_store_round_trips_line_ending_metadata() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store = RecoveryStore::new(temp.path().join("recovery"));
+        let mut backup = backup("src/main.ts", "dirty text");
+        backup.line_ending = Some("crlf".to_string());
+
+        let saved = store.save_backup(backup).expect("save");
+        let listed = store
+            .list_backups("workspace-a", "/repo-a")
+            .expect("list backups");
+
+        assert_eq!(listed, vec![saved]);
+        assert_eq!(listed[0].line_ending.as_deref(), Some("crlf"));
     }
 
     #[test]

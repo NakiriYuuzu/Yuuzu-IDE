@@ -23,9 +23,12 @@ pub fn scan_top_level(path: &Path) -> Result<Vec<FileTreeEntry>, String> {
             continue;
         }
 
+        let path = entry.path();
+        let path = dunce::simplified(&path).to_path_buf();
+
         entries.push(FileTreeEntry {
             name,
-            path: entry.path(),
+            path,
             is_dir: file_type.is_dir(),
         });
     }
@@ -36,10 +39,8 @@ pub fn scan_top_level(path: &Path) -> Result<Vec<FileTreeEntry>, String> {
 }
 
 pub fn scan_directory(workspace_root: &Path, path: &Path) -> Result<Vec<FileTreeEntry>, String> {
-    let root = workspace_root
-        .canonicalize()
-        .map_err(|err| err.to_string())?;
-    let path = path.canonicalize().map_err(|err| err.to_string())?;
+    let root = dunce::canonicalize(workspace_root).map_err(|err| err.to_string())?;
+    let path = dunce::canonicalize(path).map_err(|err| err.to_string())?;
     if !path.starts_with(&root) {
         return Err(format!("path outside workspace: {}", path.display()));
     }
@@ -107,6 +108,29 @@ mod tests {
         assert_eq!(
             names,
             vec![(".git", false), ("node_modules", false), ("target", false),],
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn scan_top_level_simplifies_verbatim_entry_paths() {
+        let root = tempdir().expect("tempdir");
+        File::create(root.path().join("package.json")).expect("package file");
+        let verbatim_root = std::fs::canonicalize(root.path()).expect("verbatim root");
+        assert!(
+            verbatim_root.to_string_lossy().starts_with(r"\\?\"),
+            "precondition: std canonicalize must produce a verbatim prefix on Windows"
+        );
+
+        let entries = super::scan_top_level(&verbatim_root).expect("scan succeeds");
+        let package = entries
+            .iter()
+            .find(|entry| entry.name == "package.json")
+            .expect("package entry");
+
+        assert!(
+            !package.path.to_string_lossy().starts_with(r"\\?\"),
+            "Explorer paths sent to the frontend must not keep the verbatim prefix"
         );
     }
 

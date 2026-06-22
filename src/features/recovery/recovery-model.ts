@@ -1,11 +1,14 @@
 import type { FileVersion } from "../files/file-model";
 
+export type BackupLineEnding = "lf" | "crlf";
+
 export type UnsavedBackup = {
   id: string;
   workspace_id: string;
   workspace_root: string;
   path: string;
   content: string;
+  line_ending?: BackupLineEnding;
   version: FileVersion | null;
   updated_ms: number;
 };
@@ -42,6 +45,7 @@ export function toRecoverySummary(
     path: backup.path,
     version: backup.version,
     updated_ms: backup.updated_ms,
+    line_ending: backup.line_ending,
     content_length:
       "content_length" in backup ? backup.content_length : backup.content.length,
   };

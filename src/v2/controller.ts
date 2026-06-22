@@ -143,8 +143,8 @@ import {
     remapDbOpenByProfileId,
     setNodeChildren,
 } from "./bridge"
-import { flattenTree } from "./v2-model"
-import type { FnMode, ProjectUI, SftpPane, SshHost, Tab } from "./v2-model"
+import { detectLineEnding, flattenTree, normalizeEditorContent, serializeEditorContent, tabIsDirty } from "./v2-model"
+import type { FnMode, LineEnding, ProjectUI, SftpPane, SshHost, Tab } from "./v2-model"
 import { registerRealDelegate, settingLimit, v2Store, emptyUI } from "./v2-store"
 
 let bootstrapped = false
@@ -171,6 +171,21 @@ function errMsg(error: unknown): string {
     if (typeof error === "string") return error
     if (error instanceof Error) return error.message
     return String(error)
+}
+
+function editorContentFromDisk(content: string | null): { content: string | null; lineEnding: LineEnding } {
+    return {
+        content: typeof content === "string" ? normalizeEditorContent(content) : content,
+        lineEnding: detectLineEnding(content),
+    }
+}
+
+function lineEndingForTab(tab: Pick<Tab, "content" | "savedContent" | "lineEnding" | "savedLineEnding">): LineEnding {
+    return tab.lineEnding ?? tab.savedLineEnding ?? detectLineEnding(typeof tab.savedContent === "string" ? tab.savedContent : tab.content)
+}
+
+function savedLineEndingForBackup(value: unknown): LineEnding | null {
+    return value === "lf" || value === "crlf" ? value : null
 }
 
 function promptForNodeName(kind: "file" | "dir"): string | null {
@@ -221,6 +236,7 @@ async function readAndApply(pid: string, tabId: number, force: boolean): Promise
     const before = tab.version
     try {
         const read = await readTextFile(root, tab.realPath)
+        const editor = editorContentFromDisk(read.content)
         const cur = tabIn(pid, tabId)
         if (!cur || cur.type !== "file" || cur.realPath !== tab.realPath) return
         if (!force) {
@@ -239,16 +255,18 @@ async function readAndApply(pid: string, tabId: number, force: boolean): Promise
         patchTab(pid, tabId, (t) => ({
             ...t,
             loading: false,
-            content: read.content,
+            content: editor.content,
             tooLarge: read.too_large,
             version: read.version,
-            savedContent: read.content ?? t.savedContent,
+            savedContent: editor.content ?? t.savedContent,
+            lineEnding: editor.content === null ? t.lineEnding : editor.lineEnding,
+            savedLineEnding: editor.content === null ? t.savedLineEnding : editor.lineEnding,
             dirty: false,
             saving: false,
             externalChange: false
         }))
-        if (typeof read.content === "string" && cur.path && isLspSupportedDocumentPath(cur.path)) {
-            void openLspDocument(pid, cur.path, read.content).catch(() => {})
+        if (typeof editor.content === "string" && cur.path && isLspSupportedDocumentPath(cur.path)) {
+            void openLspDocument(pid, cur.path, editor.content).catch(() => {})
         }
     } catch (error) {
         if (force) {
@@ -488,15 +506,18 @@ async function applyWorkspaceEditGroups(pid: string, groups: ReturnType<typeof f
             const disk = typeof currentTab?.content === "string"
                 ? null
                 : await readTextFile(root, realPath)
-            const content = typeof currentTab?.content === "string" ? currentTab.content : disk?.content ?? ""
+            const content = normalizeEditorContent(typeof currentTab?.content === "string" ? currentTab.content : disk?.content ?? "")
             const version = currentTab?.version ?? disk?.version ?? null
-            const nextContent = applyTextEdits(content, group.edits)
-            const result = await writeTextFile(root, realPath, nextContent, version)
+            const lineEnding = currentTab ? lineEndingForTab(currentTab) : detectLineEnding(disk?.content)
+            const nextContent = normalizeEditorContent(applyTextEdits(content, group.edits))
+            const result = await writeTextFile(root, realPath, serializeEditorContent(nextContent, lineEnding), version)
             if (currentTab) {
                 patchTab(pid, currentTab.id, (t) => ({
                     ...t,
                     content: nextContent,
                     savedContent: nextContent,
+                    lineEnding,
+                    savedLineEnding: lineEnding,
                     version: result.version,
                     dirty: false,
                     saving: false,
@@ -1013,22 +1034,25 @@ const delegate = {
         void (async () => {
             try {
                 const read = await readTextFile(root, realPath)
+                const editor = editorContentFromDisk(read.content)
                 patchProject(pid, (q) => {
                     q.tabs = q.tabs.map((t) =>
                         t.id === id
                             ? {
                                   ...t,
                                   loading: false,
-                                  content: read.content,
+                                  content: editor.content,
                                   tooLarge: read.too_large,
                                   version: read.version,
-                                  savedContent: read.content,
+                                  savedContent: editor.content,
+                                  lineEnding: editor.lineEnding,
+                                  savedLineEnding: editor.lineEnding,
                               }
                             : t,
                     )
                 })
-                if (typeof read.content === "string" && isLspSupportedDocumentPath(displayPath)) {
-                    void openLspDocument(pid, displayPath, read.content).catch(() => {})
+                if (typeof editor.content === "string" && isLspSupportedDocumentPath(displayPath)) {
+                    void openLspDocument(pid, displayPath, editor.content).catch(() => {})
                 }
                 logDiag("info", "editor", "opened " + displayPath)
             } catch (error) {
@@ -1071,7 +1095,8 @@ const delegate = {
                     workspaceRoot: root,
                     workspaceId: pid,
                     path: tab.path,
-                    content: tab.content,
+                    content: normalizeEditorContent(tab.content),
+                    lineEnding: lineEndingForTab(tab),
                     version: tab.version ?? null,
                 }).catch(() => {})
             }
@@ -1270,32 +1295,40 @@ const delegate = {
         const tab = tabIn(pid, tabId)
         if (!root || !tab || tab.type !== "file" || typeof tab.content !== "string" || !tab.realPath) return
         if (tab.saving) return
-        const content = tab.content
+        const content = normalizeEditorContent(tab.content)
+        const lineEnding = lineEndingForTab(tab)
         patchTab(pid, tabId, (t) => ({ ...t, saving: true }))
         void (async () => {
             try {
-                const result = await writeTextFile(root, tab.realPath as string, content, force ? null : (tab.version ?? null))
-                if (tabIn(pid, tabId)?.content === content) {
+                const result = await writeTextFile(root, tab.realPath as string, serializeEditorContent(content, lineEnding), force ? null : (tab.version ?? null))
+                const afterWrite = tabIn(pid, tabId)
+                if (afterWrite && afterWrite.type === "file" && typeof afterWrite.content === "string" && normalizeEditorContent(afterWrite.content) === content) {
                     const pending = backupTimers.get(tabId)
                     if (pending) {
                         clearTimeout(pending)
                         backupTimers.delete(tabId)
                     }
                 }
-                patchTab(pid, tabId, (t) => ({
-                    ...t,
-                    saving: false,
-                    version: result.version,
-                    savedContent: content,
-                    dirty: (t.content ?? "") !== content,
-                    externalChange: false,
-                }))
+                patchTab(pid, tabId, (t) => {
+                    const currentContent = typeof t.content === "string" ? normalizeEditorContent(t.content) : t.content
+                    const next = {
+                        ...t,
+                        content: currentContent,
+                        saving: false,
+                        version: result.version,
+                        savedContent: content,
+                        savedLineEnding: lineEnding,
+                        externalChange: false,
+                    }
+                    return { ...next, dirty: tabIsDirty(next) }
+                })
                 const current = tabIn(pid, tabId)
                 if (
                     current &&
                     current.type === "file" &&
                     current.path === tab.path &&
-                    current.content === content &&
+                    typeof current.content === "string" &&
+                    normalizeEditorContent(current.content) === content &&
                     current.path &&
                     isLspSupportedDocumentPath(current.path)
                 ) {
@@ -2424,17 +2457,22 @@ const delegate = {
                 const name = displayPath.split("/").pop() ?? displayPath
                 const existing = store().ui[pid]?.tabs.find((t) => t.type === "file" && t.path === displayPath)
                 const disk = await readTextFile(root, realPath).catch(() => null)
-                const savedContent = disk?.content ?? backup.content
+                const backupContent = normalizeEditorContent(backup.content)
+                const backupLineEnding = savedLineEndingForBackup(backup.line_ending) ?? detectLineEnding(backup.content)
+                const savedContent = normalizeEditorContent(disk?.content ?? backup.content)
+                const savedLineEnding = disk?.content === undefined || disk?.content === null ? backupLineEnding : detectLineEnding(disk.content)
                 patchProject(pid, (q) => {
                     if (existing) {
                         q.tabs = q.tabs.map((t) =>
                             t.id === existing.id
                                 ? {
                                       ...t,
-                                      content: backup.content,
+                                      content: backupContent,
                                       realPath: t.realPath ?? realPath,
                                       version: backup.version ?? t.version ?? null,
-                                      savedContent: t.savedContent ?? savedContent,
+                                      savedContent: typeof t.savedContent === "string" ? normalizeEditorContent(t.savedContent) : savedContent,
+                                      lineEnding: backupLineEnding,
+                                      savedLineEnding: t.savedLineEnding ?? savedLineEnding,
                                       dirty: true,
                                       loading: false,
                                   }
@@ -2452,9 +2490,11 @@ const delegate = {
                             name,
                             path: displayPath,
                             realPath,
-                            content: backup.content,
+                            content: backupContent,
                             version: backup.version ?? null,
                             savedContent,
+                            lineEnding: backupLineEnding,
+                            savedLineEnding,
                             dirty: true,
                             contentLang: langForPath(name),
                         },
@@ -2486,10 +2526,11 @@ const delegate = {
         })()
     },
 
-    backupTab(tabId: number, content: string) {
+    backupTab(tabId: number, content: string, lineEnding?: LineEnding) {
         const pid = store().active
         const root = rootOf(pid)
         if (!root) return
+        const backupContent = normalizeEditorContent(content)
         const pending = backupTimers.get(tabId)
         if (pending) clearTimeout(pending)
         const timer = setTimeout(() => {
@@ -2500,7 +2541,8 @@ const delegate = {
                 workspaceRoot: root,
                 workspaceId: pid,
                 path: tab.path,
-                content,
+                content: backupContent,
+                lineEnding: lineEnding ?? lineEndingForTab(tab),
                 version: tab.version ?? null,
             }).catch(() => {})
         }, 600)
