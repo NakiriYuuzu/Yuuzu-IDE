@@ -1,0 +1,31 @@
+{
+  "skill_name": "yuuzu-ide-tauri-debug-smoke",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Run tauri-debug-build and reverify the Git Graph flicker finding from the 2026-06-22 smoke report in the packaged app.",
+      "expected_output": "A runtime smoke plan or execution report with debug app build, app path, workspace path, Git Graph selection, .git watcher probe, pass/fail evidence, and cleanup.",
+      "files": [
+        "docs/html/yuuzu-ide-function-smoke-report-2026-06-22.html"
+      ],
+      "expectations": [
+        "Uses `bun run tauri build --debug --bundles app`.",
+        "Identifies `src-tauri/target/debug/bundle/macos/Yuuzu-IDE.app` as the app bundle.",
+        "Includes a .git watcher probe and checks detail stability instead of only checking that commits render.",
+        "Includes cleanup of probe files and debug app processes."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Smoke test Browser preview screenshot capture in the debug app, but the machine may not have macOS Screen Recording permission.",
+      "expected_output": "A smoke plan that distinguishes real capture failures from permission blockers and records the permission prompt or screencapture region.",
+      "files": [],
+      "expectations": [
+        "Uses a safe local or loopback page.",
+        "Notes that Screen Recording permission may block final PNG verification.",
+        "Reports permission-blocked capture as incomplete rather than pass.",
+        "Includes cleanup for any temporary HTTP server."
+      ]
+    }
+  ]
+}

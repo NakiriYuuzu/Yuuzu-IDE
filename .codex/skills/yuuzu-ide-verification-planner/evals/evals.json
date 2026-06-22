@@ -1,0 +1,31 @@
+{
+  "skill_name": "yuuzu-ide-verification-planner",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "We fixed the dark theme CodeMirror caret in Yuuzu-IDE. Pick the smallest credible verification plan before closeout.",
+      "expected_output": "A scoped plan that starts with focused editor/CSS contract tests, includes real runtime smoke for visible caret behavior, and avoids unrelated Cargo gates unless Rust changed.",
+      "files": [],
+      "expectations": [
+        "Classifies the task as UI runtime or bugfix.",
+        "Includes focused tests for CodeMirror/editor rendering and CSS contracts.",
+        "Includes packaged app or browser/runtime verification for visible dark theme caret behavior.",
+        "Does not claim full release verification is required when no Rust or packaging behavior changed."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Based on docs/html/yuuzu-ide-function-smoke-report-2026-06-22.html, reverify Git Graph flicker in the real debug app. What should we run?",
+      "expected_output": "A verification plan covering focused Git Graph regression tests, debug app build, Computer Use smoke, a .git watcher probe, and cleanup/evidence requirements.",
+      "files": [
+        "docs/html/yuuzu-ide-function-smoke-report-2026-06-22.html"
+      ],
+      "expectations": [
+        "Mentions focused Git Graph/controller tests before runtime smoke.",
+        "Uses `bun run tauri build --debug --bundles app` for the packaged app.",
+        "Includes a .git watcher probe and verifies commit detail does not reset to loading.",
+        "Includes cleanup of debug app and temporary probe files."
+      ]
+    }
+  ]
+}

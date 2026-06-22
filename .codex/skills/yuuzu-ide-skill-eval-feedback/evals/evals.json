@@ -1,0 +1,35 @@
+{
+  "skill_name": "yuuzu-ide-skill-eval-feedback",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Review the evals for .codex/skills/yuuzu-ide-tauri-debug-smoke and tell me which testing methods should be optimized before we run them.",
+      "expected_output": "A feedback report that checks coverage, speed, reliability, evidence quality, and safety, with concrete changes to the eval prompts or expectations.",
+      "files": [
+        ".codex/skills/yuuzu-ide-tauri-debug-smoke/SKILL.md",
+        ".codex/skills/yuuzu-ide-tauri-debug-smoke/evals/evals.json"
+      ],
+      "expectations": [
+        "Uses the eval feedback rubric rather than only summarizing the skill.",
+        "Identifies runtime smoke steps that are necessary versus overbroad.",
+        "Flags permission-dependent Browser capture as blocked/incomplete when permission is missing.",
+        "Suggests at least one concrete optimization to improve speed or reliability."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Set up the next iteration plan for benchmarking yuuzu-ide-verification-planner, but do not launch subagents unless I explicitly ask.",
+      "expected_output": "A benchmark setup plan that validates eval files, names with-skill and baseline outputs, explains what feedback will be collected, and stops before spawning agents.",
+      "files": [
+        ".codex/skills/yuuzu-ide-verification-planner/SKILL.md",
+        ".codex/skills/yuuzu-ide-verification-planner/evals/evals.json"
+      ],
+      "expectations": [
+        "Does not spawn or assume subagents without explicit user approval.",
+        "Defines with-skill and baseline comparison outputs.",
+        "Includes static validation of frontmatter and eval JSON before execution.",
+        "Explains what feedback fields will be used to improve the skill."
+      ]
+    }
+  ]
+}

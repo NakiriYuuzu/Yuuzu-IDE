@@ -1,0 +1,29 @@
+{
+  "skill_name": "yuuzu-ide-focused-regression-tests",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Add a focused regression test for Git Graph flicker caused by .git watcher events, before touching implementation.",
+      "expected_output": "A test plan or patch targeting the v2 controller/store layer that emits a .git watcher event and asserts Git Graph detail is not reset/reloaded.",
+      "files": [],
+      "expectations": [
+        "Chooses an adjacent v2 test file instead of creating a broad end-to-end test first.",
+        "Models a .git path watcher event explicitly.",
+        "Asserts no Git reload or no detail reset, not just that a function was called.",
+        "States the focused Bun command to run."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "We need tests for Explorer create folder through Tauri. Where should the frontend and Rust regression coverage live?",
+      "expected_output": "A split test strategy covering controller/store prompt/delegate behavior in v2 and filesystem workspace-boundary behavior in Rust.",
+      "files": [],
+      "expectations": [
+        "Separates frontend delegate/prompt tests from Rust filesystem command tests.",
+        "Mentions workspace boundary and path/name validation in Rust tests.",
+        "Uses Bun focused tests for v2 behavior and Cargo focused tests for backend behavior.",
+        "Avoids adding a broad runtime smoke as the only regression coverage."
+      ]
+    }
+  ]
+}
