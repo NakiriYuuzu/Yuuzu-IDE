@@ -210,6 +210,13 @@ describe("syntax theme tokens", () => {
             expect(lightBlock).toContain(`--yz-syntax-${name}: ${value};`)
         }
     })
+
+    test("keeps the CodeMirror caret visible on dark editor backgrounds", () => {
+        const css = readFileSync(new URL("./yuzu.css", import.meta.url), "utf8")
+
+        expect(css).toContain(".yz2-cm-host .cm-content {\n    padding: 0 32px 0 0;\n    caret-color: var(--yz-e6edf3);")
+        expect(css).toContain(".yz2-cm-host .cm-cursor {\n    border-left-color: var(--yz-e6edf3);")
+    })
 })
 
 describe("termSegs", () => {

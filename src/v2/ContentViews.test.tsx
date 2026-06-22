@@ -420,6 +420,36 @@ describe("EditorView", () => {
         expect(body).toBeTruthy()
         expect(editor).toBeTruthy()
     })
+
+    test("CodeMirror editor surface preserves the editor instance across content updates", async () => {
+        const tab = {
+            id: 9202,
+            type: "file" as const,
+            name: "server.ts",
+            path: "src/server.ts",
+            realPath: "/workspace/src/server.ts",
+            content: "const alpha = 1\n",
+            contentLang: "ts",
+            savedContent: "const alpha = 1\n",
+        }
+        v2Store.setState((s) => ({
+            mode: "real",
+            stVals: { ...s.stVals, editorEngine: "codemirror" },
+            active: "api",
+            ui: {
+                ...s.ui,
+                api: { ...s.ui.api, tabs: [tab], activeTab: tab.id },
+            },
+        }))
+
+        const view = render(<EditorView tab={tab as Tab} />)
+        const editor = view.container.querySelector(".cm-editor")
+
+        view.rerender(<EditorView tab={{ ...tab, content: "const alpha = 12\n" } as Tab} />)
+        await Promise.resolve()
+
+        expect(view.container.querySelector(".cm-editor")).toBe(editor)
+    })
 })
 
 describe("BrowserView", () => {

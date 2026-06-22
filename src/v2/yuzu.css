@@ -1271,6 +1271,10 @@
 }
 .yz2-cm-host .cm-content {
     padding: 0 32px 0 0;
+    caret-color: var(--yz-e6edf3);
+}
+.yz2-cm-host .cm-cursor {
+    border-left-color: var(--yz-e6edf3);
 }
 .yz2-cm-host .cm-gutters {
     background: var(--yz-0a0e15);

@@ -7,6 +7,7 @@ import {
     offsetFromCursor,
     shouldAcceptAsyncEditorResult,
 } from "./editor-surface"
+import { YUZU_CODEMIRROR_HIGHLIGHT_SPECS } from "./CodeMirrorEditorSurface"
 
 describe("editor surface helpers", () => {
     test("converts between offsets and one-based cursor positions", () => {
@@ -43,5 +44,13 @@ describe("editor surface helpers", () => {
         expect(localWordCompletions("Console Console CancellationToken class", "Con").map((item) => item.label)).toEqual([
             "Console",
         ])
+    })
+
+    test("CodeMirror highlight specs use Yuuzu syntax theme variables", () => {
+        const colors = YUZU_CODEMIRROR_HIGHLIGHT_SPECS.map((spec) => spec.color)
+        expect(colors).toContain("var(--yz-syntax-keyword)")
+        expect(colors).toContain("var(--yz-syntax-string)")
+        expect(colors).toContain("var(--yz-syntax-comment)")
+        expect(colors).not.toContain("defaultHighlightStyle")
     })
 })

@@ -1,8 +1,9 @@
 import { autocompletion, startCompletion } from "@codemirror/autocomplete"
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands"
-import { bracketMatching, defaultHighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language"
+import { bracketMatching, HighlightStyle, indentOnInput, syntaxHighlighting, type TagStyle } from "@codemirror/language"
 import { EditorSelection, EditorState } from "@codemirror/state"
 import { EditorView, keymap, lineNumbers } from "@codemirror/view"
+import { tags as t } from "@lezer/highlight"
 import { useEffect, useMemo, useRef } from "react"
 
 import { codeMirrorLanguageForPath } from "../../features/editor-codemirror/language-selection"
@@ -24,9 +25,27 @@ function documentVersion(value: string): number {
     return hash
 }
 
+export const YUZU_CODEMIRROR_HIGHLIGHT_SPECS: readonly TagStyle[] = [
+    { tag: t.keyword, color: "var(--yz-syntax-keyword)" },
+    { tag: [t.string, t.character, t.regexp], color: "var(--yz-syntax-string)" },
+    { tag: [t.number, t.integer, t.float, t.bool], color: "var(--yz-syntax-number)" },
+    { tag: [t.function(t.variableName), t.definition(t.function(t.variableName))], color: "var(--yz-syntax-function)" },
+    { tag: [t.typeName, t.className, t.namespace], color: "var(--yz-syntax-type)" },
+    { tag: [t.variableName, t.propertyName], color: "var(--yz-syntax-variable)" },
+    { tag: t.comment, color: "var(--yz-syntax-comment)", fontStyle: "italic" },
+    { tag: t.operator, color: "var(--yz-syntax-operator)" },
+    { tag: t.tagName, color: "var(--yz-syntax-tag)" },
+    { tag: t.attributeName, color: "var(--yz-syntax-attribute)" },
+    { tag: t.punctuation, color: "var(--yz-syntax-punctuation)" },
+    { tag: t.invalid, color: "var(--yz-f07178)" },
+]
+
+const yuzuHighlightStyle = HighlightStyle.define(YUZU_CODEMIRROR_HIGHLIGHT_SPECS)
+
 export function CodeMirrorEditorSurface({ tab }: { tab: Tab }) {
     const hostRef = useRef<HTMLDivElement>(null)
     const viewRef = useRef<EditorView | null>(null)
+    const contentRef = useRef(tab.content ?? "")
     const setTabContent = useV2Store((s) => s.setTabContent)
     const saveTab = useV2Store((s) => s.saveTab)
     const setCursor = useV2Store((s) => s.setCursor)
@@ -36,12 +55,16 @@ export function CodeMirrorEditorSurface({ tab }: { tab: Tab }) {
     const content = tab.content ?? ""
     const path = tab.path ?? ""
 
+    useEffect(() => {
+        contentRef.current = content
+    }, [content])
+
     const extensions = useMemo(() => [
         lineNumbers(),
         history(),
         bracketMatching(),
         indentOnInput(),
-        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        syntaxHighlighting(yuzuHighlightStyle, { fallback: true }),
         ...codeMirrorLanguageForPath(path),
         autocompletion({
             override: [
@@ -103,7 +126,6 @@ export function CodeMirrorEditorSurface({ tab }: { tab: Tab }) {
             {
                 key: "Ctrl-Space",
                 run: (view) => {
-                    if (!isLspSupportedDocumentPath(path)) return false
                     startCompletion(view)
                     return true
                 },
@@ -127,14 +149,14 @@ export function CodeMirrorEditorSurface({ tab }: { tab: Tab }) {
     useEffect(() => {
         const host = hostRef.current
         if (!host) return
-        const state = EditorState.create({ doc: content, extensions })
+        const state = EditorState.create({ doc: contentRef.current, extensions })
         const view = new EditorView({ state, parent: host })
         viewRef.current = view
         return () => {
             view.destroy()
             viewRef.current = null
         }
-    }, [content, extensions])
+    }, [extensions])
 
     useEffect(() => {
         const view = viewRef.current
