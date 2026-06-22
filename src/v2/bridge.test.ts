@@ -684,10 +684,10 @@ describe("stability mapping", () => {
     test("maps recovery backups to sorted summaries", () => {
         const backups = mapBackups([
             { id: "b1", path: "b.ts", content: "abcd", updated_ms: 1 },
-            { id: "b2", path: "a.ts", content: "abc", updated_ms: 2 },
+            { id: "b2", path: "a.ts", content: "abc", updated_ms: 2, line_ending: "crlf" },
         ])
 
-        expect(backups[0]).toEqual({ id: "b2", path: "a.ts", updatedMs: 2, contentLength: 3 })
+        expect(backups[0]).toEqual({ id: "b2", path: "a.ts", updatedMs: 2, contentLength: 3, lineEnding: "crlf" })
         expect(backups[1]).toEqual({ id: "b1", path: "b.ts", updatedMs: 1, contentLength: 4 })
     })
 })

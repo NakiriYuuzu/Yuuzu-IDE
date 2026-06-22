@@ -22,6 +22,13 @@ use crate::workspace_store::WorkspaceRegistryStore;
 
 const MAX_METRIC_INDEX_ENTRIES: usize = 1_000_000;
 
+fn validate_backup_line_ending(line_ending: Option<String>) -> Result<Option<String>, String> {
+    match line_ending.as_deref() {
+        None | Some("lf") | Some("crlf") => Ok(line_ending),
+        Some(_) => Err("line ending must be lf or crlf".to_string()),
+    }
+}
+
 /// Run blocking work on the dedicated blocking pool so async commands never
 /// stall the UI thread or starve the async runtime.
 async fn run_blocking<T, F>(task: F) -> Result<T, String>
@@ -182,10 +189,12 @@ impl AppState {
         workspace_id: &str,
         path: String,
         content: String,
+        line_ending: Option<String>,
         version: Option<FileVersion>,
     ) -> Result<crate::recovery::UnsavedBackup, String> {
         let workspace_root = self.trusted_workspace_root(workspace_root)?;
         self.ensure_workspace_id_matches_root_path(workspace_id, &workspace_root)?;
+        let line_ending = validate_backup_line_ending(line_ending)?;
 
         self.recovery_store
             .save_backup(crate::recovery::UnsavedBackup {
@@ -194,6 +203,7 @@ impl AppState {
                 workspace_root: workspace_root.to_string_lossy().to_string(),
                 path,
                 content,
+                line_ending,
                 version,
                 updated_ms: current_time_ms()?,
             })
@@ -1050,9 +1060,17 @@ pub fn save_unsaved_backup(
     workspace_id: String,
     path: String,
     content: String,
+    line_ending: Option<String>,
     version: Option<FileVersion>,
 ) -> Result<crate::recovery::UnsavedBackup, String> {
-    state.save_unsaved_backup(&workspace_root, &workspace_id, path, content, version)
+    state.save_unsaved_backup(
+        &workspace_root,
+        &workspace_id,
+        path,
+        content,
+        line_ending,
+        version,
+    )
 }
 
 #[tauri::command]
@@ -2937,6 +2955,7 @@ mod tests {
                 &workspace_a_id,
                 "src/main.ts".to_string(),
                 "dirty text".to_string(),
+                Some("crlf".to_string()),
                 None,
             )
             .expect("save backup");
@@ -2945,6 +2964,7 @@ mod tests {
             .list_unsaved_backups(&workspace_a.to_string_lossy(), &workspace_a_id)
             .expect("list backups");
         assert_eq!(listed, vec![saved]);
+        assert_eq!(listed[0].line_ending.as_deref(), Some("crlf"));
     }
 
     #[test]
@@ -2958,11 +2978,32 @@ mod tests {
             "src/main.ts".to_string(),
             "dirty text".to_string(),
             None,
+            None,
         );
 
         assert_eq!(
             result.expect_err("workspace mismatch"),
             "workspace id does not match workspace root"
+        );
+    }
+
+    #[test]
+    fn app_state_rejects_invalid_unsaved_backup_line_ending() {
+        let (_config, state, workspace_a, _workspace_b, workspace_a_id, _workspace_b_id) =
+            app_state_with_two_workspaces();
+
+        let result = state.save_unsaved_backup(
+            &workspace_a.to_string_lossy(),
+            &workspace_a_id,
+            "src/main.ts".to_string(),
+            "dirty text".to_string(),
+            Some("mixed".to_string()),
+            None,
+        );
+
+        assert_eq!(
+            result.expect_err("invalid line ending"),
+            "line ending must be lf or crlf"
         );
     }
 

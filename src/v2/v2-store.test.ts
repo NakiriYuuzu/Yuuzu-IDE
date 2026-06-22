@@ -155,7 +155,7 @@ describe("language actions", () => {
             ["rename", "src/server.ts", 6, 7, "renamed"],
             ["restart", "TypeScript"],
             ["reload"],
-            ["backup", tabId, "updated"],
+            ["backup", tabId, "updated", "lf"],
             ["change", tabId],
         ])
     })
@@ -174,7 +174,7 @@ describe("language actions", () => {
         store.getState().setTabContent(tabId, "updated")
 
         expect(calls).toEqual([
-            ["backup", tabId, "updated"],
+            ["backup", tabId, "updated", "lf"],
             ["change", tabId],
         ])
     })
@@ -1392,6 +1392,82 @@ describe("editor edits", () => {
 
         store.getState().setTabContent(tab.id, "")
         now = store.getState().ui.api.tabs.find((t) => t.id === tab.id)!
+        expect(now.dirty).toBe(false)
+    })
+
+    test("setTabContent ignores CodeMirror CRLF-to-LF mount normalization", () => {
+        const store = freshStore()
+        const calls: unknown[][] = []
+        registerRealDelegate({
+            backupTab: (...args: unknown[]) => calls.push(["backup", ...args]),
+            lspChange: (...args: unknown[]) => calls.push(["change", ...args]),
+        } as any)
+        const tab = {
+            id: 9901,
+            type: "file" as const,
+            name: "win.ts",
+            path: "src/win.ts",
+            realPath: "C:\\repo\\src\\win.ts",
+            content: "alpha\r\nbeta\r\n",
+            savedContent: "alpha\r\nbeta\r\n",
+            lineEnding: "crlf" as const,
+            savedLineEnding: "crlf" as const,
+        }
+        store.setState((s) => ({
+            mode: "real",
+            active: "api",
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    tabs: [tab],
+                    activeTab: tab.id,
+                },
+            },
+        }))
+
+        store.getState().setTabContent(tab.id, "alpha\nbeta\n")
+
+        const now = store.getState().ui.api.tabs.find((t) => t.id === tab.id)!
+        expect(now.content).toBe("alpha\nbeta\n")
+        expect(now.savedContent).toBe("alpha\nbeta\n")
+        expect(now.dirty).toBe(false)
+        expect(calls).toEqual([])
+    })
+
+    test("setTabLineEnding marks a clean tab dirty until the saved line ending is restored", () => {
+        const store = freshStore()
+        const tab = {
+            id: 9902,
+            type: "file" as const,
+            name: "win.ts",
+            path: "src/win.ts",
+            realPath: "C:\\repo\\src\\win.ts",
+            content: "alpha\n",
+            savedContent: "alpha\n",
+            lineEnding: "crlf" as const,
+            savedLineEnding: "crlf" as const,
+        }
+        store.setState((s) => ({
+            active: "api",
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    tabs: [tab],
+                    activeTab: tab.id,
+                },
+            },
+        }))
+
+        store.getState().setTabLineEnding(tab.id, "lf")
+        let now = store.getState().ui.api.tabs.find((t) => t.id === tab.id)!
+        expect(now.lineEnding).toBe("lf")
+        expect(now.dirty).toBe(true)
+
+        store.getState().setTabLineEnding(tab.id, "crlf")
+        now = store.getState().ui.api.tabs.find((t) => t.id === tab.id)!
+        expect(now.lineEnding).toBe("crlf")
         expect(now.dirty).toBe(false)
     })
 

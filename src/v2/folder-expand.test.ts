@@ -13,6 +13,7 @@ const writeResolvers: Array<() => void> = []
 let blockSftpList = false
 const sftpListResolvers: Array<() => void> = []
 const savedBackups: Array<{ path: string; content: string }> = []
+const writeFileCalls: any[] = []
 let pickedFolder: string | null = "/tmp/export-target"
 let exportFailure: unknown = null
 const exportCalls: any[] = []
@@ -92,6 +93,7 @@ mock.module("@tauri-apps/api/core", () => ({
             return null
         }
         if (cmd === "write_text_file") {
+            writeFileCalls.push(args)
             if (blockWrite) {
                 await new Promise<void>((resolve) => writeResolvers.push(resolve))
             }
@@ -331,6 +333,7 @@ async function ensureMockWorkspace(): Promise<void> {
     writeResolvers.length = 0
     sftpListResolvers.length = 0
     savedBackups.length = 0
+    writeFileCalls.length = 0
     workspaceDiagnostics = []
     renameEdit = null
     lspCalls.length = 0
@@ -826,6 +829,29 @@ describe("real folder expansion", () => {
 
         await waitFor(() => lspCalls.some((call) => call.cmd === "lsp_open_document" && call.args.path === "src/App.tsx" && call.args.content === "renamed"))
         expect(lspCalls.some((call) => call.cmd === "lsp_open_document" && call.args.path === "src/App.tsx" && call.args.content === "renamed")).toBe(true)
+    })
+
+    test("save serializes the selected CRLF line ending", async () => {
+        await ensureMockWorkspace()
+        v2Store.getState().toggleDir("src")
+        await new Promise((resolve) => setTimeout(resolve, 30))
+
+        v2Store.getState().openFile("src/App.tsx")
+        await waitFor(() => Boolean(v2Store.getState().ui.demo.tabs.find((t) => t.type === "file" && t.path === "src/App.tsx")?.content))
+        const tab = v2Store.getState().ui.demo.tabs.find((t) => t.type === "file" && t.path === "src/App.tsx")!
+
+        v2Store.getState().setTabContent(tab.id, "one\ntwo\n")
+        v2Store.getState().setTabLineEnding(tab.id, "crlf")
+        v2Store.getState().saveTab(tab.id)
+
+        await waitFor(() => writeFileCalls.some((call) => call.path === ROOT + "/src/App.tsx"))
+        const call = writeFileCalls.find((item) => item.path === ROOT + "/src/App.tsx")
+        expect(call.content).toBe("one\r\ntwo\r\n")
+
+        const saved = v2Store.getState().ui.demo.tabs.find((t) => t.id === tab.id)!
+        expect(saved.savedContent).toBe("one\ntwo\n")
+        expect(saved.savedLineEnding).toBe("crlf")
+        expect(saved.dirty).toBe(false)
     })
 
     test("save completion does not clear a newer autosave timer", async () => {

@@ -11,6 +11,7 @@ import type { DbDialogState } from "./db-dialog"
 export type FnMode = "files" | "git" | "db" | "ssh" | "agent" | "lang"
 
 export type TabKind = "file" | "cmd" | "browser" | "git" | "db" | "sftp" | "diff" | "conflict"
+export type LineEnding = "lf" | "crlf"
 
 // Result grid of a real database query (rows pre-rendered as display strings).
 export type DbGrid = {
@@ -53,6 +54,7 @@ export type BackupSummary = {
     path: string
     updatedMs: number
     contentLength: number
+    lineEnding?: LineEnding
 }
 
 export type Tab = {
@@ -83,6 +85,8 @@ export type Tab = {
     exited?: boolean
     // real editor: last saved snapshot + disk version for conflict detection
     savedContent?: string | null
+    lineEnding?: LineEnding
+    savedLineEnding?: LineEnding
     version?: { modified_ms: number; len: number } | null
     saving?: boolean
     // set when the file changed on disk outside the editor (file watcher)
@@ -109,6 +113,33 @@ export type Tab = {
     // real git blame gutter
     blame?: GitBlameFile
     blameLoading?: boolean
+}
+
+export function detectLineEnding(content: string | null | undefined): LineEnding {
+    if (!content) return "lf"
+    return content.includes("\r\n") ? "crlf" : "lf"
+}
+
+export function normalizeEditorContent(content: string): string {
+    return content.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+}
+
+export function serializeEditorContent(content: string, lineEnding: LineEnding): string {
+    const normalized = normalizeEditorContent(content)
+    return lineEnding === "crlf" ? normalized.replace(/\n/g, "\r\n") : normalized
+}
+
+export function tabIsDirty(tab: {
+    content?: string | null
+    savedContent?: string | null
+    lineEnding?: LineEnding
+    savedLineEnding?: LineEnding
+}): boolean {
+    const content = typeof tab.content === "string" ? normalizeEditorContent(tab.content) : (tab.content ?? "")
+    const savedContent = typeof tab.savedContent === "string" ? normalizeEditorContent(tab.savedContent) : (tab.savedContent ?? "")
+    const lineEnding = tab.lineEnding ?? detectLineEnding(typeof tab.content === "string" ? tab.content : tab.savedContent)
+    const savedLineEnding = tab.savedLineEnding ?? lineEnding
+    return content !== savedContent || lineEnding !== savedLineEnding
 }
 
 export type AzWindow = {

@@ -1,12 +1,13 @@
 import { call } from "../../lib/tauri";
 import type { FileVersion } from "../files/file-model";
-import type { UnsavedBackup } from "./recovery-model";
+import type { BackupLineEnding, UnsavedBackup } from "./recovery-model";
 
 export function saveUnsavedBackup(args: {
   workspaceRoot: string;
   workspaceId: string;
   path: string;
   content: string;
+  lineEnding?: BackupLineEnding;
   version: FileVersion | null;
 }): Promise<UnsavedBackup> {
   return call<UnsavedBackup>("save_unsaved_backup", args);

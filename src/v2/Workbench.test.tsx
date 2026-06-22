@@ -189,6 +189,46 @@ describe("WorkbenchV2", () => {
         expect(status?.textContent).not.toContain("PID")
     })
 
+    test("status bar shows and switches the active file line ending", () => {
+        const tab = {
+            id: 9901,
+            type: "file" as const,
+            name: "win.ts",
+            path: "src/win.ts",
+            realPath: "C:\\repo\\src\\win.ts",
+            content: "alpha\n",
+            savedContent: "alpha\n",
+            lineEnding: "crlf" as const,
+            savedLineEnding: "crlf" as const,
+            contentLang: "ts",
+        }
+        v2Store.setState((s) => ({
+            mode: "real",
+            active: "api",
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    tabs: [tab],
+                    activeTab: tab.id,
+                },
+            },
+        }))
+
+        const view = render(<WorkbenchV2 />)
+
+        const selector = view.getByRole("button", { name: "Line ending CRLF" })
+        expect(selector.textContent).toBe("CRLF")
+
+        fireEvent.click(selector)
+        fireEvent.click(view.getByRole("menuitem", { name: "LF" }))
+
+        const updated = v2Store.getState().ui.api.tabs.find((item) => item.id === tab.id)!
+        expect(updated.lineEnding).toBe("lf")
+        expect(updated.dirty).toBe(true)
+        expect(view.getByRole("button", { name: "Line ending LF" })).toBeTruthy()
+    })
+
     test("renders the real bootstrap empty workspace state", () => {
         v2Store.setState({
             mode: "real",
