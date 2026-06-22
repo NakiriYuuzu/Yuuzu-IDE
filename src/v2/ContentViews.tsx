@@ -317,6 +317,7 @@ export function BrowserView({ tab }: { tab: Tab }) {
                                     { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
                                     window.screenX,
                                     window.screenY,
+                                    window.screen,
                                 ),
                             )
                         }}

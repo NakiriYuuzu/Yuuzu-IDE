@@ -560,13 +560,45 @@ export function screenBoundsFromRect(
     rect: { x: number; y: number; width: number; height: number },
     screenX: number,
     screenY: number,
+    screenLike?: {
+        availLeft?: number
+        availTop?: number
+        availWidth?: number
+        availHeight?: number
+        width?: number
+        height?: number
+    },
 ): BrowserPreviewBounds {
+    const x = Math.round(rect.x + screenX)
+    const y = Math.round(rect.y + screenY)
+    const width = Math.max(1, Math.round(rect.width))
+    const height = Math.max(1, Math.round(rect.height))
+    const base = { x, y, width, height }
+    if (!screenLike) return base
+
+    const displayX = finiteNumber(screenLike.availLeft, 0)
+    const displayY = finiteNumber(screenLike.availTop, 0)
+    const displayWidth = finiteNumber(screenLike.availWidth, screenLike.width ?? 0)
+    const displayHeight = finiteNumber(screenLike.availHeight, screenLike.height ?? 0)
+    if (displayWidth <= 0 || displayHeight <= 0) return base
+
+    const boundedWidth = Math.max(1, Math.min(width, Math.round(displayWidth)))
+    const boundedHeight = Math.max(1, Math.min(height, Math.round(displayHeight)))
     return {
-        x: Math.round(rect.x + screenX),
-        y: Math.round(rect.y + screenY),
-        width: Math.round(rect.width),
-        height: Math.round(rect.height),
+        x: clampNumber(x, displayX, displayX + displayWidth - boundedWidth),
+        y: clampNumber(y, displayY, displayY + displayHeight - boundedHeight),
+        width: boundedWidth,
+        height: boundedHeight,
     }
+}
+
+function finiteNumber(value: unknown, fallback: number): number {
+    return typeof value === "number" && Number.isFinite(value) ? value : fallback
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+    if (max < min) return Math.round(min)
+    return Math.round(Math.min(Math.max(value, min), max))
 }
 
 type MetricSnapshotIn = {

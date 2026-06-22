@@ -627,6 +627,15 @@ describe("query result mapping", () => {
         )).toEqual({ x: 15, y: 28, width: 300, height: 200 })
     })
 
+    test("clamps browser capture bounds into the available screen", () => {
+        expect(screenBoundsFromRect(
+            { x: 337, y: 1554, width: 863, height: 661 },
+            0,
+            0,
+            { availLeft: 0, availTop: 0, availWidth: 1440, availHeight: 900 },
+        )).toEqual({ x: 337, y: 239, width: 863, height: 661 })
+    })
+
     test("confirmationFromError extracts the backend confirmation text", () => {
         expect(confirmationFromError("mutation requires confirmation text: RUN MUTATION")).toBe("RUN MUTATION")
         expect(confirmationFromError("destructive SQL requires confirmation text: RUN DESTRUCTIVE SQL")).toBe(

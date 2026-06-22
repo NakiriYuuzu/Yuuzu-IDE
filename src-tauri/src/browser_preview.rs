@@ -74,6 +74,23 @@ mod tests {
         .is_err());
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_capture_error_includes_region_and_permission_hint() {
+        let error = format_capture_error(
+            &BrowserCaptureBounds {
+                x: 337,
+                y: 713,
+                width: 863,
+                height: 661,
+            },
+            "could not create image from rect",
+        );
+
+        assert!(error.contains("region 337,713,863,661"));
+        assert!(error.contains("Screen Recording permission"));
+    }
+
     #[test]
     fn capture_region_builds_bounded_png_data_url() {
         let request = BrowserCaptureRequest {
@@ -454,12 +471,25 @@ fn capture_png_bytes_on_platform(bounds: &BrowserCaptureBounds) -> Result<Vec<u8
             String::from_utf8_lossy(&command_output.stderr).into_owned()
         };
         let _ = fs::remove_file(&path);
-        return Err(format!("screencapture command failed: {message}"));
+        return Err(format_capture_error(bounds, &message));
     };
 
     fs::remove_file(&path)
         .map_err(|err| format!("failed to remove temporary screenshot: {err}"))?;
     Ok(bytes)
+}
+
+#[cfg(target_os = "macos")]
+fn format_capture_error(bounds: &BrowserCaptureBounds, message: &str) -> String {
+    let hint = if message.contains("could not create image from rect") {
+        "; Screen Recording permission may be required for Yuuzu-IDE"
+    } else {
+        ""
+    };
+    format!(
+        "screencapture command failed for region {},{},{},{}: {message}{hint}",
+        bounds.x, bounds.y, bounds.width, bounds.height
+    )
 }
 
 #[cfg(not(target_os = "macos"))]
