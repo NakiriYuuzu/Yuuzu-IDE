@@ -101,6 +101,7 @@ export type Tab = {
     urlInput?: string
     urlErr?: string
     reloadN?: number
+    htmlPreview?: string | null
     screenshot?: { dataUrl: string; width: number; height: number }
     // real git diff tab
     diff?: DiffRow[]
@@ -127,6 +128,15 @@ export function normalizeEditorContent(content: string): string {
 export function serializeEditorContent(content: string, lineEnding: LineEnding): string {
     const normalized = normalizeEditorContent(content)
     return lineEnding === "crlf" ? normalized.replace(/\n/g, "\r\n") : normalized
+}
+
+export function isHtmlDocumentPath(path: string): boolean {
+    const clean = path.split(/[?#]/)[0].toLowerCase()
+    return clean.endsWith(".html") || clean.endsWith(".htm")
+}
+
+export function workspaceBrowserUrlForPath(path: string): string {
+    return "workspace://" + path.split(/[\\/]+/).filter(Boolean).map(encodeURIComponent).join("/")
 }
 
 export function tabIsDirty(tab: {
@@ -537,6 +547,22 @@ export function codeFor(path: string): CodeEntry {
             src: "# " + (path.split("/").pop() ?? path) + "\n\n(read-only preview)\n\nOpen in the editor to make changes.",
         }
     )
+}
+
+function escapeHtmlText(value: string): string {
+    return value
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+}
+
+export function demoHtmlPreviewForPath(path: string): string {
+    const entry = codeFor(path)
+    if (entry.lang === "html") return entry.src
+    const name = path.split(/[\\/]/).pop() ?? path
+    const escaped = escapeHtmlText(name)
+    return "<!doctype html>\n<html>\n<head><meta charset=\"utf-8\"><title>" + escaped + "</title></head>\n<body><h1>" + escaped + "</h1></body>\n</html>"
 }
 
 export function registerCode(path: string, entry: CodeEntry): void {

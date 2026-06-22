@@ -16,6 +16,7 @@ import {
     fmtBytes,
     fmtK,
     fmtUptime,
+    isHtmlDocumentPath,
     settingDefault,
     tsLabel,
 } from "./v2-model"
@@ -43,8 +44,10 @@ function buildCtxItems(ctx: CtxTarget, store: V2State): MenuEntry[] {
         case "file": {
             const path = ctx.path ?? ""
             const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ""
+            const isHtml = isHtmlDocumentPath(path)
             return [
                 { glyph: "▸", label: "Open", run: () => store.openFile(path) },
+                ...(isHtml ? [{ glyph: "◉", label: "Open in Browser", run: () => store.openFileInBrowser(path) }] : []),
                 { glyph: "◫", label: "Open to the side", run: () => store.openToSide(path) },
                 { glyph: "⎇", label: "Git history", run: () => store.openFileHistory(path) },
                 { glyph: "Σ", label: "Count tokens (Claude)", run: () => {

@@ -97,6 +97,35 @@ describe("ConfirmModal", () => {
 })
 
 describe("ContextMenu", () => {
+    test("html file context menu opens the file in the built-in browser", () => {
+        const previous = {
+            ctx: v2Store.getState().ctx,
+            openFileInBrowser: v2Store.getState().openFileInBrowser,
+        }
+        const opened: string[] = []
+
+        act(() => v2Store.setState({
+            openFileInBrowser: (path: string) => opened.push(path),
+        }))
+
+        try {
+            act(() => v2Store.getState().openCtx({ kind: "file", x: 12, y: 20, path: "public/index.html" }))
+            const htmlMenu = render(<ContextMenu />)
+            fireEvent.click(htmlMenu.getByRole("button", { name: "Open in Browser" }))
+            expect(opened).toEqual(["public/index.html"])
+            htmlMenu.unmount()
+
+            act(() => v2Store.getState().openCtx({ kind: "file", x: 12, y: 20, path: "src/server.ts" }))
+            const tsMenu = render(<ContextMenu />)
+            expect(tsMenu.queryByRole("button", { name: "Open in Browser" })).toBeNull()
+        } finally {
+            act(() => v2Store.setState({
+                ctx: previous.ctx,
+                openFileInBrowser: previous.openFileInBrowser,
+            }))
+        }
+    })
+
     test("commit rows expose typed reset and rebase actions", () => {
         v2Store.getState().selectProject("api")
         const short = v2Store.getState().ui.api.git.commits[0].h

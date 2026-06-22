@@ -143,7 +143,7 @@ import {
     remapDbOpenByProfileId,
     setNodeChildren,
 } from "./bridge"
-import { detectLineEnding, flattenTree, normalizeEditorContent, serializeEditorContent, tabIsDirty } from "./v2-model"
+import { detectLineEnding, flattenTree, isHtmlDocumentPath, normalizeEditorContent, serializeEditorContent, tabIsDirty, workspaceBrowserUrlForPath } from "./v2-model"
 import type { FnMode, LineEnding, ProjectUI, SftpPane, SshHost, Tab } from "./v2-model"
 import { registerRealDelegate, settingLimit, v2Store, emptyUI } from "./v2-store"
 
@@ -178,6 +178,10 @@ function editorContentFromDisk(content: string | null): { content: string | null
         content: typeof content === "string" ? normalizeEditorContent(content) : content,
         lineEnding: detectLineEnding(content),
     }
+}
+
+function fileNameForPath(path: string): string {
+    return path.split(/[\\/]/).pop() ?? path
 }
 
 function lineEndingForTab(tab: Pick<Tab, "content" | "savedContent" | "lineEnding" | "savedLineEnding">): LineEnding {
@@ -1013,7 +1017,7 @@ const delegate = {
         }
         const node = findNode(p.treeData, displayPath)
         const realPath = node?.p ?? displayPath
-        const name = displayPath.split("/").pop() ?? displayPath
+        const name = fileNameForPath(displayPath)
         const id = tabId()
         patchProject(pid, (q) => {
             q.tabs = [
@@ -1061,6 +1065,73 @@ const delegate = {
                 })
                 store().showToast("Open file: " + errMsg(error))
                 logDiag("error", "editor", "open failed " + errMsg(error))
+            }
+        })()
+    },
+
+    openFileInBrowser(displayPath: string) {
+        if (!isHtmlDocumentPath(displayPath)) {
+            store().showToast("Browser preview is only available for HTML files")
+            return
+        }
+        const pid = store().active
+        const root = rootOf(pid)
+        const p = store().ui[pid]
+        if (!root || !p) return
+        const existing = p.tabs.find((t) => t.type === "browser" && t.path === displayPath)
+        if (existing) {
+            patchProject(pid, (q) => {
+                q.activeTab = existing.id
+            })
+            return
+        }
+        const node = findNode(p.treeData, displayPath)
+        const realPath = node?.p ?? displayPath
+        const name = fileNameForPath(displayPath)
+        const id = tabId()
+        const url = workspaceBrowserUrlForPath(displayPath)
+        patchProject(pid, (q) => {
+            q.tabs = [
+                ...q.tabs,
+                {
+                    id,
+                    type: "browser",
+                    title: name,
+                    path: displayPath,
+                    realPath,
+                    url,
+                    urlInput: url,
+                    loading: true,
+                },
+            ]
+            q.activeTab = id
+        })
+        void (async () => {
+            try {
+                const read = await readTextFile(root, realPath)
+                patchProject(pid, (q) => {
+                    q.tabs = q.tabs.map((t) =>
+                        t.id === id
+                            ? {
+                                  ...t,
+                                  loading: false,
+                                  htmlPreview: read.too_large ? null : read.content,
+                                  tooLarge: read.too_large,
+                                  urlErr: read.too_large
+                                      ? "File is too large to preview."
+                                      : read.content == null
+                                        ? "Binary or unreadable file."
+                                        : undefined,
+                              }
+                            : t,
+                    )
+                })
+                logDiag("info", "browser", "opened " + displayPath)
+            } catch (error) {
+                patchProject(pid, (q) => {
+                    q.tabs = q.tabs.map((t) => (t.id === id ? { ...t, loading: false, htmlPreview: null, urlErr: errMsg(error) } : t))
+                })
+                store().showToast("Open HTML: " + errMsg(error))
             }
         })()
     },

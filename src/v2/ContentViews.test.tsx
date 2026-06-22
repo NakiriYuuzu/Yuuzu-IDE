@@ -531,6 +531,27 @@ describe("BrowserView", () => {
         expect(calls).toEqual([["capture", tab.id, { x: 15, y: 28, width: 300, height: 180 }]])
     })
 
+    test("renders workspace html previews with a sandboxed iframe", () => {
+        const tab: Tab = {
+            id: 9504,
+            type: "browser",
+            title: "index.html",
+            path: "public/index.html",
+            url: "workspace://public/index.html",
+            htmlPreview: "<!doctype html><html><body><h1>Hello</h1></body></html>",
+        }
+        resetBrowser(tab)
+
+        const view = render(<BrowserView tab={tab} />)
+        const frame = view.container.querySelector("iframe") as HTMLIFrameElement
+        const button = view.getByRole("button", { name: "Capture browser screenshot" }) as HTMLButtonElement
+
+        expect(frame.getAttribute("srcdoc")).toContain("<h1>Hello</h1>")
+        expect(frame.getAttribute("sandbox")).toBe("allow-scripts allow-forms allow-modals")
+        expect(button.disabled).toBe(true)
+        expect((view.container.querySelector(".yz2-url-input") as HTMLInputElement).readOnly).toBe(true)
+    })
+
     test("renders browser screenshot thumbnail with dimensions", () => {
         const tab: Tab = {
             id: 9503,

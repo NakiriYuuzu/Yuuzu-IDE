@@ -258,7 +258,18 @@ export function BrowserView({ tab }: { tab: Tab }) {
     const browserGo = useV2Store((s) => s.browserGo)
     const browserCapture = useV2Store((s) => s.browserCapture)
     const mode = tab.mode ?? "blank"
-    const hasPage = isRealMode && !!tab.url && tab.mode === undefined
+    const htmlPreview = typeof tab.htmlPreview === "string" ? tab.htmlPreview : undefined
+    const hasHtmlPreview = htmlPreview !== undefined
+    const hasPage = isRealMode && !!tab.url && tab.mode === undefined && !tab.loading && (hasHtmlPreview || !tab.url.startsWith("workspace://"))
+    const canCapture = hasPage && !hasHtmlPreview
+    const reloadBrowser = () => {
+        if (hasHtmlPreview) {
+            showToast("Local HTML preview is already loaded")
+            return
+        }
+        if (isRealMode) browserGo(tab.id)
+        else showToast("Reloaded " + (tab.url ?? ""))
+    }
 
     return (
         <div
@@ -276,7 +287,7 @@ export function BrowserView({ tab }: { tab: Tab }) {
                     <span
                         className="nav"
                         style={{ fontSize: 13 }}
-                        onClick={() => (isRealMode ? browserGo(tab.id) : showToast("Reloaded " + (tab.url ?? "")))}
+                        onClick={reloadBrowser}
                     >
                         ⟳
                     </span>
@@ -287,11 +298,14 @@ export function BrowserView({ tab }: { tab: Tab }) {
                                 className="yz2-url-input"
                                 value={tab.urlInput ?? tab.url ?? ""}
                                 placeholder="localhost:3000 — http loopback only"
+                                readOnly={hasHtmlPreview}
                                 spellCheck={false}
-                                onChange={(e) => setTabUrlInput(tab.id, e.target.value)}
+                                onChange={(e) => {
+                                    if (!hasHtmlPreview) setTabUrlInput(tab.id, e.target.value)
+                                }}
                                 onKeyDown={(e) => {
                                     e.stopPropagation()
-                                    if (e.key === "Enter") browserGo(tab.id)
+                                    if (e.key === "Enter" && !hasHtmlPreview) browserGo(tab.id)
                                 }}
                             />
                         </span>
@@ -303,13 +317,13 @@ export function BrowserView({ tab }: { tab: Tab }) {
                     )}
                     <button
                         type="button"
-                        className={"nav yz2-browser-capture" + (hasPage ? "" : " off")}
+                        className={"nav yz2-browser-capture" + (canCapture ? "" : " off")}
                         aria-label="Capture browser screenshot"
                         title="Capture browser screenshot"
-                        disabled={!hasPage}
+                        disabled={!canCapture}
                         onClick={() => {
                             const frame = frameRef.current
-                            if (!hasPage || !frame) return
+                            if (!canCapture || !frame) return
                             const rect = frame.getBoundingClientRect()
                             browserCapture(
                                 tab.id,
@@ -325,7 +339,9 @@ export function BrowserView({ tab }: { tab: Tab }) {
                         ▣
                     </button>
                 </div>
-                {isRealMode ? (
+                {isRealMode && tab.loading ? (
+                    <div className="yz2-browser-blank">Loading {tab.path ?? tab.url}…</div>
+                ) : isRealMode ? (
                     hasPage ? (
                         <>
                             {tab.screenshot ? (
@@ -338,8 +354,10 @@ export function BrowserView({ tab }: { tab: Tab }) {
                                 ref={frameRef}
                                 key={(tab.url ?? "") + ":" + (tab.reloadN ?? 0)}
                                 className="yz2-browser-frame"
-                                src={tab.url}
-                                title={tab.title ?? tab.url}
+                                src={hasHtmlPreview ? undefined : tab.url}
+                                srcDoc={htmlPreview}
+                                sandbox={hasHtmlPreview ? "allow-scripts allow-forms allow-modals" : undefined}
+                                title={tab.title ?? tab.url ?? "browser"}
                             />
                         </>
                     ) : (
@@ -426,7 +444,14 @@ export function SplitPane() {
                             {spTab.url}
                         </span>
                     </div>
-                    {spTab.mode === "api" ? (
+                    {typeof spTab.htmlPreview === "string" ? (
+                        <iframe
+                            className="yz2-browser-frame"
+                            srcDoc={spTab.htmlPreview}
+                            sandbox="allow-scripts allow-forms allow-modals"
+                            title={spTab.title ?? spTab.url}
+                        />
+                    ) : spTab.mode === "api" ? (
                         <div className="yz2-split-api">
                             {'{\n  "status": "ok",\n  "uptime": 8421.44,\n  "version": "0.4.2"\n}'.split("\n").map((l, i) => (
                                 <div key={i} className="jl">

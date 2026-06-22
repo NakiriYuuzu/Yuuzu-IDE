@@ -452,6 +452,35 @@ describe("tabs", () => {
         expect(after.tabs.find((t) => t.id === after.activeTab)).toBeDefined()
     })
 
+    test("openFile keeps html files in the editor and openFileInBrowser opens the preview", () => {
+        const store = freshStore()
+        const before = store.getState().ui.api.tabs.length
+
+        store.getState().openFile("public/index.html")
+
+        const editorTab = store.getState().ui.api.tabs.find((tab) => tab.type === "file" && tab.path === "public/index.html")
+        expect(editorTab).toBeDefined()
+        expect(editorTab?.name).toBe("index.html")
+        expect(store.getState().ui.api.activeTab).toBe(editorTab!.id)
+        expect(store.getState().ui.api.tabs.some((tab) => tab.type === "browser" && tab.path === "public/index.html")).toBe(false)
+
+        store.getState().openFileInBrowser("public/index.html")
+
+        const opened = store.getState().ui.api.tabs.find((tab) => tab.type === "browser" && tab.path === "public/index.html")
+        expect(opened).toBeDefined()
+        expect(opened?.title).toBe("index.html")
+        expect(opened?.url).toBe("workspace://public/index.html")
+        expect(opened?.htmlPreview).toContain("<!doctype html>")
+        expect(store.getState().ui.api.activeTab).toBe(opened!.id)
+
+        store.getState().openFileInBrowser("public/index.html")
+
+        const after = store.getState().ui.api
+        expect(after.tabs.filter((tab) => tab.type === "browser" && tab.path === "public/index.html")).toHaveLength(1)
+        expect(after.tabs.length).toBe(before + 2)
+        expect(after.activeTab).toBe(opened!.id)
+    })
+
     test("closeOthers keeps only the target and clears a stale split", () => {
         const store = freshStore()
         const first = store.getState().ui.api.tabs[0]

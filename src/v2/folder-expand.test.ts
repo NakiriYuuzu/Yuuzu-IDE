@@ -503,6 +503,45 @@ describe("real folder expansion", () => {
         }
     })
 
+    test("opens workspace html files in the built-in browser only from the explicit browser action", async () => {
+        await ensureMockWorkspace()
+        patchDemoProject((project) => {
+            project.treeData = [{
+                n: "public",
+                p: ROOT + "/public",
+                loaded: true,
+                d: [{ n: "index.html", p: ROOT + "/public/index.html" }],
+            }]
+        })
+
+        v2Store.getState().openFile("public/index.html")
+
+        await waitFor(() => Boolean(v2Store.getState().ui.demo.tabs.find((tab) => tab.type === "file" && tab.path === "public/index.html")?.content))
+        const editorTab = v2Store.getState().ui.demo.tabs.find((item) => item.type === "file" && item.path === "public/index.html")!
+        expect(editorTab.title).toBeUndefined()
+        expect(editorTab.name).toBe("index.html")
+        expect(editorTab.realPath).toBe(ROOT + "/public/index.html")
+        expect(editorTab.content).toBe("disk")
+        expect(v2Store.getState().ui.demo.activeTab).toBe(editorTab.id)
+        expect(v2Store.getState().ui.demo.tabs.some((item) => item.type === "browser" && item.path === "public/index.html")).toBe(false)
+
+        v2Store.getState().openFileInBrowser("public/index.html")
+
+        await waitFor(() => Boolean(v2Store.getState().ui.demo.tabs.find((tab) => tab.type === "browser" && tab.path === "public/index.html")?.htmlPreview))
+        const tab = v2Store.getState().ui.demo.tabs.find((item) => item.type === "browser" && item.path === "public/index.html")!
+        expect(tab.title).toBe("index.html")
+        expect(tab.realPath).toBe(ROOT + "/public/index.html")
+        expect(tab.url).toBe("workspace://public/index.html")
+        expect(tab.htmlPreview).toBe("disk")
+        expect(v2Store.getState().ui.demo.activeTab).toBe(tab.id)
+        expect(v2Store.getState().ui.demo.tabs.some((item) => item.type === "file" && item.path === "public/index.html")).toBe(true)
+
+        v2Store.getState().openFileInBrowser("public/index.html")
+
+        expect(v2Store.getState().ui.demo.tabs.filter((item) => item.type === "browser" && item.path === "public/index.html")).toHaveLength(1)
+        expect(v2Store.getState().ui.demo.activeTab).toBe(tab.id)
+    })
+
     test("delete opens a confirmation before removing files and refreshes git after confirmation", async () => {
         await ensureMockWorkspace()
 

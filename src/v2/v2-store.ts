@@ -21,6 +21,7 @@ import {
     buildSelect,
     codeFor,
     dbsFor,
+    demoHtmlPreviewForPath,
     estTokens,
     execOut,
     fmtK,
@@ -29,11 +30,13 @@ import {
     emptyGitData,
     gitFor,
     hostsFor,
+    isHtmlDocumentPath,
     normalizeEditorContent,
     registerCode,
     sftpFor,
     tabIsDirty,
     treeFor,
+    workspaceBrowserUrlForPath,
 } from "./v2-model"
 import type {
     AzWindow,
@@ -76,6 +79,7 @@ export type RealDelegate = {
     selectFn: (fn: FnMode) => void
     toggleDir: (displayPath: string) => void
     openFile: (displayPath: string, reveal?: { line: number; col: number }) => void
+    openFileInBrowser: (displayPath: string) => void
     newTerm: () => void
     closeTab: (tab: Tab) => void
     azNew: () => void
@@ -173,6 +177,23 @@ export function registerRealDelegate(delegate: RealDelegate | null): void {
 let idSeq = 100
 function nextId(): number {
     return ++idSeq
+}
+
+function fileNameForPath(path: string): string {
+    return path.split(/[\\/]/).pop() ?? path
+}
+
+function demoHtmlBrowserTab(path: string): Omit<Tab, "id"> {
+    const name = fileNameForPath(path)
+    const url = workspaceBrowserUrlForPath(path)
+    return {
+        type: "browser",
+        title: name,
+        path,
+        url,
+        urlInput: url,
+        htmlPreview: demoHtmlPreviewForPath(path),
+    }
 }
 
 function messageFromError(error: unknown): string {
@@ -398,6 +419,7 @@ export type V2State = {
     selectFn: (fn: FnMode) => void
     toggleDir: (path: string) => void
     openFile: (path: string, reveal?: { line: number; col: number }) => void
+    openFileInBrowser: (path: string) => void
     openToSide: (path: string) => void
     addNode: (dirPath: string, kind: "file" | "dir") => void
     deleteNode: (path: string) => void
@@ -978,7 +1000,7 @@ export function createV2Store() {
                     realDelegate?.openFile(path, reveal)
                     return
                 }
-                const name = path.split("/").pop() ?? path
+                const name = fileNameForPath(path)
                 upd((p) => {
                     const existing = p.tabs.find((t) => t.type === "file" && t.path === path)
                     if (existing) {
@@ -1000,6 +1022,27 @@ export function createV2Store() {
                 })
             },
 
+            openFileInBrowser: (path) => {
+                if (!isHtmlDocumentPath(path)) {
+                    get().showToast("Browser preview is only available for HTML files")
+                    return
+                }
+                if (get().mode === "real") {
+                    realDelegate?.openFileInBrowser(path)
+                    return
+                }
+                upd((p) => {
+                    const existing = p.tabs.find((t) => t.type === "browser" && t.path === path)
+                    if (existing) {
+                        p.activeTab = existing.id
+                        return
+                    }
+                    const tab: Tab = { id: nextId(), ...demoHtmlBrowserTab(path) }
+                    p.tabs = [...p.tabs, tab]
+                    p.activeTab = tab.id
+                })
+            },
+
             openToSide: (path) => {
                 if (get().mode === "real") {
                     const prevActive = get().ui[get().active]?.activeTab ?? null
@@ -1013,7 +1056,7 @@ export function createV2Store() {
                     }
                     return
                 }
-                const name = path.split("/").pop() ?? path
+                const name = fileNameForPath(path)
                 upd((p) => {
                     const prevActive = p.activeTab
                     const t = ensureTab(p, (x) => x.type === "file" && x.path === path, () => ({ type: "file", name, path }))
