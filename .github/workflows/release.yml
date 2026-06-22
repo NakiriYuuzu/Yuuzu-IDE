@@ -1,0 +1,76 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Release tag to build, e.g. v0.2.0"
+        required: true
+        type: string
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-26
+            rustTarget: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin
+          - os: windows-2025
+            rustTarget: x86_64-pc-windows-msvc
+            args: --target x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rustTarget }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend deps
+        run: bun install
+
+      - name: Build, sign and release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}
+          releaseName: Yuuzu-IDE ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+      - name: Upload Windows portable zip
+        if: matrix.os == 'windows-2025'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}
+        run: |
+          $version = $env:RELEASE_TAG.TrimStart("v")
+          $portableDir = "dist-portable/Yuuzu-IDE-$version-windows-x64"
+          New-Item -ItemType Directory -Force $portableDir | Out-Null
+          Copy-Item "src-tauri/target/x86_64-pc-windows-msvc/release/yuuzu-ide.exe" "$portableDir/Yuuzu-IDE.exe"
+          $zip = "Yuuzu-IDE_${version}_windows_x64_portable.zip"
+          Compress-Archive -Path "$portableDir/*" -DestinationPath $zip -Force
+          gh release upload $env:RELEASE_TAG $zip --clobber

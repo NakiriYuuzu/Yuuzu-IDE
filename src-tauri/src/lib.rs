@@ -39,6 +39,8 @@ fn show_main_window(app_handle: &tauri::AppHandle) {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir().map_err(|err| err.to_string())?;
             app.manage(commands::AppState::new(config_dir)?);

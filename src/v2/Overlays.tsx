@@ -23,6 +23,7 @@ import type { CtxTarget } from "./v2-model"
 import { useV2Store } from "./v2-store"
 import type { V2State } from "./v2-store"
 import { writeToSession } from "./controller"
+import { checkForUpdate, updateToastMessage, type UpdateCheck } from "./updater"
 
 // Clear a live PTY without killing it: form feed redraws the prompt.
 function sendTermClear(sessionId: string): void {
@@ -812,6 +813,55 @@ function RecoverySection() {
     )
 }
 
+function UpdatesSection() {
+    const showToast = useV2Store((s) => s.showToast)
+    const [checking, setChecking] = useState(false)
+    const [installing, setInstalling] = useState(false)
+    const [result, setResult] = useState<UpdateCheck | null>(null)
+    const resultMessage = result ? updateToastMessage(result, false) : null
+
+    async function checkUpdates() {
+        setChecking(true)
+        try {
+            const next = await checkForUpdate()
+            setResult(next)
+            const message = updateToastMessage(next, false)
+            if (message) showToast(message)
+        } finally {
+            setChecking(false)
+        }
+    }
+
+    async function installUpdate() {
+        if (result?.kind !== "available") return
+        setInstalling(true)
+        try {
+            await result.install()
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            showToast("安裝更新失敗：" + message)
+        } finally {
+            setInstalling(false)
+        }
+    }
+
+    return (
+        <div className="yz2-stab">
+            <div className="yz2-stab-refresh">
+                <button type="button" className="yz2-btn-ghost" disabled={checking} onClick={() => void checkUpdates()}>
+                    {checking ? "Checking..." : "Check for updates"}
+                </button>
+                {result?.kind === "available" ? (
+                    <button type="button" className="yz2-btn-accent" disabled={installing} onClick={() => void installUpdate()}>
+                        {installing ? "Installing..." : "Install & Restart"}
+                    </button>
+                ) : null}
+            </div>
+            {resultMessage ? <div className="yz2-panel-note">{resultMessage}</div> : null}
+        </div>
+    )
+}
+
 export function SettingsModal() {
     const store = useV2Store()
     if (!store.stOpen) return null
@@ -862,6 +912,8 @@ export function SettingsModal() {
                             <DiagnosticsSection />
                         ) : cur.custom === "recovery" ? (
                             <RecoverySection />
+                        ) : cur.custom === "updates" ? (
+                            <UpdatesSection />
                         ) : (
                             cur.rows.map((row, i) => (
                                 <div key={cur.id + i} className="yz2-setting-row">

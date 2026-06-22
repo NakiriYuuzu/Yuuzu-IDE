@@ -1,9 +1,33 @@
 /// <reference types="bun-types" />
 
-import { afterEach, describe, expect, test } from "bun:test"
-import { act, cleanup, fireEvent, render } from "@testing-library/react"
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react"
 
 import { ensureTestDom } from "../test/test-dom"
+
+type TestUpdateCheck =
+    | { kind: "available"; version: string; install: () => Promise<void> }
+    | { kind: "current" }
+    | { kind: "error"; message: string }
+
+let nextUpdateResult: TestUpdateCheck = { kind: "current" }
+const checkForUpdateMock = mock(async () => nextUpdateResult)
+const updateToastMessageMock = mock((result: TestUpdateCheck, silent: boolean) => {
+    if (result.kind === "available") {
+        return silent
+            ? "更新 " + result.version + " 可用 — 前往 Settings › Updates 安裝"
+            : "更新 " + result.version + " 可用"
+    }
+    if (silent) return null
+    if (result.kind === "current") return "已是最新版本"
+    return "檢查更新失敗：" + result.message
+})
+
+mock.module("./updater", () => ({
+    checkForUpdate: checkForUpdateMock,
+    updateToastMessage: updateToastMessageMock,
+}))
+
 import { CodeActionsOverlay, ConfirmModal, ContextMenu, ReferencesOverlay, SettingsModal } from "./Overlays"
 import { v2Store } from "./v2-store"
 
@@ -15,7 +39,16 @@ const initialOverlayState = {
     order: [...v2Store.getState().order],
     meta: structuredClone(v2Store.getState().meta),
     ui: structuredClone(v2Store.getState().ui),
+    stOpen: v2Store.getState().stOpen,
+    stSec: v2Store.getState().stSec,
+    toast: v2Store.getState().toast,
 }
+
+beforeEach(() => {
+    nextUpdateResult = { kind: "current" }
+    checkForUpdateMock.mockClear()
+    updateToastMessageMock.mockClear()
+})
 
 afterEach(() => {
     cleanup()
@@ -25,6 +58,9 @@ afterEach(() => {
         order: [...initialOverlayState.order],
         meta: structuredClone(initialOverlayState.meta),
         ui: structuredClone(initialOverlayState.ui),
+        stOpen: initialOverlayState.stOpen,
+        stSec: initialOverlayState.stSec,
+        toast: initialOverlayState.toast,
         confirm: null,
         ctx: null,
     })
@@ -392,6 +428,57 @@ describe("ContextMenu", () => {
 })
 
 describe("SettingsModal", () => {
+    test("Settings nav exposes the Updates section", () => {
+        act(() => v2Store.setState({
+            stOpen: true,
+            stSec: "general",
+        }))
+
+        const view = render(<SettingsModal />)
+        fireEvent.click(view.getByRole("button", { name: /Updates/ }))
+
+        expect(v2Store.getState().stSec).toBe("updates")
+        expect(view.getByText("Check for and install Yuuzu-IDE updates.")).toBeTruthy()
+        expect(view.getByRole("button", { name: "Check for updates" })).toBeTruthy()
+    })
+
+    test("Updates section reports current version from a manual check", async () => {
+        nextUpdateResult = { kind: "current" }
+        act(() => v2Store.setState({
+            stOpen: true,
+            stSec: "updates",
+            toast: null,
+        }))
+
+        const view = render(<SettingsModal />)
+        fireEvent.click(view.getByRole("button", { name: "Check for updates" }))
+
+        expect(await view.findByText("已是最新版本")).toBeTruthy()
+        expect(checkForUpdateMock).toHaveBeenCalledTimes(1)
+        expect(updateToastMessageMock).toHaveBeenCalledWith({ kind: "current" }, false)
+        expect(v2Store.getState().toast).toBe("已是最新版本")
+    })
+
+    test("Updates section offers Install & Restart when an update is available", async () => {
+        const install = mock(async () => {})
+        nextUpdateResult = { kind: "available", version: "0.2.0", install }
+        act(() => v2Store.setState({
+            stOpen: true,
+            stSec: "updates",
+            toast: null,
+        }))
+
+        const view = render(<SettingsModal />)
+        fireEvent.click(view.getByRole("button", { name: "Check for updates" }))
+
+        const installButton = await view.findByRole("button", { name: "Install & Restart" })
+        expect(view.getByText("更新 0.2.0 可用")).toBeTruthy()
+        expect(v2Store.getState().toast).toBe("更新 0.2.0 可用")
+
+        fireEvent.click(installButton)
+        await waitFor(() => expect(install).toHaveBeenCalledTimes(1))
+    })
+
     test("Performance section configures background metric refresh interval", () => {
         const previous = {
             stOpen: v2Store.getState().stOpen,

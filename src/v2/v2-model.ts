@@ -858,7 +858,7 @@ export type SettingSection = {
     glyph: string
     desc: string
     rows: SettingRow[]
-    custom?: "performance" | "diagnostics" | "recovery" | "language"
+    custom?: "performance" | "diagnostics" | "recovery" | "language" | "updates"
 }
 
 export const SETTINGS_CONFIG: SettingSection[] = [
@@ -904,6 +904,7 @@ export const SETTINGS_CONFIG: SettingSection[] = [
         { label: "SFTP copy / paste", desc: "Transfer the selected file", info: "⌘C · ⌘V" },
     ] },
     { id: "language", label: "Language Servers", glyph: "◇", desc: "Language servers, diagnostics and logs for the active workspace.", rows: [], custom: "language" },
+    { id: "updates", label: "Updates", glyph: "⟳", desc: "Check for and install Yuuzu-IDE updates.", rows: [], custom: "updates" },
     { id: "performance", label: "Performance", glyph: "◷", desc: "Live process metrics — memory, uptime and index sizes.", rows: [
         { k: "metricRefreshInterval", label: "Background refresh", desc: "Update status-bar memory without loading diagnostics", choice: ["off", "5s", "10s", "30s", "60s"], def: "off" },
     ], custom: "performance" },
