@@ -26,9 +26,18 @@ mod workspace_store;
 
 use tauri::Manager;
 
+#[cfg(target_os = "macos")]
+fn show_main_window(app_handle: &tauri::AppHandle) {
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir().map_err(|err| err.to_string())?;
@@ -41,7 +50,18 @@ pub fn run() {
             app.manage(debug::DebugState::new_with_event_sink(std::sync::Arc::new(
                 debug::TauriDebugEventSink::new(app.handle().clone()),
             )));
+            #[cfg(target_os = "macos")]
+            show_main_window(app.handle());
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            #[cfg(target_os = "macos")]
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::load_settings,
@@ -192,6 +212,12 @@ pub fn run() {
             commands::rename_path,
             commands::delete_path
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running tauri application");
+    app.run(|app_handle, event| {
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen { .. } = event {
+            show_main_window(app_handle);
+        }
+    });
 }
