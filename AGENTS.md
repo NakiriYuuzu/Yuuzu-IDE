@@ -252,6 +252,12 @@ Do not silently convert a one-off lesson into a permanent rule.
 - For UI/runtime regressions, static reasoning is not enough when the issue is
   visual or launch-related. Verify with browser preview or the Tauri app when
   feasible.
+- Browser changes that add or alter native Tauri Webview surfaces need packaged
+  debug app smoke verification, not only unit tests or `bun run build`. Cover
+  Webview feature/capability configuration, attach/detach/resize behavior, stale
+  child-Webview cleanup after navigation or validation errors, remote HTTPS
+  display, remote HTTP rejection, loopback HTTP, and screenshot permission
+  behavior when capture is involved.
 
 ## Style
 

@@ -1,14 +1,16 @@
 // Main-group content views: empty state, editor, terminal, browser and the
 // split pane. Git graph / DB / SFTP views live in their own files.
 
-import { useRef } from "react"
+import { useRef, useState } from "react"
+import { BrowserPreviewSurface } from "../features/browser/BrowserPreviewSurface"
+import type { BrowserPaneGeometry, BrowserPreviewAdapter } from "../features/browser/browser-webview"
 import { TerminalTab } from "../features/terminal/TerminalTab"
 
 import { ctxPct, estTokens, fmtK, hlCode, hlLine, settingDefault, termSegs } from "./v2-model"
 import type { Seg, Tab } from "./v2-model"
 import { tokenChipFor, useV2Store } from "./v2-store"
 import { applyOscTitle, resizeSession, writeToSession } from "./controller"
-import { screenBoundsFromRect } from "./bridge"
+import { isTauri, screenBoundsFromRect } from "./bridge"
 import { tabGlyph } from "./TabStrip"
 import { highlightContent } from "./hl-cache"
 import { EditorHost } from "./editor/EditorHost"
@@ -248,17 +250,33 @@ function BrowserHero({ compact }: { compact?: boolean }) {
     )
 }
 
-export function BrowserView({ tab }: { tab: Tab }) {
+type BrowserViewProps = {
+    tab: Tab
+    browserPreviewAdapter?: BrowserPreviewAdapter
+    resolveBrowserGeometry?: (element: HTMLDivElement) => Promise<BrowserPaneGeometry>
+}
+
+export function BrowserView({ tab, browserPreviewAdapter, resolveBrowserGeometry }: BrowserViewProps) {
     const frameRef = useRef<HTMLIFrameElement>(null)
     const isRealMode = useV2Store((s) => s.mode === "real")
+    const workspaceId = useV2Store((s) => s.active)
     const wins = useV2Store((s) => s.ui[s.active].wins)
     const openCtx = useV2Store((s) => s.openCtx)
     const showToast = useV2Store((s) => s.showToast)
     const setTabUrlInput = useV2Store((s) => s.setTabUrlInput)
     const browserGo = useV2Store((s) => s.browserGo)
     const browserCapture = useV2Store((s) => s.browserCapture)
+    const [nativeBounds, setNativeBounds] = useState<BrowserPaneGeometry["captureBounds"] | null>(null)
+    const [nativeError, setNativeError] = useState<string | null>(null)
     const mode = tab.mode ?? "blank"
-    const hasPage = isRealMode && !!tab.url && tab.mode === undefined
+    const hasUrlError = isRealMode && !!tab.urlErr
+    const hasPage = isRealMode && !hasUrlError && !!tab.url && tab.mode === undefined && !tab.loading
+    const useNativePreview = hasPage && isTauri()
+    const canCapture = hasPage && (!useNativePreview || nativeBounds !== null)
+    const reloadBrowser = () => {
+        if (isRealMode) browserGo(tab.id)
+        else showToast("Reloaded " + (tab.url ?? ""))
+    }
 
     return (
         <div
@@ -276,7 +294,7 @@ export function BrowserView({ tab }: { tab: Tab }) {
                     <span
                         className="nav"
                         style={{ fontSize: 13 }}
-                        onClick={() => (isRealMode ? browserGo(tab.id) : showToast("Reloaded " + (tab.url ?? "")))}
+                        onClick={reloadBrowser}
                     >
                         ⟳
                     </span>
@@ -286,7 +304,7 @@ export function BrowserView({ tab }: { tab: Tab }) {
                             <input
                                 className="yz2-url-input"
                                 value={tab.urlInput ?? tab.url ?? ""}
-                                placeholder="localhost:3000 — http loopback only"
+                                placeholder="localhost:3000 or https://example.com"
                                 spellCheck={false}
                                 onChange={(e) => setTabUrlInput(tab.id, e.target.value)}
                                 onKeyDown={(e) => {
@@ -303,23 +321,27 @@ export function BrowserView({ tab }: { tab: Tab }) {
                     )}
                     <button
                         type="button"
-                        className={"nav yz2-browser-capture" + (hasPage ? "" : " off")}
+                        className={"nav yz2-browser-capture" + (canCapture ? "" : " off")}
                         aria-label="Capture browser screenshot"
                         title="Capture browser screenshot"
-                        disabled={!hasPage}
+                        disabled={!canCapture}
                         onClick={() => {
-                            const frame = frameRef.current
-                            if (!hasPage || !frame) return
-                            const rect = frame.getBoundingClientRect()
-                            browserCapture(
-                                tab.id,
-                                screenBoundsFromRect(
+                            if (!canCapture) return
+                            const bounds = useNativePreview
+                                ? nativeBounds
+                                : (() => {
+                                    const frame = frameRef.current
+                                    if (!frame) return null
+                                    const rect = frame.getBoundingClientRect()
+                                    return screenBoundsFromRect(
                                     { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
                                     window.screenX,
                                     window.screenY,
                                     window.screen,
-                                ),
-                            )
+                                    )
+                                })()
+                            if (!bounds) return
+                            browserCapture(tab.id, bounds)
                         }}
                     >
                         ▣
@@ -334,13 +356,32 @@ export function BrowserView({ tab }: { tab: Tab }) {
                                     <span>{tab.screenshot.width}×{tab.screenshot.height}</span>
                                 </div>
                             ) : null}
-                            <iframe
-                                ref={frameRef}
-                                key={(tab.url ?? "") + ":" + (tab.reloadN ?? 0)}
-                                className="yz2-browser-frame"
-                                src={tab.url}
-                                title={tab.title ?? tab.url}
-                            />
+                            {nativeError ? (
+                                <div className="yz2-browser-native-error">{nativeError}</div>
+                            ) : null}
+                            {useNativePreview ? (
+                                <div className="yz2-browser-native-host">
+                                    <BrowserPreviewSurface
+                                        workspaceId={workspaceId}
+                                        url={tab.url ?? null}
+                                        title={tab.title ?? tab.url ?? null}
+                                        reloadVersion={tab.reloadN ?? 0}
+                                        hardReloadVersion={0}
+                                        adapter={browserPreviewAdapter}
+                                        resolveGeometry={resolveBrowserGeometry}
+                                        onBoundsChange={setNativeBounds}
+                                        onError={setNativeError}
+                                    />
+                                </div>
+                            ) : (
+                                <iframe
+                                    ref={frameRef}
+                                    key={(tab.url ?? "") + ":" + (tab.reloadN ?? 0)}
+                                    className="yz2-browser-frame"
+                                    src={tab.url}
+                                    title={tab.title ?? tab.url ?? "browser"}
+                                />
+                            )}
                         </>
                     ) : (
                         <div className="yz2-browser-blank">

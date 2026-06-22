@@ -158,14 +158,23 @@ describe("browser model", () => {
     ]);
   });
 
-  test("ignores https output URLs and accepts IPv6 loopback output URLs", () => {
+  test("accepts https loopback output URLs and ignores remote HTTPS output URLs", () => {
     const targets = detectDevServerTargets({
       detectedTasks: [],
       runs: [
         {
-          id: "run-https",
+          id: "run-https-local",
           workspace_id: "workspace-1",
-          label: "Server",
+          label: "Local HTTPS",
+          command: "vite",
+          cwd: "/repo",
+          status: "Running" as const,
+          exit_code: null,
+        },
+        {
+          id: "run-https-remote",
+          workspace_id: "workspace-1",
+          label: "Remote Docs",
           command: "vite",
           cwd: "/repo",
           status: "Running" as const,
@@ -182,14 +191,21 @@ describe("browser model", () => {
         },
       ],
       outputByRunId: {
-        "run-https": "running at https://localhost:5173",
+        "run-https-local": "running at https://localhost:5173",
+        "run-https-remote": "docs at https://example.com/guide",
         "run-ipv6": "ready at http://[::1]:8080/",
       },
     });
 
     expect(targets).toEqual([
       {
-        id: "task-output:run-ipv6:0",
+        id: "task-output:run-https-local:0",
+        label: "Local HTTPS",
+        url: "https://localhost:5173/",
+        source: "running-task-output",
+      },
+      {
+        id: "task-output:run-ipv6:1",
         label: "IPv6",
         url: "http://[::1]:8080/",
         source: "running-task-output",
