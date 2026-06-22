@@ -1,4 +1,5 @@
 pub mod agent;
+mod background_process;
 pub mod browser_preview;
 mod clipboard;
 mod commands;
@@ -222,4 +223,52 @@ pub fn run() {
             show_main_window(app_handle);
         }
     });
+}
+
+#[cfg(test)]
+mod background_process_contract_tests {
+    #[test]
+    fn windows_sensitive_background_spawns_use_central_helper() {
+        let direct_spawn_patterns = [
+            (
+                "git.rs",
+                include_str!("git.rs"),
+                &[
+                    "Command::new(\"git\")",
+                    "std::process::Command::new(\"git\")",
+                ][..],
+            ),
+            (
+                "tasks.rs",
+                include_str!("tasks.rs"),
+                &["Command::new(spec.program)", "Command::new(\"taskkill\")"][..],
+            ),
+            (
+                "lsp.rs",
+                include_str!("lsp.rs"),
+                &["Command::new(resolve_lsp_command_path_with_path"][..],
+            ),
+            (
+                "debug.rs",
+                include_str!("debug.rs"),
+                &["Command::new(&program)"][..],
+            ),
+            (
+                "clipboard.rs",
+                include_str!("clipboard.rs"),
+                &["Command::new(program)"][..],
+            ),
+        ];
+
+        let mut violations = Vec::new();
+        for (file, source, patterns) in direct_spawn_patterns {
+            for pattern in patterns {
+                if source.contains(pattern) {
+                    violations.push(format!("{file} still contains {pattern}"));
+                }
+            }
+        }
+
+        assert!(violations.is_empty(), "{}", violations.join("\n"));
+    }
 }
