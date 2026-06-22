@@ -1,0 +1,92 @@
+name: Bug report
+description: Report a problem you encountered while using Yuuzu-IDE.
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      description: Which OS did you encounter the problem on?
+      options:
+        - macOS Apple Silicon
+        - Windows x64
+        - Windows x64 Portable ZIP
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: app-version
+    attributes:
+      label: Yuuzu-IDE version
+      description: Provide the release version or commit hash.
+      placeholder: v0.1.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: problem-type
+    attributes:
+      label: Problem type
+      description: What kind of problem did you encounter?
+      options:
+        - Installation failed
+        - App failed to launch
+        - Auto-update failed
+        - Portable ZIP failed to run
+        - UI or interaction issue
+        - Terminal, LSP, or Git feature issue
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the actual problem you encountered.
+      placeholder: For example, on Windows x64 Portable ZIP, Yuuzu-IDE.exe does not launch after extraction.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the steps needed to reproduce the problem.
+      placeholder: |
+        1. Download ...
+        2. Install or extract ...
+        3. Open ...
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error messages, screenshots, or logs
+      description: Paste any error output, screenshots, console logs, or system prompts here.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I selected the OS where the problem occurred.
+          required: true
+        - label: I described the actual problem.
+          required: true
+        - label: I provided reproduction steps or enough context to investigate.
+          required: true
