@@ -87,9 +87,9 @@ fn workspace_child(
     path: &Path,
     resolution: PathResolution,
 ) -> Result<PathBuf, String> {
-    // `dunce::canonicalize` avoids the Windows `\\?\` verbatim prefix that
+    // `dunce` avoids the Windows `\\?\` verbatim prefix that
     // `std::fs::canonicalize` emits. Without this, an already-canonical
-    // verbatim root compared against a non-verbatim absolute candidate fails
+    // verbatim path compared against a non-verbatim equivalent fails
     // `starts_with`, rejecting valid paths as "outside workspace" on Windows.
     let root = dunce::canonicalize(workspace_root).map_err(|err| err.to_string())?;
     let lexical_root = if workspace_root.is_absolute() {
@@ -102,6 +102,7 @@ fn workspace_child(
     } else {
         root.join(path)
     };
+    let candidate = dunce::simplified(&candidate).to_path_buf();
 
     if candidate.exists() {
         let normalized = normalize_path(&candidate)?;
@@ -494,6 +495,30 @@ mod tests {
             result.is_ok(),
             "absolute cwd inside a verbatim root must be accepted: {result:?}"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn read_text_file_accepts_verbatim_file_path_under_workspace() {
+        // Regression for Explorer-open on Windows: scan output can carry a `\\?\`
+        // verbatim file path, while the workspace root is compared in simplified
+        // form. The file is still inside the workspace and must be readable.
+        let root = tempdir().expect("tempdir");
+        let file = root.path().join("package.json");
+        fs::write(&file, "{}\n").expect("write file");
+        let verbatim_file = std::fs::canonicalize(&file).expect("verbatim file");
+        assert!(
+            verbatim_file.to_string_lossy().starts_with(r"\\?\"),
+            "precondition: std canonicalize must produce a verbatim prefix on Windows"
+        );
+
+        let result = super::read_text_file(root.path(), &verbatim_file, 1024);
+
+        assert!(
+            result.is_ok(),
+            "verbatim file path inside the workspace must be accepted: {result:?}"
+        );
+        assert_eq!(result.expect("read").content.as_deref(), Some("{}\n"));
     }
 
     #[test]
