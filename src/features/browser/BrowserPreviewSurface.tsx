@@ -91,6 +91,68 @@ export function BrowserPreviewSurface({
   }, [workspaceId, url, adapter, resolveGeometry]);
 
   useEffect(() => {
+    const hostElement = hostRef.current;
+    if (!workspaceId || !url || !hostElement) {
+      return;
+    }
+
+    let disposed = false;
+    let frame: number | null = null;
+    const scheduleFrame = (callback: FrameRequestCallback) => {
+      if (typeof requestAnimationFrame === "function") {
+        return requestAnimationFrame(callback);
+      }
+      return window.setTimeout(() => callback(performance.now()), 0);
+    };
+    const cancelFrame = (id: number) => {
+      if (typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(id);
+      } else {
+        window.clearTimeout(id);
+      }
+    };
+    const syncBounds = () => {
+      if (frame !== null) {
+        cancelFrame(frame);
+      }
+      frame = scheduleFrame(() => {
+        void (async () => {
+          try {
+            const geometry = await resolveGeometry(hostElement);
+            if (disposed) {
+              return;
+            }
+            onBoundsChangeRef.current(geometry.captureBounds);
+            await adapter.updateBounds(geometry.webviewBounds);
+          } catch (error) {
+            if (!disposed) {
+              onErrorRef.current(
+                error instanceof Error ? error.message : `${error}`,
+              );
+            }
+          }
+        })();
+      });
+    };
+
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(syncBounds);
+    observer?.observe(hostElement);
+    window.addEventListener("resize", syncBounds);
+
+    return () => {
+      disposed = true;
+      if (frame !== null) {
+        cancelFrame(frame);
+      }
+      observer?.disconnect();
+      window.removeEventListener("resize", syncBounds);
+    };
+  }, [workspaceId, url, adapter, resolveGeometry]);
+
+  useEffect(() => {
     if (reloadVersion <= 0 || !url) {
       return;
     }

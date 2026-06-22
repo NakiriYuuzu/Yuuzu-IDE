@@ -4343,8 +4343,9 @@ mod tests {
     }
 
     #[test]
-    fn browser_validate_url_rejects_remote_hosts() {
+    fn browser_validate_url_rejects_remote_http_hosts() {
         assert!(crate::browser_preview::normalize_browser_url("http://example.com:3000").is_err());
+        assert!(crate::browser_preview::normalize_browser_url("https://example.com").is_ok());
         assert!(crate::browser_preview::normalize_browser_url("localhost:3000").is_ok());
     }
 

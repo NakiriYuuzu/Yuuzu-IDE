@@ -97,7 +97,7 @@ export type Tab = {
     grid?: DbGrid
     history?: DbHistoryRow[]
     historyLoading?: boolean
-    // real browser preview (loopback iframe)
+    // real browser preview (native Webview for network URLs)
     urlInput?: string
     urlErr?: string
     reloadN?: number
