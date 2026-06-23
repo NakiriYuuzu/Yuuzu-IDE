@@ -42,6 +42,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_os::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir().map_err(|err| err.to_string())?;
             app.manage(commands::AppState::new(config_dir)?);

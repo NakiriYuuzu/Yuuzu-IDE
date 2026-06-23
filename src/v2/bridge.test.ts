@@ -36,6 +36,7 @@ import {
     parentPath,
     relativePathFromUri,
     setNodeChildren,
+    titlebarChromeMode,
 } from "./bridge"
 import type { GitLogRow } from "../features/git/git-log-model"
 import type { GitRepositoryStatus } from "../features/git/git-model"
@@ -59,6 +60,20 @@ describe("mapWorkspaceToMeta", () => {
         expect(a.root).toBe("/a")
         expect(a.bg).toBe(b.bg)
         expect(mapWorkspaceToMeta({ id: "3", name: "c", path: "/c", pinned: false }, 1).fg).not.toBe(a.fg)
+    })
+})
+
+describe("titlebarChromeMode", () => {
+    test("keeps browser, macOS, and Windows titlebar spacing distinct", () => {
+        expect(titlebarChromeMode(false, null)).toBe("browser-mock")
+        expect(titlebarChromeMode(true, "macos")).toBe("macos-native")
+        expect(titlebarChromeMode(true, "windows")).toBe("windows-native")
+        expect(titlebarChromeMode(true, "linux")).toBe("other-native")
+    })
+
+    test("falls back to the macOS spacer when a Tauri platform cannot be resolved", () => {
+        expect(titlebarChromeMode(true, null)).toBe("macos-native")
+        expect(titlebarChromeMode(true, undefined)).toBe("macos-native")
     })
 })
 
