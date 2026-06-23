@@ -12,7 +12,7 @@ import { useV2Store, v2Store } from "./v2-store"
 import { bootstrapV2 } from "./controller"
 import { onWorkspaceFileChanged, unwatchWorkspace, watchWorkspace, type WatchWorkspaceHandle } from "../features/files/file-api"
 import { normalizeFsPath } from "./file-watch"
-import { isTauri, langForPath } from "./bridge"
+import { currentTitlebarChromeMode, isTauri, langForPath } from "./bridge"
 import { ProjectRail } from "./ProjectRail"
 import { SidePanel } from "./SidePanel"
 import { TabStrip } from "./TabStrip"
@@ -35,20 +35,21 @@ function TitleBar() {
     const setPanelOpen = useV2Store((s) => s.setPanelOpen)
     const toggleTheme = useV2Store((s) => s.toggleTheme)
     const openPalette = useV2Store((s) => s.openPalette)
+    const chromeMode = currentTitlebarChromeMode()
 
     return (
         <div className="yz2-titlebar" data-tauri-drag-region>
-            {isTauri() ? (
+            {chromeMode === "macos-native" ? (
                 // Native macOS traffic lights overlay this strip (titleBarStyle:
                 // Overlay + trafficLightPosition in tauri.conf.json).
-                <div style={{ width: 56, flex: "0 0 56px" }} aria-hidden="true" />
-            ) : (
+                <div className="yz2-native-traffic-spacer" style={{ width: 56, flex: "0 0 56px" }} aria-hidden="true" />
+            ) : chromeMode === "browser-mock" ? (
                 <div className="yz2-traffic" aria-hidden="true">
                     <span style={{ background: "#ff5f57" }} />
                     <span style={{ background: "#febc2e" }} />
                     <span style={{ background: "#28c840" }} />
                 </div>
-            )}
+            ) : null}
             <button
                 type="button"
                 className={"yz2-iconbtn yz2-panel-toggle" + (panelOpen ? "" : " is-on")}
@@ -78,12 +79,12 @@ function TitleBar() {
                 <span style={{ flex: 1 }}>Search or run a command</span>
                 <span className="kbd">⌘K</span>
             </button>
-            {isTauri() ? null : (
+            {chromeMode === "browser-mock" ? (
                 <span className="yz2-dev-badge">
                     <span className="yz2-dot" />
                     <span>dev :3000</span>
                 </span>
-            )}
+            ) : null}
             <button type="button" className="yz2-iconbtn" title="Theme — dark / light" onClick={toggleTheme}>
                 ◐
             </button>

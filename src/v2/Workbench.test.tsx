@@ -28,6 +28,13 @@ mock.module("./updater", () => ({
     updateToastMessage: updateToastMessageMock,
 }))
 
+let testPlatform = "macos"
+const platformMock = mock(() => testPlatform)
+
+mock.module("@tauri-apps/plugin-os", () => ({
+    platform: platformMock,
+}))
+
 import { defaultDbDialogState } from "./db-dialog"
 import { registerRealDelegate, v2Store } from "./v2-store"
 import { WorkbenchV2 } from "./Workbench"
@@ -57,8 +64,11 @@ const baselineMetric = {
 beforeEach(() => {
     cleanup()
     nextUpdateResult = { kind: "current" }
+    testPlatform = "macos"
     checkForUpdateMock.mockClear()
     updateToastMessageMock.mockClear()
+    platformMock.mockClear()
+    delete (window as any).__TAURI_INTERNALS__
     v2Store.setState({
         mode: "demo",
         active: "api",
@@ -75,6 +85,7 @@ beforeEach(() => {
 
 afterEach(() => {
     cleanup()
+    delete (window as any).__TAURI_INTERNALS__
     v2Store.setState({
         mode: initialWorkbenchState.mode,
         active: initialWorkbenchState.active,
@@ -91,6 +102,21 @@ afterEach(() => {
 })
 
 describe("WorkbenchV2", () => {
+    function renderTitlebar() {
+        const view = render(<WorkbenchV2 />)
+        const titlebar = view.container.querySelector(".yz2-titlebar")
+        const toggle = view.getByRole("button", { name: "Toggle side panel" })
+
+        expect(titlebar).toBeTruthy()
+
+        return { titlebar: titlebar!, toggle, view }
+    }
+
+    function setTauriPlatform(platform: string) {
+        testPlatform = platform
+        ;(window as any).__TAURI_INTERNALS__ = {}
+    }
+
     test("renders side panel toggle before the brand and keeps toggling the panel", () => {
         const view = render(<WorkbenchV2 />)
 
@@ -115,6 +141,37 @@ describe("WorkbenchV2", () => {
         expect(v2Store.getState().panelOpen).toBe(true)
         expect(toggle.getAttribute("aria-expanded")).toBe("true")
         expect(view.getByText("EXPLORER")).toBeTruthy()
+    })
+
+    test("shows mock traffic lights in browser preview", () => {
+        const { titlebar } = renderTitlebar()
+
+        expect(titlebar.firstElementChild?.classList.contains("yz2-traffic")).toBe(true)
+        expect(titlebar.querySelector(".yz2-native-traffic-spacer")).toBeNull()
+    })
+
+    test("keeps the native traffic-light spacer on macOS Tauri", () => {
+        setTauriPlatform("macos")
+
+        const { titlebar, toggle } = renderTitlebar()
+        const spacer = titlebar.querySelector(".yz2-native-traffic-spacer")
+
+        expect(spacer).toBeTruthy()
+        expect(spacer?.getAttribute("aria-hidden")).toBe("true")
+        expect(Array.from(titlebar.children).indexOf(spacer!)).toBeLessThan(
+            Array.from(titlebar.children).indexOf(toggle),
+        )
+        expect(titlebar.querySelector(".yz2-traffic")).toBeNull()
+    })
+
+    test("does not reserve the macOS traffic-light spacer on Windows Tauri", () => {
+        setTauriPlatform("windows")
+
+        const { titlebar, toggle } = renderTitlebar()
+
+        expect(titlebar.querySelector(".yz2-native-traffic-spacer")).toBeNull()
+        expect(titlebar.querySelector(".yz2-traffic")).toBeNull()
+        expect(Array.from(titlebar.children).indexOf(toggle)).toBe(0)
     })
 
     test("mounts the database connection dialog overlay", () => {

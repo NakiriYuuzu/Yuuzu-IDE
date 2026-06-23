@@ -2,6 +2,7 @@
 // translate the existing feature-api payloads into the v2 domain model.
 // Async orchestration lives in controller.ts; everything here is testable.
 
+import { platform } from "@tauri-apps/plugin-os"
 import type { Workspace } from "../features/workspace/workspace-api"
 import type { FileTreeEntry } from "../features/workspace/workspace-api"
 import type { GitRepositoryStatus } from "../features/git/git-model"
@@ -20,6 +21,25 @@ import type { BackupSummary, DbConn, DbGrid, DbHistoryRow, DiffRow, DiagEvent, G
 
 export function isTauri(): boolean {
     return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
+}
+
+export type TitlebarChromeMode = "browser-mock" | "macos-native" | "windows-native" | "other-native"
+
+export function titlebarChromeMode(isNative: boolean, platformName: string | null | undefined): TitlebarChromeMode {
+    if (!isNative) return "browser-mock"
+    if (platformName === "windows") return "windows-native"
+    if (platformName === "macos" || platformName == null) return "macos-native"
+    return "other-native"
+}
+
+export function currentTitlebarChromeMode(): TitlebarChromeMode {
+    if (!isTauri()) return titlebarChromeMode(false, null)
+
+    try {
+        return titlebarChromeMode(true, platform())
+    } catch {
+        return titlebarChromeMode(true, null)
+    }
 }
 
 // ---------------------------------------------------------------- projects
