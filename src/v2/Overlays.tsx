@@ -690,12 +690,14 @@ function LanguageSection() {
                         return (
                         <div className="yz2-lang-server" key={`${server.workspace_id}:${server.workspace_root}:${server.language}`}>
                             <span className="ic">◇</span>
-                            <div className="main">
-                                <span className="name">{server.display_name}</span>
-                                <span className="meta">{languageServerMeta(server)}</span>
-                                {installHint ? <span className="meta">{installHint}</span> : null}
-                                <span className="meta">open {server.open_documents} · mem {memoryLabel(server.memory_bytes)}</span>
-                            </div>
+	                            <div className="main">
+	                                <span className="name">{server.display_name}</span>
+	                                <span className="meta">{languageServerMeta(server)}</span>
+	                                {installHint ? <span className="meta">{installHint}</span> : null}
+	                                {server.resolved_command_path ? <span className="meta">resolved {server.resolved_command_path}</span> : null}
+	                                {server.last_stderr ? <span className="meta">stderr {server.last_stderr.trim()}</span> : null}
+	                                <span className="meta">open {server.open_documents} · mem {memoryLabel(server.memory_bytes)}</span>
+	                            </div>
                             <span className={"yz2-lang-state is-" + String(server.state).toLowerCase()}>{server.state}</span>
                             <button
                                 type="button"

@@ -815,11 +815,14 @@ describe("SettingsModal", () => {
                         workspace_root: "/Users/yuuzu/projects/api",
                         language: "typescript",
                         display_name: "TypeScript Language Server",
+                        command: "typescript-language-server",
                         state: "Running",
                         pid: 1234,
                         memory_bytes: 1_572_864,
                         open_documents: 2,
                         last_error: null,
+                        resolved_command_path: "C:\\Users\\yuuzu\\AppData\\Roaming\\npm\\typescript-language-server.cmd",
+                        last_stderr: "typescript-language-server failed to load tsconfig.json\n",
                     }],
                     diagnosticsByPath: {
                         "src/server.ts": [{
@@ -848,6 +851,8 @@ describe("SettingsModal", () => {
 
             expect(view.getByText("LANGUAGE SERVERS")).toBeTruthy()
             expect(view.getByText("TypeScript Language Server")).toBeTruthy()
+            expect(view.getByText("resolved C:\\Users\\yuuzu\\AppData\\Roaming\\npm\\typescript-language-server.cmd")).toBeTruthy()
+            expect(view.getByText("stderr typescript-language-server failed to load tsconfig.json")).toBeTruthy()
             expect(view.getByText("src/server.ts:3")).toBeTruthy()
             expect(view.getByText("Unexpected token")).toBeTruthy()
 

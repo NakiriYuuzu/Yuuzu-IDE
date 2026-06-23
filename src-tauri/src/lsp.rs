@@ -23,7 +23,9 @@ const INTERACTIVE_LSP_REQUEST_TIMEOUT_MS: u64 = 2_000;
 const MAX_WORKSPACE_LANGUAGE_SCAN_FILES: usize = 20_000;
 const LANGUAGE_SCAN_SKIP_DIRS: &[&str] = &[".git", "node_modules", "target"];
 const LSP_HOME_BIN_DIRS: &[&str] = &[".cargo/bin", ".bun/bin", ".local/bin"];
+const LSP_WINDOWS_HOME_BIN_DIRS: &[&str] = &["AppData/Roaming/npm"];
 const LSP_ABSOLUTE_BIN_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin"];
+const LSP_WINDOWS_EXECUTABLE_EXTENSIONS: &[&str] = &[".com", ".exe", ".bat", ".cmd"];
 
 fn request_timeout_for_method(method: &str) -> Duration {
     match method {
@@ -267,6 +269,8 @@ pub struct LanguageServerStatus {
     pub memory_bytes: Option<u64>,
     pub open_documents: usize,
     pub last_error: Option<String>,
+    pub resolved_command_path: Option<String>,
+    pub last_stderr: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -353,6 +357,8 @@ struct LanguageServerRecord {
     open_versions: HashMap<String, i32>,
     last_used_at: u64,
     last_error: Option<String>,
+    resolved_command_path: Option<String>,
+    last_stderr: Option<String>,
     transport: Option<Box<dyn LspTransport>>,
     initialized: bool,
     next_request_id: u64,
@@ -376,6 +382,8 @@ impl LanguageServerRecord {
             open_versions: HashMap::new(),
             last_used_at: current_unix_millis(),
             last_error: None,
+            resolved_command_path: Some(profile.command.clone()),
+            last_stderr: None,
             transport: None,
             initialized: false,
             next_request_id: 1,
@@ -405,6 +413,8 @@ impl LanguageServerRecord {
             memory_bytes,
             open_documents: self.open_documents.len(),
             last_error: self.last_error.clone(),
+            resolved_command_path: self.resolved_command_path.clone(),
+            last_stderr: self.last_stderr.clone(),
         }
     }
 }
@@ -431,12 +441,22 @@ fn language_id_for_lsp(language: LanguageId) -> &'static str {
     }
 }
 
+fn is_windows_drive_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
+fn normalize_lsp_path_text(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
 fn percent_encode_file_path(path: &str) -> String {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut encoded = String::new();
-    for byte in path.bytes() {
+    for (index, byte) in path.bytes().enumerate() {
         let is_unreserved = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_');
-        if is_unreserved || byte == b'/' {
+        let is_drive_colon = index == 1 && byte == b':' && path.as_bytes()[0].is_ascii_alphabetic();
+        if is_unreserved || byte == b'/' || is_drive_colon {
             encoded.push(byte as char);
         } else {
             encoded.push('%');
@@ -475,19 +495,61 @@ fn percent_decode_file_path(path: &str) -> Option<String> {
 }
 
 fn as_file_uri(workspace_root: &str, path: &str) -> String {
-    let absolute = Path::new(workspace_root).join(path.trim_start_matches('/'));
-    let path = absolute.to_string_lossy().replace('\\', "/");
-    format!("file://{}", percent_encode_file_path(&path))
+    let path = if is_windows_drive_path(workspace_root) {
+        let root = normalize_lsp_path_text(workspace_root)
+            .trim_end_matches('/')
+            .to_string();
+        let relative = normalize_lsp_path_text(path);
+        let relative = relative.trim_start_matches('/');
+        if relative.is_empty() {
+            root
+        } else {
+            format!("{root}/{relative}")
+        }
+    } else {
+        let absolute = Path::new(workspace_root).join(path.trim_start_matches('/'));
+        normalize_lsp_path_text(&absolute.to_string_lossy())
+    };
+    let encoded = percent_encode_file_path(&path);
+    if is_windows_drive_path(&path) {
+        format!("file:///{encoded}")
+    } else {
+        format!("file://{encoded}")
+    }
 }
 
 fn relative_path_from_uri(workspace_root: &str, uri: &str) -> Option<String> {
     let uri_path = uri.strip_prefix("file://")?;
-    let decoded = percent_decode_file_path(uri_path)?;
-    let relative = Path::new(&decoded)
-        .strip_prefix(Path::new(workspace_root))
-        .ok()?;
-    let relative = relative.to_string_lossy().replace('\\', "/");
-    if relative.is_empty() || relative == "." {
+    let mut decoded = normalize_lsp_path_text(&percent_decode_file_path(uri_path)?);
+    let root = normalize_lsp_path_text(workspace_root)
+        .trim_end_matches('/')
+        .to_string();
+    let case_insensitive = is_windows_drive_path(&root);
+    if case_insensitive
+        && decoded.as_bytes().first() == Some(&b'/')
+        && is_windows_drive_path(&decoded[1..])
+    {
+        decoded = decoded[1..].to_string();
+    }
+    if decoded.split('/').any(|part| part == "..") {
+        return None;
+    }
+    let compare_root = if case_insensitive {
+        root.to_ascii_lowercase()
+    } else {
+        root.clone()
+    };
+    let compare_path = if case_insensitive {
+        decoded.to_ascii_lowercase()
+    } else {
+        decoded.clone()
+    };
+    let prefix = format!("{compare_root}/");
+    if !compare_path.starts_with(&prefix) {
+        return None;
+    }
+    let relative = decoded[root.len() + 1..].to_string();
+    if relative.is_empty() {
         None
     } else {
         Some(relative)
@@ -513,11 +575,25 @@ fn is_missing_command_error(message: &str) -> bool {
 
 fn lsp_child_path_env() -> OsString {
     let path = std::env::var_os("PATH");
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    lsp_child_path_env_for(path.as_deref(), home.as_deref())
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from);
+    let appdata = std::env::var_os("APPDATA").map(PathBuf::from);
+    let local_appdata = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    lsp_child_path_env_for(
+        path.as_deref(),
+        home.as_deref(),
+        appdata.as_deref(),
+        local_appdata.as_deref(),
+    )
 }
 
-fn lsp_child_path_env_for(path_env: Option<&OsStr>, home: Option<&Path>) -> OsString {
+fn lsp_child_path_env_for(
+    path_env: Option<&OsStr>,
+    home: Option<&Path>,
+    appdata: Option<&Path>,
+    local_appdata: Option<&Path>,
+) -> OsString {
     let mut dirs = Vec::new();
     let mut seen = HashSet::new();
 
@@ -531,6 +607,22 @@ fn lsp_child_path_env_for(path_env: Option<&OsStr>, home: Option<&Path>) -> OsSt
         for relative in LSP_HOME_BIN_DIRS {
             push_lsp_path_dir(&mut dirs, &mut seen, home.join(relative));
         }
+        for relative in LSP_WINDOWS_HOME_BIN_DIRS {
+            push_lsp_path_dir(&mut dirs, &mut seen, home.join(relative));
+        }
+        push_lsp_python_script_dirs(
+            &mut dirs,
+            &mut seen,
+            home.join("AppData/Local/Programs/Python"),
+        );
+    }
+
+    if let Some(appdata) = appdata {
+        push_lsp_path_dir(&mut dirs, &mut seen, appdata.join("npm"));
+    }
+
+    if let Some(local_appdata) = local_appdata {
+        push_lsp_python_script_dirs(&mut dirs, &mut seen, local_appdata.join("Programs/Python"));
     }
 
     for absolute in LSP_ABSOLUTE_BIN_DIRS {
@@ -550,16 +642,37 @@ fn push_lsp_path_dir(dirs: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, dir: 
     }
 }
 
+fn push_lsp_python_script_dirs(
+    dirs: &mut Vec<PathBuf>,
+    seen: &mut HashSet<PathBuf>,
+    python_programs: PathBuf,
+) {
+    if let Ok(entries) = std::fs::read_dir(python_programs) {
+        for entry in entries.flatten() {
+            push_lsp_path_dir(dirs, seen, entry.path().join("Scripts"));
+        }
+    }
+}
+
 fn resolve_lsp_command_path_with_path(command: &str, path_env: &OsStr) -> PathBuf {
     let command_path = PathBuf::from(command);
     if command.contains('/') || command.contains('\\') {
         return command_path;
     }
+    let has_extension = command_path.extension().is_some();
 
     for dir in std::env::split_paths(path_env) {
         let candidate = dir.join(command);
         if candidate.is_file() {
             return candidate;
+        }
+        if !has_extension {
+            for extension in LSP_WINDOWS_EXECUTABLE_EXTENSIONS {
+                let candidate = dir.join(format!("{command}{extension}"));
+                if candidate.is_file() {
+                    return candidate;
+                }
+            }
         }
     }
 
@@ -687,6 +800,9 @@ trait LspTransport: Send {
     fn send(&mut self, value: Value) -> Result<(), String>;
     fn request(&mut self, payload: Value, timeout: Duration) -> Result<Value, String>;
     fn poll_events(&mut self) -> Vec<Value>;
+    fn stderr_excerpt(&self) -> Option<String> {
+        None
+    }
     fn stop(&mut self);
 }
 
@@ -695,6 +811,7 @@ struct StdioTransport {
     stdin: Arc<Mutex<ChildStdin>>,
     rx: std::sync::mpsc::Receiver<Value>,
     queued_events: VecDeque<Value>,
+    stderr_tail: Arc<Mutex<Vec<u8>>>,
 }
 
 impl StdioTransport {
@@ -711,6 +828,7 @@ impl StdioTransport {
         command.env("PATH", path_env);
         command.stdin(Stdio::piped());
         command.stdout(Stdio::piped());
+        command.stderr(Stdio::piped());
 
         let mut child = command.spawn().map_err(|err| match err.kind() {
             ErrorKind::NotFound => "command not found".to_string(),
@@ -724,6 +842,7 @@ impl StdioTransport {
             .stdout
             .take()
             .ok_or_else(|| "missing stdout".to_string())?;
+        let stderr = child.stderr.take();
 
         let (tx, rx) = mpsc::channel::<Value>();
         thread::spawn(move || {
@@ -750,12 +869,33 @@ impl StdioTransport {
                 }
             }
         });
+        let stderr_tail = Arc::new(Mutex::new(Vec::new()));
+        if let Some(stderr) = stderr {
+            let stderr_tail_for_thread = Arc::clone(&stderr_tail);
+            thread::spawn(move || {
+                let mut reader = std::io::BufReader::new(stderr);
+                let mut chunk = [0u8; 4096];
+                while let Ok(bytes_read) = reader.read(&mut chunk) {
+                    if bytes_read == 0 {
+                        break;
+                    }
+                    if let Ok(mut tail) = stderr_tail_for_thread.lock() {
+                        tail.extend_from_slice(&chunk[..bytes_read]);
+                        if tail.len() > 8192 {
+                            let extra = tail.len() - 8192;
+                            tail.drain(..extra);
+                        }
+                    }
+                }
+            });
+        }
 
         Ok(Self {
             child: Some(child),
             stdin: Arc::new(Mutex::new(stdin)),
             rx,
             queued_events: VecDeque::new(),
+            stderr_tail,
         })
     }
 
@@ -901,6 +1041,15 @@ impl LspTransport for StdioTransport {
             }
         }
         events
+    }
+
+    fn stderr_excerpt(&self) -> Option<String> {
+        let tail = self.stderr_tail.lock().ok()?;
+        if tail.is_empty() {
+            None
+        } else {
+            Some(String::from_utf8_lossy(&tail).into_owned())
+        }
     }
 
     fn stop(&mut self) {
@@ -1122,6 +1271,7 @@ impl LanguageServerManager {
         if record.state == ServerState::Running {
             let mut running = true;
             if let Some(transport) = record.transport.as_mut() {
+                record.last_stderr = transport.stderr_excerpt();
                 if !transport.is_running() {
                     running = false;
                 }
@@ -1259,10 +1409,16 @@ impl LanguageServerManager {
         record: &mut LanguageServerRecord,
     ) -> Result<(), String> {
         Self::stop_transport(record);
+        let path_env = lsp_child_path_env();
+        let resolved_command_path = resolve_lsp_command_path_with_path(&profile.command, &path_env)
+            .to_string_lossy()
+            .into_owned();
+        record.resolved_command_path = Some(resolved_command_path);
 
         let transport = match (self.transport_factory)(profile) {
             Ok(transport) => transport,
             Err(error) => {
+                let error = format!("{}: {}", profile.command, error);
                 if is_missing_command_error(&error) {
                     record.state = ServerState::MissingCommand;
                 } else {
@@ -1277,6 +1433,7 @@ impl LanguageServerManager {
         record.transport = Some(transport);
         record.state = ServerState::Running;
         record.last_error = None;
+        record.last_stderr = None;
         let initialize = self.send_initialize(workspace_root, record);
         if let Err(error) = initialize {
             record.state = ServerState::Error;
@@ -1297,7 +1454,7 @@ impl LanguageServerManager {
     ) -> (bool, bool) {
         if !profile_available {
             record.state = ServerState::MissingCommand;
-            record.last_error = Some("command not available".to_string());
+            record.last_error = Some(format!("{}: command not available", profile.command));
             return (false, false);
         }
 
@@ -1780,6 +1937,8 @@ impl LanguageServerManager {
                 memory_bytes: None,
                 open_documents: 0,
                 last_error: Some("unsupported file type".to_string()),
+                resolved_command_path: None,
+                last_stderr: None,
             });
         };
 
@@ -1856,9 +2015,17 @@ impl LanguageServerManager {
                 } else {
                     entry.state = ServerState::Error;
                 }
+                logs.push(format!(
+                    "failed to start {}: {last_error}",
+                    entry.display_name
+                ));
             } else {
                 entry.state = ServerState::Error;
                 entry.last_error = Some("language server not running".to_string());
+                logs.push(format!(
+                    "failed to start {}: language server not running",
+                    entry.display_name
+                ));
             }
 
             if let Some(log_line) = Self::refresh_transport_state(entry) {
@@ -2053,6 +2220,8 @@ impl LanguageServerManager {
                 memory_bytes: None,
                 open_documents: 0,
                 last_error: Some("unsupported file type".to_string()),
+                resolved_command_path: None,
+                last_stderr: None,
             });
         };
 
@@ -2097,7 +2266,7 @@ impl LanguageServerManager {
                 workspace_root,
                 language,
                 display_name: server_profile.display_name,
-                command: Some(server_profile.command),
+                command: Some(server_profile.command.clone()),
                 state: if profile.available {
                     ServerState::Idle
                 } else {
@@ -2107,6 +2276,8 @@ impl LanguageServerManager {
                 memory_bytes: None,
                 open_documents: 0,
                 last_error: None,
+                resolved_command_path: Some(server_profile.command),
+                last_stderr: None,
             }
         };
 
@@ -2239,7 +2410,7 @@ impl LanguageServerManager {
             workspace_root: workspace_root.to_string(),
             language,
             display_name: server_profile.display_name,
-            command: Some(server_profile.command),
+            command: Some(server_profile.command.clone()),
             state: if profile.available {
                 ServerState::Idle
             } else {
@@ -2249,6 +2420,8 @@ impl LanguageServerManager {
             memory_bytes: None,
             open_documents: 0,
             last_error: None,
+            resolved_command_path: Some(server_profile.command),
+            last_stderr: None,
         }
     }
 
@@ -2763,6 +2936,8 @@ mod tests {
         let path_env = lsp_child_path_env_for(
             Some(std::ffi::OsStr::new("/usr/bin:/bin")),
             Some(home.path()),
+            None,
+            None,
         );
 
         assert_eq!(
@@ -2776,6 +2951,82 @@ mod tests {
         assert_eq!(
             resolve_lsp_command_path_with_path("pylsp", &path_env),
             local_bin.join("pylsp")
+        );
+    }
+
+    #[test]
+    fn resolve_lsp_command_path_uses_windows_wrapper_extensions() {
+        let dir = tempfile::tempdir().expect("path dir");
+        std::fs::write(dir.path().join("typescript-language-server.cmd"), "").expect("ts cmd");
+        std::fs::write(dir.path().join("rust-analyzer.exe"), "").expect("rust analyzer exe");
+        let path_env = std::env::join_paths([dir.path()]).expect("path env");
+
+        assert_eq!(
+            resolve_lsp_command_path_with_path("typescript-language-server", &path_env),
+            dir.path().join("typescript-language-server.cmd")
+        );
+        assert_eq!(
+            resolve_lsp_command_path_with_path("rust-analyzer", &path_env),
+            dir.path().join("rust-analyzer.exe")
+        );
+    }
+
+    #[test]
+    fn lsp_command_path_env_adds_windows_user_tool_dirs_for_gui_launches() {
+        let home = tempfile::tempdir().expect("home");
+        let npm_bin = home.path().join("AppData/Roaming/npm");
+        let python_scripts = home
+            .path()
+            .join("AppData/Local/Programs/Python/Python312/Scripts");
+        std::fs::create_dir_all(&npm_bin).expect("npm bin");
+        std::fs::create_dir_all(&python_scripts).expect("python scripts");
+        std::fs::write(npm_bin.join("npm-lsp"), "").expect("npm lsp");
+        std::fs::write(python_scripts.join("pylsp"), "").expect("pylsp");
+
+        let path_env = lsp_child_path_env_for(
+            Some(std::ffi::OsStr::new("/usr/bin:/bin")),
+            Some(home.path()),
+            None,
+            None,
+        );
+
+        assert_eq!(
+            resolve_lsp_command_path_with_path("npm-lsp", &path_env),
+            npm_bin.join("npm-lsp")
+        );
+        assert_eq!(
+            resolve_lsp_command_path_with_path("pylsp", &path_env),
+            python_scripts.join("pylsp")
+        );
+    }
+
+    #[test]
+    fn lsp_command_path_env_adds_windows_appdata_tool_dirs_without_home() {
+        let appdata = tempfile::tempdir().expect("appdata");
+        let local_appdata = tempfile::tempdir().expect("local appdata");
+        let npm_bin = appdata.path().join("npm");
+        let python_scripts = local_appdata
+            .path()
+            .join("Programs/Python/Python312/Scripts");
+        std::fs::create_dir_all(&npm_bin).expect("npm bin");
+        std::fs::create_dir_all(&python_scripts).expect("python scripts");
+        std::fs::write(npm_bin.join("npm-lsp.cmd"), "").expect("npm lsp cmd");
+        std::fs::write(python_scripts.join("pylsp.exe"), "").expect("pylsp exe");
+
+        let path_env = lsp_child_path_env_for(
+            Some(std::ffi::OsStr::new("/usr/bin:/bin")),
+            None,
+            Some(appdata.path()),
+            Some(local_appdata.path()),
+        );
+
+        assert_eq!(
+            resolve_lsp_command_path_with_path("npm-lsp", &path_env),
+            npm_bin.join("npm-lsp.cmd")
+        );
+        assert_eq!(
+            resolve_lsp_command_path_with_path("pylsp", &path_env),
+            python_scripts.join("pylsp.exe")
         );
     }
 
@@ -3181,6 +3432,7 @@ mod tests {
         stopped: std::sync::Arc<std::sync::Mutex<bool>>,
         send_calls: std::sync::Arc<std::sync::Mutex<usize>>,
         send_fail_at: std::sync::Arc<std::sync::Mutex<Option<usize>>>,
+        stderr: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     }
 
     struct TestTransport {
@@ -3211,6 +3463,10 @@ mod tests {
 
         fn fail_send_on_call(&self, call: usize) {
             *self.state.send_fail_at.lock().expect("send fail lock") = Some(call);
+        }
+
+        fn set_stderr(&self, stderr: impl Into<String>) {
+            *self.state.stderr.lock().expect("stderr lock") = Some(stderr.into());
         }
 
         fn sent_messages(&self) -> Vec<serde_json::Value> {
@@ -3282,6 +3538,10 @@ mod tests {
                 .expect("events lock")
                 .drain(..)
                 .collect()
+        }
+
+        fn stderr_excerpt(&self) -> Option<String> {
+            self.state.stderr.lock().expect("stderr lock").clone()
         }
 
         fn stop(&mut self) {
@@ -3615,7 +3875,98 @@ mod tests {
         assert_eq!(result.readiness, DocumentReadiness::MissingCommand);
         assert_eq!(result.server.state, ServerState::MissingCommand);
         assert_eq!(result.command.as_deref(), Some("rust-analyzer"));
-        assert_eq!(result.last_error.as_deref(), Some("command not found"));
+        assert_eq!(
+            result.last_error.as_deref(),
+            Some("rust-analyzer: command not found")
+        );
+    }
+
+    #[test]
+    fn running_status_serializes_command_resolution_details() {
+        let manager = LanguageServerManager::default_for_tests();
+
+        let status = manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}\n".to_string(),
+            )
+            .expect("open");
+        let value = serde_json::to_value(status).expect("serialize status");
+
+        let resolved = value
+            .get("resolved_command_path")
+            .and_then(serde_json::Value::as_str)
+            .expect("resolved command path");
+        assert!(
+            resolved.ends_with("rust-analyzer"),
+            "resolved path should name rust-analyzer, got {resolved}"
+        );
+        assert_eq!(value.get("last_stderr"), Some(&serde_json::Value::Null));
+    }
+
+    #[test]
+    fn running_status_refreshes_transport_stderr_excerpt() {
+        let capture = TransportFixtureState::default();
+        let transport = TestTransport::new(capture.clone());
+        transport.push_response(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": serde_json::json!({}),
+        }));
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::Rust)],
+            move |_profile| Ok(Box::new(TestTransport::new(capture.clone()))),
+        );
+
+        manager
+            .open_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}\n".to_string(),
+            )
+            .expect("open");
+        transport.set_stderr("rust-analyzer stderr line\n");
+
+        let status = manager
+            .status_for_workspace("workspace", "/workspace")
+            .into_iter()
+            .find(|status| status.language == LanguageId::Rust)
+            .expect("rust status");
+
+        assert_eq!(
+            status.last_stderr.as_deref(),
+            Some("rust-analyzer stderr line\n")
+        );
+    }
+
+    #[test]
+    fn missing_command_status_and_logs_include_configured_command() {
+        let manager = LanguageServerManager::for_tests_with_factory(
+            vec![TestServerProfile::available(LanguageId::Rust)],
+            |_profile| Err("command not found".to_string()),
+        );
+
+        let result = manager
+            .ensure_document(
+                "workspace".to_string(),
+                "/workspace".to_string(),
+                "src/main.rs".to_string(),
+                "fn main() {}\n".to_string(),
+                None,
+            )
+            .expect("ensure missing command");
+        let logs = manager.server_logs("workspace", "/workspace");
+
+        assert_eq!(
+            result.last_error.as_deref(),
+            Some("rust-analyzer: command not found")
+        );
+        assert!(logs
+            .iter()
+            .any(|line| line.contains("rust-analyzer") && line.contains("command not found")));
     }
 
     #[test]
@@ -3825,7 +4176,10 @@ mod tests {
             .expect("open document");
 
         assert_eq!(status.state, ServerState::MissingCommand);
-        assert_eq!(status.last_error, Some("command not found".to_string()),);
+        assert_eq!(
+            status.last_error,
+            Some("rust-analyzer: command not found".to_string()),
+        );
     }
 
     #[test]
@@ -4172,6 +4526,47 @@ mod tests {
         );
         assert_eq!(
             relative_path_from_uri("/workspace", "file:///workspace-other/src/main.rs"),
+            None
+        );
+    }
+
+    #[test]
+    fn file_uri_helpers_support_windows_drive_paths() {
+        assert_eq!(
+            as_file_uri("C:\\workspace\\app", "src\\main file.ts"),
+            "file:///C:/workspace/app/src/main%20file.ts"
+        );
+        assert_eq!(
+            as_file_uri("c:\\workspace\\app", "src/a b.ts"),
+            "file:///c:/workspace/app/src/a%20b.ts"
+        );
+    }
+
+    #[test]
+    fn relative_path_from_uri_supports_windows_drive_paths_and_rejects_escape() {
+        assert_eq!(
+            relative_path_from_uri(
+                "C:\\workspace\\app",
+                "file:///C:/workspace/app/src/main%20file.ts",
+            ),
+            Some("src/main file.ts".to_string())
+        );
+        assert_eq!(
+            relative_path_from_uri("C:\\workspace\\app", "file:///c:/workspace/app/src/main.ts",),
+            Some("src/main.ts".to_string())
+        );
+        assert_eq!(
+            relative_path_from_uri(
+                "C:\\workspace\\app",
+                "file:///C:/workspace/app2/src/main.ts"
+            ),
+            None
+        );
+        assert_eq!(
+            relative_path_from_uri(
+                "C:\\workspace\\app",
+                "file:///C:/workspace/app/%2e%2e/other.ts"
+            ),
             None
         );
     }
