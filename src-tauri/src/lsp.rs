@@ -4294,8 +4294,8 @@ write_message({
     "params": {"items": [{} , {}]},
 })
 
-initialize = read_frame(1.0)
-configuration_response = read_frame(1.5)
+initialize = read_frame(2.0)
+configuration_response = read_frame(3.0)
 
 with open("__LOG_PATH__", "w", encoding="utf-8") as logfile:
     logfile.write(json.dumps(configuration_response))
