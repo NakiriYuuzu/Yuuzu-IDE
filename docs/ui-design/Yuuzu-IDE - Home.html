@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Yuuzu-IDE — The CLI-first IDE built around Claude Code</title>
+<link rel="icon" href="data:," />
 <link rel="stylesheet" href="colors_and_type.css" />
 <style>
   :root {
@@ -51,6 +52,7 @@
   .btn.primary:hover { background: var(--yuzu-2); }
   .btn.sm { height: 40px; padding: 0 15px; font-size: 14px; border-radius: 9px; }
   .btn.lg { height: 58px; padding: 0 28px; font-size: 18px; }
+  .btn.subtle { color: var(--dim); }
 
   .chip {
     display: inline-flex; align-items: center; gap: 9px; height: 34px; padding: 0 14px;
@@ -214,6 +216,15 @@
   .dl-card h2 { font-size: 50px; font-weight: 800; letter-spacing: -.03em; margin: 0 0 16px; }
   .dl-card p { font-size: 20px; color: var(--dim); max-width: 30em; margin: 0 auto 36px; }
   .dl-card .cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .download-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 36px auto 0; max-width: 900px; text-align: left; }
+  .platform-card { border: 1px solid var(--line-2); background: rgba(14,19,29,.72); border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 16px; min-height: 198px; }
+  .platform-card.recommended { border-color: var(--yuzu); background: rgba(24,35,13,.5); }
+  .platform-card h3 { margin: 0; font-size: 19px; letter-spacing: -.01em; }
+  .platform-card p { margin: 0; font-size: 15px; line-height: 1.5; max-width: none; }
+  .platform-card .btn { justify-content: center; width: 100%; margin-top: auto; }
+  .rec-chip { display: none; align-self: flex-start; height: 26px; padding: 0 9px; border-radius: 9999px; background: var(--wash); border: 1px solid var(--edge); color: var(--yuzu); font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
+  .platform-card.recommended .rec-chip { display: inline-flex; align-items: center; }
+  .release-note { margin: 22px auto 0; max-width: 760px; font-size: 14px; color: var(--faint); line-height: 1.55; }
   .dl-meta { margin-top: 26px; display: flex; gap: 22px; justify-content: center; flex-wrap: wrap; font-family: var(--font-mono); font-size: 14px; color: var(--faint); }
   .dl-meta span { display: inline-flex; align-items: center; gap: 7px; }
   .dl-meta svg { width: 15px; height: 15px; color: var(--yuzu); }
@@ -246,6 +257,7 @@
     .hero h1 { font-size: 50px; }
     .hero p.sub { font-size: 19px; }
     .grid { grid-template-columns: 1fr; }
+    .download-grid { grid-template-columns: 1fr; }
     .dive .row { grid-template-columns: 1fr; gap: 36px; }
     .dive.flip .row { direction: ltr; }
     h2.sec, .dl-card h2 { font-size: 34px; }
@@ -266,8 +278,8 @@
       <a href="#data">Databases</a>
     </nav>
     <div class="nav-right">
-      <span class="ghost-ver">v0.4.2</span>
-      <a class="btn primary sm" id="nav-dl" href="Yuuzu-IDE.standalone.html" download="Yuuzu-IDE.html">
+      <span class="ghost-ver">v0.1.0</span>
+      <a class="btn primary sm" id="nav-dl" href="#download">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
         Download
       </a>
@@ -280,20 +292,20 @@
 <!-- ===================== HERO ===================== -->
 <section class="hero">
   <div class="wrap">
-    <div class="badge"><b>●</b> Now in dev preview · runs in your browser, no install</div>
+    <div class="badge"><b>●</b> v0.1.0 alpha · macOS Apple Silicon + Windows x64</div>
     <h1>The CLI-first IDE built around <span class="gx">Claude Code</span></h1>
     <p class="sub">Editors, databases, SSH and a built-in browser — all driven by an agent that reads, edits and ships. One window, one keystroke away.</p>
     <div class="cta">
-      <a class="btn primary lg" id="hero-dl" href="Yuuzu-IDE.standalone.html" download="Yuuzu-IDE.html">
+      <a class="btn primary lg download-link" id="hero-dl" href="https://github.com/NakiriYuuzu/Yuuzu-IDE/releases/latest" data-os-primary data-download-label="GitHub Releases">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-        Download Yuuzu-IDE
+        <span data-download-text>Download for your OS</span>
       </a>
       <a class="btn lg" href="#demo">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>
         Try the live demo
       </a>
     </div>
-    <div class="undercta">~2.9 MB · single HTML file · works offline</div>
+    <div class="undercta">macOS Apple Silicon DMG · Windows x64 installer and portable zip</div>
 
     <div class="hero-shot reveal">
       <div class="window">
@@ -421,7 +433,7 @@
     <div class="sec-head reveal">
       <span class="eyebrow"><span class="pre">//</span> Live demo</span>
       <h2 class="sec">Try the real thing, right here</h2>
-      <p class="sec-lead">This is the actual application running in the page — open files, switch panels, run a query, split the view. Then download it as a single file.</p>
+      <p class="sec-lead">This browser demo mirrors the interface flow — open files, switch panels, run a query, split the view. Install the native app below for real workspace access.</p>
     </div>
     <div class="demo-frame reveal">
       <div class="window">
@@ -510,19 +522,48 @@
   <div class="wrap">
     <div class="dl-card reveal">
       <h2>Download Yuuzu-IDE</h2>
-      <p>One self-contained HTML file. No installer, no dependencies — open it in any modern browser and start building.</p>
-      <div class="cta">
-        <a class="btn primary lg" id="cta-dl" href="Yuuzu-IDE.standalone.html" download="Yuuzu-IDE.html">
+      <p>Native alpha builds for macOS Apple Silicon and Windows x64, published from the latest GitHub Release.</p>
+      <div class="download-grid">
+        <div class="platform-card" data-platform-card="mac">
+          <span class="rec-chip">Recommended for this device</span>
+          <h3>macOS Apple Silicon</h3>
+          <p>DMG build for Apple Silicon Macs. The app is ad-hoc signed but not Apple-notarized.</p>
+          <a class="btn primary download-link" href="https://github.com/NakiriYuuzu/Yuuzu-IDE/releases/latest/download/Yuuzu-IDE_0.1.0_aarch64.dmg" data-download-label="macOS Apple Silicon DMG">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+            Download DMG
+          </a>
+        </div>
+        <div class="platform-card" data-platform-card="windows">
+          <span class="rec-chip">Recommended for this device</span>
+          <h3>Windows x64 Installer</h3>
+          <p>NSIS setup executable for Windows x64. SmartScreen may warn on this unsigned alpha build.</p>
+          <a class="btn download-link" href="https://github.com/NakiriYuuzu/Yuuzu-IDE/releases/latest/download/Yuuzu-IDE_0.1.0_x64-setup.exe" data-download-label="Windows x64 installer">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+            Download Setup
+          </a>
+        </div>
+        <div class="platform-card" data-platform-card="windows-portable">
+          <h3>Windows Portable</h3>
+          <p>Portable zip for Windows x64. Unzip and run Yuuzu-IDE.exe without installing.</p>
+          <a class="btn download-link" href="https://github.com/NakiriYuuzu/Yuuzu-IDE/releases/latest/download/Yuuzu-IDE_0.1.0_windows_x64_portable.zip" data-download-label="Windows x64 portable zip">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+            Download Zip
+          </a>
+        </div>
+      </div>
+      <div class="cta" style="margin-top:18px;">
+        <a class="btn subtle" href="https://github.com/NakiriYuuzu/Yuuzu-IDE/releases/latest" target="_blank" rel="noopener">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-          Download · v0.4.2
+          View all release assets
         </a>
         <a class="btn lg" href="Yuuzu-IDE.standalone.html" target="_blank" rel="noopener">Open in new tab ↗</a>
       </div>
+      <p class="release-note" id="os-download-note">Detecting your OS for the primary download. Latest release links become available after a GitHub Release is published. The current release workflow builds <span class="mono">darwin-aarch64</span> and <span class="mono">windows-x86_64</span> artifacts.</p>
       <div class="dl-meta">
-        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Single HTML file</span>
-        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> ~2.9 MB</span>
-        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Works offline</span>
-        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> macOS · Windows · Linux</span>
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> v0.1.0 alpha</span>
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> macOS Apple Silicon</span>
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Windows x64 installer</span>
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Portable zip</span>
       </div>
     </div>
   </div>
@@ -554,6 +595,62 @@
   }, { threshold: 0.12 });
   document.querySelectorAll('.reveal').forEach(el => io.observe(el));
 
+  const releaseDownloads = {
+    mac: {
+      href: 'https://github.com/NakiriYuuzu/Yuuzu-IDE/releases/latest/download/Yuuzu-IDE_0.1.0_aarch64.dmg',
+      label: 'macOS Apple Silicon DMG',
+      text: 'Download for macOS',
+      note: 'Detected macOS. The primary download points to the Apple Silicon DMG.'
+    },
+    windows: {
+      href: 'https://github.com/NakiriYuuzu/Yuuzu-IDE/releases/latest/download/Yuuzu-IDE_0.1.0_x64-setup.exe',
+      label: 'Windows x64 installer',
+      text: 'Download for Windows',
+      note: 'Detected Windows. The primary download points to the x64 setup installer; portable zip is available below.'
+    },
+    unsupported: {
+      href: 'https://github.com/NakiriYuuzu/Yuuzu-IDE/releases/latest',
+      label: 'GitHub Releases',
+      text: 'View release downloads',
+      note: 'This device is not one of the current release targets. Yuuzu-IDE currently provides macOS Apple Silicon and Windows x64 builds.'
+    }
+  };
+
+  function detectPlatform() {
+    const raw = String(
+      (navigator.userAgentData && navigator.userAgentData.platform) ||
+      navigator.platform ||
+      navigator.userAgent ||
+      ''
+    );
+    if (/win/i.test(raw)) return 'windows';
+    if (/mac/i.test(raw)) return 'mac';
+    return 'unsupported';
+  }
+
+  function applyDetectedDownload() {
+    const platform = detectPlatform();
+    const target = releaseDownloads[platform] || releaseDownloads.unsupported;
+    document.querySelectorAll('[data-os-primary]').forEach(a => {
+      a.href = target.href;
+      a.dataset.downloadLabel = target.label;
+      const text = a.querySelector('[data-download-text]');
+      if (text) text.textContent = target.text;
+    });
+
+    document.querySelectorAll('[data-platform-card]').forEach(card => {
+      const isRecommended = card.dataset.platformCard === platform;
+      card.classList.toggle('recommended', isRecommended);
+      const btn = card.querySelector('.btn');
+      if (btn) btn.classList.toggle('primary', isRecommended);
+    });
+
+    const note = document.getElementById('os-download-note');
+    if (note) note.textContent = target.note + ' Latest release links become available after a GitHub Release is published.';
+  }
+
+  applyDetectedDownload();
+
   // Download toast
   const toast = document.getElementById('toast');
   const toastMsg = document.getElementById('toast-msg');
@@ -561,8 +658,8 @@
     toastMsg.textContent = msg; toast.classList.add('show');
     clearTimeout(flash._t); flash._t = setTimeout(() => toast.classList.remove('show'), 2600);
   }
-  document.querySelectorAll('#nav-dl, #hero-dl, #cta-dl').forEach(a => {
-    a.addEventListener('click', () => flash('Downloading Yuuzu-IDE · v0.4.2 …'));
+  document.querySelectorAll('.download-link').forEach(a => {
+    a.addEventListener('click', () => flash('Opening ' + a.dataset.downloadLabel + ' · v0.1.0 …'));
   });
 
   // Lazy-launch the live demo iframe on click (keeps page light until asked)

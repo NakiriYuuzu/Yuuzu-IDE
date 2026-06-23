@@ -145,6 +145,10 @@ risk.
 - Do not trust unchecked plan checkboxes alone. Cross-check spec headers,
   roadmap status, code symbols, tests, and git history before claiming a feature
   is complete.
+- For release landing pages or GitHub Pages download surfaces, do not assume a
+  public GitHub Release exists. If links use `releases/latest/download/...`,
+  verify release availability and keep a visible fallback or status note when no
+  public Release exists yet.
 - As of this file, Node 14 is the v2 completion bucket: missing v2 Docs, Debug,
   Extension UI, real Language panel wiring, and editor performance closeout.
   Re-check `roadmap.md` before acting on that status.
