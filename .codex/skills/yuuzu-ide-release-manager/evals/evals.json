@@ -1,0 +1,55 @@
+{
+  "skill_name": "yuuzu-ide-release-manager",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Yuuzu-IDE main is pushed and I want to cut v0.1.0. Tell me what to verify before tagging and whether the changelog date matters.",
+      "expected_output": "A release-readiness plan that checks clean/synced main, version metadata, changelog date, local gate, remote CI, existing tags/releases, and asks for explicit approval before creating or pushing a tag.",
+      "files": [
+        "package.json",
+        "src-tauri/tauri.conf.json",
+        "src-tauri/Cargo.toml",
+        "CHANGELOG.md"
+      ],
+      "expectations": [
+        "Classifies the task as a Yuuzu-IDE release workflow.",
+        "Requires confirming HEAD and origin/main are aligned before tagging.",
+        "Checks package.json, tauri.conf.json, Cargo.toml, and CHANGELOG.md version metadata.",
+        "Mentions that the changelog date should normally match the publish date or be explicitly accepted.",
+        "Does not create or push a tag without explicit user approval."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "The local Tauri debug build made the app and dmg, then failed with 'A public key has been found, but no private key'. Is the release blocked?",
+      "expected_output": "An explanation that local updater signing is blocked by missing TAURI_SIGNING_PRIVATE_KEY, but GitHub release signing can still be valid if repo secrets exist, plus an app-bundle-only fallback command and a reminder not to use that fallback for updater artifact validation.",
+      "files": [
+        "src-tauri/tauri.conf.json",
+        ".github/workflows/release.yml"
+      ],
+      "expectations": [
+        "Identifies the missing local updater signing private key as the specific blocker.",
+        "Distinguishes local app bundle verification from updater artifact signing.",
+        "Uses `bun run tauri build --debug --bundles app --config '{\"bundle\":{\"createUpdaterArtifacts\":false}}'` as the local app-bundle fallback.",
+        "Requires checking GitHub secrets or release workflow results before trusting updater artifacts.",
+        "Does not recommend disabling updater artifacts in the committed release config."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "The v0.1.0 release workflow produced a draft release. What exactly should I inspect before pressing Publish?",
+      "expected_output": "A draft-release inspection checklist covering workflow success, asset list, macOS and Windows platform keys in latest.json, signatures and URLs, Windows portable zip as a separate asset, release body from CHANGELOG.md, and explicit approval before publish.",
+      "files": [
+        ".github/workflows/release.yml",
+        "docs/release/update-strategy.md"
+      ],
+      "expectations": [
+        "Requires checking the release workflow completed successfully.",
+        "Requires validating latest.json includes darwin-aarch64 and windows-x86_64 with signatures and URLs.",
+        "Requires confirming the Windows updater URL points to an installer, not the portable zip.",
+        "Requires confirming the portable zip exists as a separate Windows asset.",
+        "Treats publishing as a separate human-controlled gate."
+      ]
+    }
+  ]
+}
