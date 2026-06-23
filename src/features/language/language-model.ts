@@ -24,6 +24,8 @@ export type LanguageServerStatus = {
   memory_bytes: number | null;
   open_documents: number;
   last_error: string | null;
+  resolved_command_path?: string | null;
+  last_stderr?: string | null;
 };
 
 export type LspDocumentReadiness =
