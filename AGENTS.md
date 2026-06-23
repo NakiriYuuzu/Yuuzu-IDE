@@ -70,8 +70,29 @@ bun run build
 . "$HOME/.cargo/env" && cargo test --manifest-path src-tauri/Cargo.toml
 . "$HOME/.cargo/env" && cargo fmt --manifest-path src-tauri/Cargo.toml --check
 . "$HOME/.cargo/env" && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
-bun run tauri build --debug
+bun run tauri build --debug --bundles app
 ```
+
+When a task changes Tauri plugin registration, `src-tauri/Cargo.toml`, Tauri
+capabilities, updater/bundle configuration, or native shell behavior, do not
+close out a PR or packaged-binary request with only unit tests, `bun run build`,
+and Cargo gates. Also run the packaged debug app build:
+
+```bash
+bun run tauri build --debug --bundles app
+```
+
+If that command creates `src-tauri/target/debug/bundle/macos/Yuuzu-IDE.app` but
+exits only because updater artifacts find a public key without
+`TAURI_SIGNING_PRIVATE_KEY`, keep that failure as evidence and rerun the local
+debug app build with updater artifacts disabled:
+
+```bash
+bun run tauri build --debug --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
+```
+
+Report both the signing-key failure and the fallback result. Do not use the
+fallback to validate updater artifacts.
 
 For narrow changes, run the smallest focused test first, then broaden based on
 risk.
