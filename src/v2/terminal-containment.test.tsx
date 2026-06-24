@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, mock, test } from "bun:test"
 import { readFileSync } from "node:fs"
-import { cleanup, render } from "@testing-library/react"
+import { cleanup, fireEvent, render } from "@testing-library/react"
 
 import { ensureTestDom } from "../test/test-dom"
 import type { AzWindow, Tab } from "./v2-model"
@@ -110,6 +110,37 @@ describe("terminal containment contract", () => {
         expect(host).toBeTruthy()
     })
 
+    test("AgentZone terminal canvas pins horizontal scroll caused by focused xterm helpers", () => {
+        const win: AzWindow = {
+            id: 9402,
+            title: "agent session",
+            status: "running",
+            lines: [],
+            buf: "",
+            min: false,
+            max: false,
+            sessionId: "agent:terminal-2",
+        }
+        v2Store.setState((s) => ({
+            active: "api",
+            ui: {
+                ...s.ui,
+                api: {
+                    ...s.ui.api,
+                    wins: [win],
+                },
+            },
+        }))
+
+        const view = render(<AgentZone />)
+        const canvas = view.container.querySelector(".yz2-az-canvas") as HTMLDivElement
+
+        canvas.scrollLeft = 42
+        fireEvent.scroll(canvas)
+
+        expect(canvas.scrollLeft).toBe(0)
+    })
+
     test("terminal CSS keeps xterm and IME helper layout inside the workbench", () => {
         expectRuleContains(".yz2-main", [
             "min-width: 0;",
@@ -154,6 +185,8 @@ describe("terminal containment contract", () => {
         ])
         expectRuleContains(".yz2-az-canvas", [
             "min-width: 0;",
+            "overflow-x: hidden;",
+            "overflow-y: auto;",
         ])
         expectRuleContains(".yz2-az-grid", [
             "min-width: 0;",

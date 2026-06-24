@@ -10,6 +10,7 @@ Build: packaged debug app
 - WebView2 runtime: not available on this host
 - IME: not run on Windows in this session
 - Workspace: Yuuzu-IDE repository
+- Windows follow-up build: `v0.1.0-pr24-issue12-test.1` draft release artifacts from GitHub Actions run `28105789890`
 
 ## Build Evidence
 
@@ -20,12 +21,18 @@ Build: packaged debug app
 
 Windows WebView2 IME smoke was not run on this host.
 
+Follow-up Windows test on `v0.1.0-pr24-issue12-test.1` reported that the `pi`
+agent terminal still shifts horizontally in AgentZone.
+
 ## Result
 
 - Normal terminal tab: not verified on Windows in this session.
-- AgentZone terminal: not verified on Windows in this session.
+- AgentZone terminal: user-reported `pi` agent still shifts horizontally on Windows.
 - Candidate/composition UI: not verified on Windows in this session.
+- Follow-up fix: AgentZone canvas now rejects horizontal scroll and pins
+  `scrollLeft` back to `0` so focused xterm helper textarea / IME composition
+  cannot move the agent canvas.
 
 ## Residual Risk
 
-- Issue #12 must not be closed until a Windows packaged app smoke verifies Chinese or Traditional Chinese IME input in both normal terminal tabs and AgentZone terminals.
+- Issue #12 must not be closed until a new Windows packaged app smoke verifies Chinese or Traditional Chinese IME input in both normal terminal tabs and AgentZone terminals after the AgentZone scroll-lock fix.
