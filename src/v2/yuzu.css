@@ -343,7 +343,7 @@
 }
 
 /* ============ main row ============ */
-.yz2-main { flex: 1; display: flex; min-height: 0; }
+.yz2-main { flex: 1; display: flex; min-width: 0; min-height: 0; overflow: hidden; }
 
 /* ============ project rail ============ */
 .yz2-prail {
@@ -1089,9 +1089,11 @@
 /* ============ views ============ */
 .yz2-view {
     flex: 1;
+    min-width: 0;
     min-height: 0;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
     animation: yzIn 0.18s ease;
 }
 .yz2-empty { flex: 1; display: grid; place-items: center; }
@@ -1540,9 +1542,39 @@
 .yz2-no-blink .yz2-cursor { animation: none; }
 
 /* terminal */
-.yz2-term { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--yz-090c12); }
-.yz2-xterm { flex: 1; min-height: 0; display: flex; }
-.yz2 .terminal-host { background: var(--yz-090c12); padding: 10px 14px; flex: 1; min-height: 0; width: 100%; height: 100%; }
+.yz2-term {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--yz-090c12);
+}
+.yz2-xterm {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    width: 100%;
+    display: flex;
+    overflow: hidden;
+}
+.yz2 .terminal-host {
+    background: var(--yz-090c12);
+    padding: 10px 14px;
+    box-sizing: border-box;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+.yz2 .terminal-host .xterm,
+.yz2 .terminal-host .xterm-viewport,
+.yz2 .terminal-host .xterm-screen {
+    max-width: 100%;
+}
 .yz2 .terminal-failure {
     height: 100%;
     display: flex;
@@ -2548,7 +2580,15 @@
 .yz2-split-other { flex: 1; display: grid; place-items: center; color: var(--yz-5a6675); font-size: 12px; }
 
 /* ============ agent zone ============ */
-.yz2-az { flex: 1; min-height: 0; display: flex; flex-direction: column; animation: yzIn 0.18s ease; }
+.yz2-az {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    animation: yzIn 0.18s ease;
+    min-width: 0;
+    overflow: hidden;
+}
 .yz2-az-head {
     height: 40px;
     flex: 0 0 40px;
@@ -2558,6 +2598,7 @@
     padding: 0 14px;
     background: var(--yz-10151f);
     border-bottom: 1px solid var(--yz-1c2433);
+    min-width: 0;
 }
 .yz2-az-count {
     font-size: 10px;
@@ -2631,6 +2672,7 @@
     background-color: var(--yz-090c12);
     background-image: radial-gradient(circle at 1px 1px, var(--yz-141b28) 1px, transparent 0);
     background-size: 22px 22px;
+    min-width: 0;
 }
 .yz2-az-grid {
     display: grid;
@@ -2640,6 +2682,7 @@
     height: 100%;
     min-height: 0;
     box-sizing: border-box;
+    min-width: 0;
 }
 .yz2-az-col-resizer {
     position: absolute;
@@ -2676,6 +2719,7 @@
     min-height: 0;
     border: 1px solid var(--yz-2b3547);
     animation: yzIn 0.22s ease;
+    min-width: 0;
 }
 .yz2-az-win.is-active { border-color: var(--yz-45611a); }
 .yz2-az-win.is-min { height: 31px; align-self: start; }
@@ -2721,8 +2765,19 @@
 .yz2-az-win-btn:hover { background: var(--yz-1a2230); color: var(--yz-a8e23f); }
 .yz2-az-win-btn.close { font-size: 13px; }
 .yz2-az-win-btn.close:hover { color: #ff5f57; }
-.yz2-az-win-body { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px; }
-.yz2-az-win-body.real { padding: 0; overflow: hidden; display: flex; }
+.yz2-az-win-body {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    padding: 10px 12px;
+}
+.yz2-az-win-body.real {
+    padding: 0;
+    min-width: 0;
+    overflow: hidden;
+    display: flex;
+}
 .yz2-az-win-body.real .terminal-host { background: var(--yz-0c1119); padding: 8px 10px; }
 .yz2-az-win-body .tl { min-height: 20px; line-height: 20px; white-space: pre-wrap; font-size: 12px; }
 .yz2-az-zero { position: absolute; inset: 0; display: grid; place-items: center; }

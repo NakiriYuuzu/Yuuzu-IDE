@@ -34,6 +34,10 @@ fn apply_terminal_session_env(command: &mut CommandBuilder) {
         "ZELLIJ",
         "ZELLIJ_SESSION_NAME",
         "ZELLIJ_VERSION",
+        "NO_COLOR",
+        "NODE_DISABLE_COLORS",
+        "CODEX_CI",
+        "CODEX_THREAD_ID",
     ] {
         command.env_remove(key);
     }
@@ -576,6 +580,26 @@ mod tests {
             command.get_env("LANG").and_then(|value| value.to_str()),
             Some("ja_JP.UTF-8")
         );
+    }
+
+    #[test]
+    fn shell_command_scrubs_runner_color_suppression_env() {
+        let mut command = portable_pty::CommandBuilder::new("/bin/zsh");
+        command.env("NO_COLOR", "1");
+        command.env("NODE_DISABLE_COLORS", "1");
+        command.env("CODEX_CI", "1");
+        command.env("CODEX_THREAD_ID", "thread");
+
+        super::apply_terminal_session_env(&mut command);
+
+        for key in [
+            "NO_COLOR",
+            "NODE_DISABLE_COLORS",
+            "CODEX_CI",
+            "CODEX_THREAD_ID",
+        ] {
+            assert!(command.get_env(key).is_none(), "{key} should be scrubbed");
+        }
     }
 
     #[test]
