@@ -2,7 +2,7 @@
 // whose column count tracks the canvas width (1 / 2 / 3 / 4), each window
 // keeping a header with collapse (—), focus (⤢) and close (×) controls.
 
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react"
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type UIEvent } from "react"
 
 import { TerminalTab } from "../features/terminal/TerminalTab"
 
@@ -94,6 +94,10 @@ export function AgentZone() {
         persistAzSplitRatio()
     }
 
+    const pinHorizontalCanvasScroll = (e: UIEvent<HTMLDivElement>) => {
+        if (e.currentTarget.scrollLeft !== 0) e.currentTarget.scrollLeft = 0
+    }
+
     return (
         <div className="yz2-az">
             <div className="yz2-az-head">
@@ -134,7 +138,7 @@ export function AgentZone() {
                     terminal cluster — click a window and type · ⤢ focus · — collapse
                 </span>
             </div>
-            <div ref={canvasRef} className="yz2-az-canvas">
+            <div ref={canvasRef} className="yz2-az-canvas" onScroll={pinHorizontalCanvasScroll}>
                 {wins.length === 0 ? (
                     <div className="yz2-az-zero">
                         <div style={{ textAlign: "center" }}>
