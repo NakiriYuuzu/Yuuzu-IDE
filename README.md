@@ -572,6 +572,5 @@ control/log surface is still an active roadmap item.
 
 ## License
 
-No public license file is currently published in this repository. Until a
-license is added, treat the code and assets as all rights reserved by the
-project owner.
+This project is licensed under the MIT License. See
+[`LICENSE`](LICENSE) for details.
